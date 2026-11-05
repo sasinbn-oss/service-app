@@ -180,6 +180,10 @@ export interface SubOrder {
     inStock: boolean | null;
     warehouse: string | null;
     requisitionNo: string | null;
+    // หาได้จากที่ไหน (ของนอกสโตร์) — ทีม SUB ไม่มีแอปให้เปิดดู แหล่งในข้อความคือทั้งหมดที่เขาจะรู้
+    offFound?: boolean | null;
+    offKind?: string | null;
+    offDetail?: string | null;
   }[];
 }
 

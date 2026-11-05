@@ -980,6 +980,14 @@ export function needsCustomerQuote(opts: {
 /** partCode ของอะไหล่นอกสโตร์ (ไม่มี SKU) — ดู resolveOffParts ใน routes/workOrders.ts */
 export const OFF_CATALOG_PREFIX = "[นอกสโตร์] ";
 
+/**
+ * อะไหล่นอกสโตร์: หาได้จากที่ไหน / ทำไมหาไม่ได้ — ชิปที่หัวหน้าภาคเลือก (เจ้าของงานขอ 4 พ.ย. 69 · ตามตัวอย่างที่อนุมัติ)
+ * ช่างที่ซื้อเองตอนปิดงานใช้ชุดแหล่งเดียวกัน ("ซื้อจากที่ไหน") · ชิปแรกเจ้าของงานตั้งชื่อเองตอนอนุมัติ
+ * ต้องตรงกับ mobile/src/utils/offSource.ts ทุกคำ — เซิร์ฟเวอร์ปฏิเสธคำที่ไม่อยู่ในชุด ชิปที่แอปส่งมาผิดคำจะกดแล้วได้ 400
+ */
+export const OFF_SOURCE_KINDS = ["ร้านหาของมาเอง", "สั่งออนไลน์", "ของที่ทีมมีอยู่", "อื่น ๆ"] as const;
+export const OFF_MISSING_REASONS = ["ร้านแถวนี้ไม่มี", "รุ่นเลิกผลิต", "ต้องสั่งจากต่างประเทศ", "อื่น ๆ"] as const;
+
 export function workOrderCode(id: number): string {
   return `WO-${String(id).padStart(5, "0")}`;
 }

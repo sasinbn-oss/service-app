@@ -147,7 +147,8 @@ claim_skips() {
 
 # ช่างปิดงาน — $1 claims (JSON) · $2 ข้อมูลป้าย · $3 เช็คตามคู่มือ (ไม่ส่ง = ค่าตั้งต้นที่ผ่าน)
 # $4 เหตุผลชิ้นที่ไม่ส่งเคลม (claimSkips) — ไม่ส่ง = claim_skips ใส่ให้ · ส่ง '[]' = ไม่บอกเหตุผลเลย (ทดสอบกติกานั้นเอง)
+# $5 ช่องเพิ่มของคำขอ (JSON ไม่มีวงเล็บ เช่น "offParts":[…]) — ชุดที่ต้องการของนอกสโตร์ที่ช่างซื้อเองไม่ต้องคัดลอกตัวคำขอทั้งก้อน
 CLOSE() {
   local skips=${4-$(claim_skips "$1")}
-  POST $T "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนอะไหล่ ทดสอบแล้วปกติ\",\"workerIds\":[$TID],\"parts\":$PARTS,\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK},\"claimSkips\":$skips}"
+  POST $T "work-orders/$ID/close" "{\"result\":\"FIXED\",\"note\":\"เปลี่ยนอะไหล่ ทดสอบแล้วปกติ\",\"workerIds\":[$TID],\"parts\":$PARTS,\"claims\":$1,\"claimNameplate\":${2-$PLATE},\"claimCheck\":${3-$CHECK},\"claimSkips\":$skips${5:+,$5}}"
 }

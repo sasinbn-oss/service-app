@@ -59,7 +59,10 @@ echo
 echo "═══ คัดลอกใบที่กำลังเข้างาน"
 R=$(POST $A "work-orders/$ID/test-copy" '{}')
 C=$(echo "$R" | J 'd.id'); IDS="$C $IDS"
-echo "$R" | J 'd.code' | grep -qE '^WO-[0-9]{5}$' && pass "ได้ใบใหม่ $(echo "$R" | J 'd.code')" || fail "คัดลอก: $R"
+# รหัสตาม workOrderCode (เติมศูนย์ให้ครบ 5 หลัก ไม่ใช่ "5 หลักพอดี") — ฐานที่รันเทสต์บ่อยเลขใบเกิน 99999 แล้วได้ WO-100035
+# ซึ่งถูกต้อง เทียบกับเลขของใบเองจึงไม่พังเพราะเลขยาวขึ้น และจับได้ถ้ารหัสไม่ตรงกับใบ
+echo "$R" | J '/^\d+$/.test(String(d.id)) && d.code === "WO-" + String(d.id).padStart(5, "0")' | grep -qx true \
+  && pass "ได้ใบใหม่ $(echo "$R" | J 'd.code')" || fail "คัดลอก: $R"
 ROW=$(DB "select w.\"isTest\"||'|'||w.status||'|'||w.\"assignedTeam\"||'|'||w.priority||'|'||(w.\"branchId\"=o.\"branchId\")||'|'||(w.\"machineId\"=o.\"machineId\")||'|'||coalesce(w.\"outageId\"::text,'-')||'|'||left(w.title,7)||'|'||w.\"contactPhone\" from \"WorkOrder\" w, \"WorkOrder\" o where w.id=$C and o.id=$ID")
 [ "$ROW" = "true|IN_PROGRESS|กระบี่|URGENT|true|true|-|[ทดสอบ]|081-234-5678" ] && pass "ใบทดสอบ: ขั้น ทีม ความด่วน สาขา เครื่อง ผู้ติดต่อเดียวกัน ไม่ผูกเคส มีป้าย [ทดสอบ] (ฐานข้อมูล)" || fail "ใบทดสอบ: $ROW"
 [ "$(DB "select kind||'|'||quantity||'|'||\"inStock\"||'|'||\"requisitionNo\" from \"WorkOrderPart\" where \"workOrderId\"=$C")" = "WAITING|2|true|RQ-TC$SUF" ] \
@@ -81,7 +84,8 @@ OFFNAME="ปะเก็นทดสอบคัดลอก$SUF"
 DB "insert into \"Machine\"(\"branchId\",code,type,brand,\"updatedAt\") values ($BID,'W2','WASHER','HB - Huebsch',now())" >/dev/null
 O=$(POST $A work-orders "{\"branchCode\":\"$BC\",\"jobType\":\"CM\",\"contactName\":\"คุณสมหญิง\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W2\",\"model\":\"Huebsch\",\"symptom\":\"น้ำรั่วที่ประตู\"}]}" | J 'd.orders?d.orders[0].id:d.id')
 IDS="$O $IDS"
-POST $S "work-orders/$O/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1}]}" >/dev/null
+# พร้อมคำตอบจัดหา (4 พ.ย. 69) — ใบทดสอบต้องได้คำตอบเดิมไปด้วย (ขั้นเช็คอะไหล่ของใบทดสอบติดปุ่มตามนี้เหมือนใบจริง)
+POST $S "work-orders/$O/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1,\"offFound\":false,\"offKind\":\"รุ่นเลิกผลิต\",\"offDetail\":\"ถามตัวแทนแล้ว ต้องสั่งรุ่นใหม่\"}]}" >/dev/null
 OFF=$(DB "select id from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'")
 POST $A "work-orders/$O/parts-sourcing" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
 # ขั้นเสนอราคาไม่ใช่เรื่องของเทสต์นี้ — พาใบไปขั้นนัดวันเข้าในฐานข้อมูล
@@ -90,6 +94,9 @@ POST $S "work-orders/$O/assign" "{\"team\":\"กระบี่\",\"scheduledAt\
 POST $A "work-orders/$O/parts-check" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
 [ "$(DB "select status from \"WorkOrder\" where id=$O")" = "AWAITING_CONFIRM" ] || fail "เตรียมใบนอกสโตร์ไม่ถึงขั้นคอนเฟิร์ม: $(DB "select status from \"WorkOrder\" where id=$O")"
 C3=$(POST $A "work-orders/$O/test-copy" '{}' | J 'd.id'); IDS="$C3 $IDS"
+OFFANS() { DB "select coalesce(\"offFound\"::text,'-')||'|'||coalesce(\"offKind\",'-')||'|'||coalesce(\"offDetail\",'-')||'|'||coalesce(\"offAnswerById\"::text,'-')||'|'||coalesce(\"offAnswerAt\"::text,'-') from \"WorkOrderPart\" where \"workOrderId\"=$1 and \"sparePartId\"=$OFF and kind='WAITING'"; }
+[ "$(OFFANS $C3)" = "$(OFFANS $O)" ] && [ "$(OFFANS $O | cut -d'|' -f1-4)" = "false|รุ่นเลิกผลิต|ถามตัวแทนแล้ว ต้องสั่งรุ่นใหม่|$(DB "select id from \"User\" where \"employeeCode\"='S001'")" ] \
+  && pass "ใบทดสอบได้คำตอบจัดหาของนอกสโตร์เดิมครบ (หาไม่ได้ · เหตุผล · รายละเอียด · คนตอบ/เวลาเดิม — ฐานข้อมูล)" || fail "คำตอบจัดหาใบทดสอบ: $(OFFANS $C3) ≠ $(OFFANS $O)"
 curl -s "localhost:4000/api/work-orders/$C3" -H "$(H $A)" | J 'd.issueLeft' | grep -qx false \
   && pass "ใบทดสอบของใบที่เบิกของนอกสโตร์แล้ว: issueLeft=false เหมือนใบจริง" || fail "ใบทดสอบ issueLeft: $(curl -s "localhost:4000/api/work-orders/$C3" -H "$(H $A)" | J 'd.issueLeft')"
 POST $A "work-orders/$C3/confirm-appointment" '{}' >/dev/null

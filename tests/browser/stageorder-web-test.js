@@ -162,7 +162,7 @@ const { setup, visitDay } = require("./fixture");
     await fx.call(fx.A, "POST", `/work-orders/${X.id}/cancel`, { reasonCode: "CUSTOMER", note: "ลูกค้ายกเลิก (เทสต์)" });
     // ใบที่มีของนอกสโตร์: เช็ค → ข้ามเสนอราคา → นัดวัน → เบิก → ถึงขั้นคอนเฟิร์มลูกค้า
     const F = await fx.workOrder("C0006", null);
-    await fx.call(fx.supervisor(), "POST", `/work-orders/${F.id}/parts`, { needsParts: true, offParts: [{ name: `สายพานนอกสโตร์ทดสอบ ${F.id}`, quantity: 1 }] });
+    await fx.call(fx.supervisor(), "POST", `/work-orders/${F.id}/parts`, { needsParts: true, offParts: [{ name: `สายพานนอกสโตร์ทดสอบ ${F.id}`, quantity: 1, offFound: true, offKind: "สั่งออนไลน์", offDetail: "ร้านออนไลน์ทดสอบ" }] });
     await fx.source(F.id);
     await fx.call(fx.A, "POST", `/work-orders/${F.id}/quote`, { skip: true, note: "บริษัทออกให้ (เทสต์)" });
     await fx.schedule(F.id, visitDay(30));

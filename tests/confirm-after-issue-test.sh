@@ -37,6 +37,8 @@ A=$(login A001)
 BR=C0006
 SUF=$RANDOM
 OFFNAME="ของนอกสโตร์ทดสอบย้ายสายงาน$SUF"
+# ของนอกสโตร์ต้องบอกว่าหาได้จากที่ไหน (4 พ.ย. 69) — ชุดนี้ไม่ได้ทดสอบเรื่องนั้น ใส่คำตอบที่ครบไว้เฉย ๆ
+OFFSRC=',"offFound":true,"offKind":"ร้านหาของมาเอง","offDetail":"ร้านทดสอบย้ายสายงาน"'
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"='S001'")
 # ใบที่เทสต์นี้สร้างหาจากอาการที่มีเลขสุ่มของรอบนี้ — สร้างใน $(...) ตัวแปรในเชลล์ลูกไม่กลับมา
 SYMPTOM="ทดสอบเบิกก่อนคอนเฟิร์ม $SUF"
@@ -284,7 +286,7 @@ issue94 $I1 RQ-IL1
 [ "$(IL $W4)" = "false" ] && pass "ไม่ใช้อะไหล่: issueLeft=false" || fail "ไม่ใช้อะไหล่: $(IL $W4)"
 # ของนอกสโตร์อย่างเดียว — ไม่มีเลขใบเบิก ตัดสินจากว่าแอดมินผ่านขั้นเบิกหลังรอบเช็คล่าสุดหรือยัง
 I2=$(mk W94)
-POST $S "work-orders/$I2/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1}]}" >/dev/null
+POST $S "work-orders/$I2/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1$OFFSRC}]}" >/dev/null
 OFF=$(DB "select id from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'")
 POST $A "work-orders/$I2/parts-sourcing" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
 # ขั้นเสนอราคาไม่ใช่เรื่องของเทสต์นี้ — พาใบไปขั้นนัดวันเข้าในฐานข้อมูล
@@ -323,7 +325,7 @@ DB "update \"WorkOrderPart\" set \"requisitionNo\"='RQ-MIG-3' where \"workOrderI
 M4=$(mk W85); POST $S "work-orders/$M4/parts" '{"needsParts":false}' >/dev/null; toConfirm $M4
 offwo() {
   local I=$(mk $1)
-  POST $S "work-orders/$I/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1}]}" >/dev/null
+  POST $S "work-orders/$I/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$OFFNAME\",\"quantity\":1$OFFSRC}]}" >/dev/null
   local OFF=$(DB "select id from \"SparePart\" where \"offCatalog\" and name='$OFFNAME'")
   POST $A "work-orders/$I/parts-sourcing" "{\"results\":[{\"sparePartId\":$OFF,\"inStock\":true}]}" >/dev/null
   toConfirm $I; echo $I

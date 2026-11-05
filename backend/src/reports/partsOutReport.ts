@@ -52,6 +52,13 @@ export interface PartsOutRow {
   expectedAt: string | null;
   /** ของเข้าอีกกี่วัน · ติดลบ = เลยมาแล้ว · null = ยังไม่ใส่วัน */
   etaDays: number | null;
+  /**
+   * ของนอกสโตร์: หัวหน้าภาคแจ้งว่าหาได้ไหม · จากที่ไหน / ทำไมหาไม่ได้ (เจ้าของงานขอ 4 พ.ย. 69) — ว่าง = ใบก่อนมีคำถามนี้
+   * ขึ้นบนการ์ดรายงาน: แถวที่ค้าง "ยังหาไม่ได้" คนตามของต้องรู้ว่าถามที่ไหนไปแล้ว ต้องสั่งจากไหน ไม่ต้องเปิดใบทีละใบ
+   */
+  offFound: boolean | null;
+  offKind: string | null;
+  offDetail: string | null;
   /** หมายเหตุของแถวสาขา+อะไหล่นี้ — เฉพาะหน้ารายงาน (ไม่ใส่ในไฟล์ Excel และไม่ขึ้นในใบงาน) */
   note: string | null;
   noteBy: string | null;
@@ -88,6 +95,9 @@ export async function buildPartsOutReport(opts: {
       outNoteAt: true,
       outNoteBy: { select: { name: true } },
       unit: true,
+      offFound: true,
+      offKind: true,
+      offDetail: true,
       checkedAt: true,
       checkedBy: { select: { name: true } },
       sparePart: { select: { partCode: true, name: true, brand: true, imageUrl: true, updatedAt: true, offCatalog: true } },
@@ -135,6 +145,9 @@ export async function buildPartsOutReport(opts: {
       outDays: p.checkedAt ? today - bkkDay(p.checkedAt) : null,
       expectedAt: w.partsExpectedAt?.toISOString().slice(0, 10) ?? null,
       etaDays: eta === null ? null : eta - today,
+      offFound: p.offFound,
+      offKind: p.offKind,
+      offDetail: p.offDetail,
       note: noteLive ? p.outNote : null,
       noteBy: noteLive ? p.outNoteBy?.name ?? null : null,
       noteAt: noteLive ? p.outNoteAt!.toISOString() : null,

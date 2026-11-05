@@ -23,10 +23,12 @@ import { api } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { colors, radius, spacing } from "../theme";
 import { brandFileOf, fileAllows, shortThaiDate, SHARED_FILE, type PartsBrand } from "../utils/brandFile";
+import type { OffAnswerFields } from "../utils/offSource";
 
 export type { PartsBrand } from "../utils/brandFile";
 
-export interface PickedPart {
+/** OffAnswerFields = คำตอบจัดหาของของนอกสโตร์ที่มากับแถวจากเซิร์ฟเวอร์ (หน้าใบงาน/ขั้นเช็คอะไหล่อ่าน) — ช่องนี้ไม่ได้แก้ */
+export interface PickedPart extends OffAnswerFields {
   sparePartId: number;
   partCode: string;
   name: string;

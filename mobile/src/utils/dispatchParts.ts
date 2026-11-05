@@ -4,7 +4,10 @@
  * ใช้ที่เดียวกันสามจุด — การ์ด "งานของฉันวันนี้" · กล่องบนหน้าใบงานของช่าง · ข้อความจ่ายงาน LINE (ทีมช่าง + ทีม SUB)
  * ให้คำบอกสถานะตรงกันทุกที่: ช่างอ่านในแอปกับในกลุ่ม LINE แล้วต้องได้เรื่องเดียวกัน
  * ของนอกสโตร์รวมด้วย (หัวหน้าภาคจัดหา — ช่างต้องรู้ว่ามีของชิ้นนั้น) · ค่าบริการไม่รวม (เรื่องเสนอราคาลูกค้า)
+ * ของนอกสโตร์ที่หัวหน้าภาคบอกว่าหาได้จากที่ไหน ใส่แหล่งต่อท้าย (เจ้าของงานเลือกข้อ 5 · 4 พ.ย. 69) — ช่างรู้ว่าไปรับของที่ไหน
  */
+import { offSourceShort } from "./offSource";
+
 export interface DispatchPart {
   name: string;
   /** รหัสสินค้า — ของนอกสโตร์ไม่มี (รหัสภายในไม่ใช่รหัสที่ใช้เบิก) */
@@ -15,6 +18,10 @@ export interface DispatchPart {
   inStock: boolean | null;
   warehouse: string | null;
   requisitionNo: string | null;
+  /** หัวหน้าภาคแจ้งว่าหาได้ไหม จากที่ไหน (ของนอกสโตร์) — เซิร์ฟเวอร์รุ่นก่อน/ใบเก่าไม่มี = คำเดิม "หัวหน้าภาคจัดหา" */
+  offFound?: boolean | null;
+  offKind?: string | null;
+  offDetail?: string | null;
 }
 
 /** "บอร์ดควบคุม × 1" · หน่วยต่อท้ายถ้ามี */
@@ -25,7 +32,10 @@ export const qtyText = (p: DispatchPart) => `${p.quantity}${p.unit ? ` ${p.unit}
  * tone ให้สีตามความหมาย: ok = รับได้แล้ว · wait = ยังไม่พร้อม (ยังไม่เบิก/ยังไม่เช็ค) · off = ของนอกสโตร์ · out = หมด
  */
 export function pickupOf(p: DispatchPart): { text: string; tone: "ok" | "wait" | "off" | "out" } {
-  if (p.offCatalog) return { text: "ของนอกสโตร์ · หัวหน้าภาคจัดหาให้", tone: "off" };
+  if (p.offCatalog) {
+    const src = offSourceShort(p);
+    return { text: src ? `ของนอกสโตร์ · ${src}` : "ของนอกสโตร์ · หัวหน้าภาคจัดหาให้", tone: "off" };
+  }
   if (p.inStock === false) return { text: "ของหมด · รอของเข้า", tone: "out" };
   if (p.requisitionNo) return { text: `เบิกแล้ว ${p.requisitionNo}${p.warehouse ? ` · รับที่${p.warehouse}` : ""}`, tone: "ok" };
   if (p.inStock === true) return { text: `${p.warehouse ? `มีของที่${p.warehouse}` : "มีของ"} · ยังไม่เบิก`, tone: "wait" };
@@ -62,7 +72,9 @@ export function dispatchPartLines(parts: DispatchPart[]): string[] {
   for (const p of parts) {
     out.push(`- ${p.name} x${qtyText(p)}`);
     if (p.offCatalog) {
-      out.push("(ของนอกสโตร์ หัวหน้าภาคจัดหา)");
+      // แหล่งที่หัวหน้าภาคแจ้ง (ตัดรายละเอียดให้สั้น — ตัวเต็มอยู่ในใบงาน) · ไม่ได้แจ้ง/หาไม่ได้ = คำเดิม
+      const src = offSourceShort(p);
+      out.push(src ? `(ของนอกสโตร์ · ${src})` : "(ของนอกสโตร์ หัวหน้าภาคจัดหา)");
       continue;
     }
     const status = p.inStock === false ? "ของหมด" : p.requisitionNo ?? (p.inStock === true ? "ยังไม่เบิก" : "ยังไม่เช็คคลัง");

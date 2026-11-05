@@ -43,6 +43,10 @@ if [ -z "$DOLD" ] || [ -z "$COMP" ]; then echo "ข้ามทั้งชุ�
 as_region_of() { DB "update \"User\" set region=(select region from \"Branch\" where code='$1') where \"employeeCode\"='S001'" >/dev/null; S=$(login S001); }
 newwo() { POST $A work-orders "{\"branchCode\":\"$1\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W71\",\"symptom\":\"ทดสอบอะไหล่นอกสโตร์\"}]}" | J 'd.orders?d.orders[0].id:d.id'; }
 st() { DB "select status from \"WorkOrder\" where id=$1"; }
+# คำตอบจัดหาของนอกสโตร์ (4 พ.ย. 69) — ชุดนี้ไม่ได้ทดสอบเรื่องนั้น (ดู off-source-test.sh) ใส่คำตอบที่ครบไว้เฉย ๆ
+FOUND='"offFound":true,"offKind":"ร้านหาของมาเอง","offDetail":"ร้านอะไหล่ทดสอบ ถ.มิตรภาพ"'
+MISSING='"offFound":false,"offKind":"ร้านแถวนี้ไม่มี","offDetail":"ถามร้านแถวสาขาแล้ว"'
+BOUGHT='"offKind":"ร้านหาของมาเอง","offDetail":"ซื้อร้านหน้าสาขา"'
 OFFROWS() { DB "select sp.name||'|'||p.quantity||'|'||coalesce(p.unit,'-')||'|'||coalesce(p.note,'-') from \"WorkOrderPart\" p join \"SparePart\" sp on sp.id=p.\"sparePartId\" where p.\"workOrderId\"=$1 and p.kind='$2' and sp.\"offCatalog\" order by sp.name"; }
 
 echo "═══ หัวหน้าภาคระบุ: ของในสโตร์ + นอกสโตร์ (แฟรนไชส์หมดประกัน $DOLD)"
@@ -52,7 +56,7 @@ W1=$(newwo $DOLD); IDS="$IDS $W1"
 P1=$(fx_part $W1 BOARD)
 R=$(POST $S "work-orders/$W1/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"  \",\"quantity\":1}]}")
 echo "$R" | grep -q "อะไหล่นอกสโตร์ต้องมีชื่อ" && [ "$(st $W1)" = "NEW" ] && pass "ชื่ออะไหล่นอกสโตร์ว่างไม่ได้" || fail "ชื่อว่างผ่าน: $(echo $R|head -c 120)"
-POST $S "work-orders/$W1/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":2,\"unit\":\"เส้น\",\"note\":\"ซื้อร้านในพื้นที่\"}]}" >/dev/null
+POST $S "work-orders/$W1/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P1,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":2,\"unit\":\"เส้น\",\"note\":\"ซื้อร้านในพื้นที่\",$FOUND}]}" >/dev/null
 [ "$(st $W1)" = "PARTS_SOURCING" ] && pass "มีของนอกสโตร์ปน ยังไปขั้นเช็คอะไหล่ก่อนเสนอราคา" || fail "สถานะ: $(st $W1)"
 [ "$(OFFROWS $W1 WAITING)" = "$NAME1|2|เส้น|ซื้อร้านในพื้นที่" ] && pass "เก็บชื่อ จำนวน หน่วย หมายเหตุ (ฐานข้อมูล)" || fail "แถว: $(OFFROWS $W1 WAITING)"
 [ "$(DB "select count(*) from \"WorkOrderPart\" where \"workOrderId\"=$W1 and kind='WAITING'")" = "2" ] && pass "ของในสโตร์ยังอยู่คู่กัน (2 รายการ)" || fail "จำนวนแถวไม่ถูก"
@@ -63,7 +67,7 @@ D=$(GET $A "work-orders/$W1")
 echo
 echo "═══ มีแต่ของนอกสโตร์อย่างเดียว"
 W2=$(newwo $DOLD); IDS="$IDS $W2"
-POST $S "work-orders/$W2/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":1},{\"name\":\"$NAME2\",\"quantity\":1,\"unit\":\"งาน\"}]}" >/dev/null
+POST $S "work-orders/$W2/parts" "{\"needsParts\":true,\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":1,$FOUND},{\"name\":\"$NAME2\",\"quantity\":1,\"unit\":\"งาน\",$MISSING}]}" >/dev/null
 [ "$(st $W2)|$(DB "select \"needsParts\" from \"WorkOrder\" where id=$W2")" = "PARTS_SOURCING|t" ] \
   && pass "ไม่มี SKU เลยก็นับว่าใช้อะไหล่ → ผ่านขั้นเช็คอะไหล่/เสนอราคา" || fail "สถานะ: $(st $W2)"
 [ "$(DB "select count(distinct \"sparePartId\") from \"WorkOrderPart\" p join \"SparePart\" s on s.id=p.\"sparePartId\" where s.name='$NAME1' and p.\"workOrderId\" in ($W1,$W2)")" = "1" ] \
@@ -91,7 +95,7 @@ as_region_of $COMP
 TEAM=$(DB "select zone from \"Branch\" where code='$COMP'")
 W3=$(newwo $COMP); IDS="$IDS $W3"
 P3=$(fx_part $W3 BOARD)
-POST $S "work-orders/$W3/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P3,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":1,\"note\":\"ร้านเดิม\"}]}" >/dev/null
+POST $S "work-orders/$W3/parts" "{\"needsParts\":true,\"parts\":[{\"sparePartId\":$P3,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME1\",\"quantity\":1,\"note\":\"ร้านเดิม\",$FOUND}]}" >/dev/null
 OFF1=$(DB "select id from \"SparePart\" where name='$NAME1'")
 [ "$(st $W3)" = "PARTS_SOURCING" ] && [ "$(GET $A "work-orders/$W3" | J 'String(d.needsQuote)')" = "true" ] \
   && pass "สาขาบริษัทแต่มีของนอกสโตร์ → ต้องเสนอราคา (ไปเช็คอะไหล่ก่อนเสนอราคา)" || fail "สถานะ: $(st $W3)"
@@ -114,7 +118,7 @@ POST $A "work-orders/$W3/confirm-appointment" '{}' >/dev/null
 for r in NAMEPLATE BEFORE AFTER; do
   curl -s -X POST "localhost:4000/api/work-orders/$W3/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
 done
-R=$(POST $A "work-orders/$W3/close" "{\"result\":\"FIXED\",\"note\":\"ใช้ของนอกสโตร์\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$OFF1,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME2\",\"quantity\":1,\"unit\":\"งาน\",\"note\":\"ซื้อหน้างาน\"}]}")
+R=$(POST $A "work-orders/$W3/close" "{\"result\":\"FIXED\",\"note\":\"ใช้ของนอกสโตร์\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$OFF1,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME2\",\"quantity\":1,\"unit\":\"งาน\",\"note\":\"ซื้อหน้างาน\",$BOUGHT}]}")
 [ "$(st $W3)" = "DONE" ] && pass "ใช้แต่ของนอกสโตร์ ปิดงานได้โดยไม่ต้องแนบใบเหลือง" || fail "ปิดไม่ได้: $(echo $R|head -c 160)"
 [ "$(OFFROWS $W3 USED | tr '\n' ';')" = "$NAME2|1|งาน|ซื้อหน้างาน;$NAME1|1|-|-;" ] \
   && pass "อะไหล่ที่ใช้จริงมีทั้งของที่ระบุไว้และของที่ช่างเพิ่มตอนปิดงาน (ฐานข้อมูล)" || fail "USED: $(OFFROWS $W3 USED | tr '\n' ';')"
@@ -126,7 +130,7 @@ POST $S "work-orders/$W4/assign" "{\"team\":\"$TEAM\",\"scheduledAt\":\"$VISIT\"
 for r in NAMEPLATE BEFORE AFTER; do
   curl -s -X POST "localhost:4000/api/work-orders/$W4/attachments" -H "$(H $A)" -F "file=@$SP/site-photo.png;type=image/png" -F "role=$r" >/dev/null
 done
-R=$(POST $A "work-orders/$W4/close" "{\"result\":\"FIXED\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$P4,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME2\",\"quantity\":1}]}")
+R=$(POST $A "work-orders/$W4/close" "{\"result\":\"FIXED\",\"workerIds\":[$ME],\"parts\":[{\"sparePartId\":$P4,\"quantity\":1}],\"offParts\":[{\"name\":\"$NAME2\",\"quantity\":1,$BOUGHT}]}")
 echo "$R" | grep -q "ใบเหลือง" && [ "$(st $W4)" != "DONE" ] && pass "ใช้ของในสโตร์ด้วย ยังต้องแนบใบเหลือง" || fail "ปิดได้โดยไม่มีใบเหลือง: $(echo $R|head -c 120)"
 
 echo

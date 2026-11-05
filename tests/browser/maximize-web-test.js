@@ -81,7 +81,8 @@ const { chromium } = require("playwright");
     await (name === "มือถือ" ? vis("ใบงาน").last() : vis("ใบงานซ่อม").first()).click();
     await page.waitForTimeout(2500);
     const code = await page.evaluate(() => {
-      const el = [...document.querySelectorAll("div")].find((d) => /^WO-\d{5}$/.test(d.innerText) && !d.children.length && d.getBoundingClientRect().top > 150);
+      // 5 หลักขึ้นไป — workOrderCode เติมศูนย์ให้ครบ 5 หลัก ฐานที่รันเทสต์บ่อยเลขใบเกิน 99999 แล้ว (WO-100035)
+      const el = [...document.querySelectorAll("div")].find((d) => /^WO-\d{5,}$/.test(d.innerText) && !d.children.length && d.getBoundingClientRect().top > 150);
       return el ? el.innerText : null;
     });
     const closeBtn = () => page.getByLabel("ปิด", { exact: true }).locator("visible=true").last().click();

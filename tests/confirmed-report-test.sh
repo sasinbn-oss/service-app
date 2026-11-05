@@ -51,9 +51,10 @@ ROW() { echo "$1" | J 'const r=d.rows.find(x=>x.id==='$2');r?[r.kind,r.team,r.sc
 DB "insert into \"WorkOrderPart\" (\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",warehouse,\"requisitionNo\") select $W1, id, 1, 'WAITING', true, 'คลังลาดพร้าว 94', 'RQ-CR1' from \"SparePart\" where not \"offCatalog\" order by id limit 1" >/dev/null
 # ของนอกสโตร์สร้างเองในชุดนี้ (ฐานทดสอบอาจไม่มีเลย) — ลบตอนจบหลังใบงาน (ใบที่ยังอ้างอยู่ทำให้ลบไม่ได้)
 OFFP=$(DB "insert into \"SparePart\" (\"partCode\",name,\"offCatalog\",\"updatedAt\") values ('[นอกสโตร์] ZCR สายน้ำเข้า ทดสอบ','ZCR สายน้ำเข้า ทดสอบ',true,now()) returning id" | head -1)
-DB "insert into \"WorkOrderPart\" (\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\") values ($W1, $OFFP, 1, 'WAITING', true)" >/dev/null
-PARTS() { echo "$1" | J 'const r=d.rows.find(x=>x.id==='$2');r?r.parts.map(p=>[p.code??"-",p.name,p.quantity,p.requisitionNo??"-",p.warehouse??"-",p.offCatalog].join("|")).join(","):"none"'; }
-PWANT=$(DB "select string_agg(case when p.\"offCatalog\" then '-' else p.\"partCode\" end||'|'||p.name||'|'||w.quantity||'|'||coalesce(w.\"requisitionNo\",'-')||'|'||coalesce(w.warehouse,'-')||'|'||p.\"offCatalog\", ',' order by w.id) from \"WorkOrderPart\" w join \"SparePart\" p on p.id=w.\"sparePartId\" where w.\"workOrderId\"=$W1 and w.kind='WAITING'")
+# + หัวหน้าภาคแจ้งว่าหาได้จากที่ไหน (4 พ.ย. 69) — ข้อความ LINE บอกแหล่งของ ช่องต้องมากับแถวอะไหล่ของรายงาน
+DB "insert into \"WorkOrderPart\" (\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",\"offFound\",\"offKind\",\"offDetail\") values ($W1, $OFFP, 1, 'WAITING', true, true, 'สั่งออนไลน์', 'ร้านออนไลน์ทดสอบ ZCR')" >/dev/null
+PARTS() { echo "$1" | J 'const r=d.rows.find(x=>x.id==='$2');r?r.parts.map(p=>[p.code??"-",p.name,p.quantity,p.requisitionNo??"-",p.warehouse??"-",p.offCatalog,p.offFound??"-",p.offKind??"-",p.offDetail??"-"].join("|")).join(","):"none"'; }
+PWANT=$(DB "select string_agg(case when p.\"offCatalog\" then '-' else p.\"partCode\" end||'|'||p.name||'|'||w.quantity||'|'||coalesce(w.\"requisitionNo\",'-')||'|'||coalesce(w.warehouse,'-')||'|'||p.\"offCatalog\"||'|'||coalesce(w.\"offFound\"::text,'-')||'|'||coalesce(w.\"offKind\",'-')||'|'||coalesce(w.\"offDetail\",'-'), ',' order by w.id) from \"WorkOrderPart\" w join \"SparePart\" p on p.id=w.\"sparePartId\" where w.\"workOrderId\"=$W1 and w.kind='WAITING'")
 
 echo "═══ คอนเฟิร์มวันนี้"
 R=$(REP $A $TODAY)
@@ -61,7 +62,8 @@ R=$(REP $A $TODAY)
   && pass "เคสที่คอนเฟิร์มวันนี้ขึ้น ครบ: ทีม วันเวลานัด เครื่อง อาการบรรทัดแรก ผู้ติดต่อ คนคอนเฟิร์ม" || fail "W1: $(ROW "$R" $W1)"
 [ "$(ROW "$R" $W4 | cut -d'|' -f1,4)" = "INSPECT|-" ] && pass "งานตรวจหน้างานขึ้นเป็น INSPECT · ไม่มีเวลา = ว่าง" || fail "W4: $(ROW "$R" $W4)"
 [ -n "$PWANT" ] && [ "$(PARTS "$R" $W1)" = "$PWANT" ] && [ "$(PARTS "$R" $W4)" = "" ] \
-  && pass "อะไหล่ที่ต้องเปลี่ยน: รหัส จำนวน ใบเบิก คลัง ตรงฐานข้อมูล · ของนอกสโตร์ไม่มีรหัส · งานตรวจหน้างานไม่มีอะไหล่" \
+  && [ "$(echo "$PWANT" | grep -c 'สั่งออนไลน์|ร้านออนไลน์ทดสอบ ZCR')" = "1" ] \
+  && pass "อะไหล่ที่ต้องเปลี่ยน: รหัส จำนวน ใบเบิก คลัง ตรงฐานข้อมูล · ของนอกสโตร์ไม่มีรหัส มีแหล่งที่หัวหน้าภาคแจ้ง (ข้อความ LINE) · งานตรวจหน้างานไม่มีอะไหล่" \
   || fail "อะไหล่: '$(PARTS "$R" $W1)' ≠ '$PWANT' · W4='$(PARTS "$R" $W4)'"
 [ "$(ROW "$R" $W2)|$(ROW "$R" $W3)|$(ROW "$R" $W5)" = "none|none|none" ] \
   && pass "ไม่ขึ้น: ย้อนขั้นหลังคอนเฟิร์ม · คอนเฟิร์มเมื่อวาน · ใบทดสอบ" || fail "หลุด: W2=$(ROW "$R" $W2) W3=$(ROW "$R" $W3) W5=$(ROW "$R" $W5)"
