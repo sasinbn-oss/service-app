@@ -1064,6 +1064,9 @@ export default function WorkOrderDetailRoute(props: Props) {
   );
 }
 
+/** ขั้นของแอดมินที่มีฟอร์มของขั้น — ปุ่มบนแถวในงานของฉันวันนี้เปิดใบพร้อมฟอร์มนี้ (open: "stage") */
+const ADMIN_FORM_STAGES = ["INSPECT_CONFIRM", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "PARTS_REQUESTED", "AWAITING_CONFIRM"];
+
 function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant?: boolean }) {
   const { id } = route.params;
   const { user: me } = useAuth();
@@ -1165,6 +1168,13 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     // ต้องเป็นตาคนเปิดด้วย — ช่างคนอื่นในทีมกดการ์ด "บันทึกผลตรวจ" ที่ค้างอยู่ใน งานของฉัน ก็ส่ง open:"stage" มาเหมือนกัน
     // ถ้าไม่กันจะเห็นจอของหัวหน้าภาคที่กดอะไรก็ได้ 403 แทนกล่องรายการรอคอนเฟิร์มบนหน้าใบงาน
     else if (want === "stage" && pickPending(order) && myTurn(order)) setStageOpen(true);
+    /**
+     * งานของฉันวันนี้ของแอดมินแบบแยกหัวข้อ (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง myday ข้อ 4): ปุ่มน้ำเงินบนแถว = เข้าใบงาน
+     * พร้อมฟอร์มของขั้นนั้นเลย (เดิมพามาที่ใบเฉย ๆ แล้วต้องหาปุ่มของขั้นอีกรอบ) · เฉพาะแอดมินกับขั้นของแอดมินที่ถึงคิวจริง —
+     * ปุ่มบนการ์ดของหัวหน้าภาคยังเปิดฟอร์มเฉพาะใบตรวจหน้างาน/คอนเฟิร์มอะไหล่ตามเดิม (สอนการใช้งานพึ่งพฤติกรรมนั้น — order.openStage)
+     * ดูในฐานะ/Admin Spare Part ไม่มี user ในหน้านี้ จึงไม่เปิดอะไร
+     */
+    else if (want === "stage" && user?.role === "ADMIN" && ADMIN_FORM_STAGES.includes(order.status) && myTurn(order)) setStageOpen(true);
     else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
     else if (want === "reschedule" && reschedulable(order)) openReschedule();
   }, [order]);

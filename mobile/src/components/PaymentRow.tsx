@@ -41,7 +41,8 @@ export const QUEUE_COL = StyleSheet.create({
   branch: { flex: 2.1, minWidth: 0 },
   work: { flex: 1.2, minWidth: 0 },
   info: { flex: 2.5, minWidth: 0 },
-  actions: { width: 270, flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 },
+  // กว้างคงที่ — ปุ่มของแถว (รายละเอียด · ปุ่มขั้น · เลื่อนวันนัด) ยืดเต็มช่องนี้ ไม่ใช่บีบตามความยาวข้อความ
+  actions: { width: 300 },
 });
 /** คอลัมน์ตารางของแท็บ (ตัวอย่าง paytab: ใบงาน · สาขา·งาน · ส่งใบเสนอราคา · รอมาแล้ว · ตามลูกค้าล่าสุด · ปุ่ม) */
 export const TAB_COL = StyleSheet.create({
@@ -76,6 +77,7 @@ export function PaymentRow({
   onFollowed,
   onStale,
   render = plain,
+  actionsTarget,
 }: {
   row: PayRow;
   variant: "tab" | "queue";
@@ -92,6 +94,8 @@ export function PaymentRow({
   onStale?: () => void;
   /** วาดข้อความ (งานของฉันวันนี้ไฮไลต์คำค้น) */
   render?: Render;
+  /** ชื่อจุดของสอนการใช้งาน (howtoTarget) ที่ช่องปุ่ม — งานของฉันวันนี้ชี้ "ปุ่มของขั้นนี้" */
+  actionsTarget?: object | null;
 }) {
   const p = row.payWait;
   const [editing, setEditing] = useState(false);
@@ -239,7 +243,7 @@ export function PaymentRow({
               {p.last ? `ตามล่าสุด ${lastLine}` : lastLine}
             </Text>
           </View>
-          <View style={QUEUE_COL.actions}>
+          <View style={[QUEUE_COL.actions, styles.btnRow]} {...actionsTarget}>
             {followBtn}
             {tail}
           </View>
@@ -266,7 +270,7 @@ export function PaymentRow({
           {p.last ? `ตามล่าสุด ${lastLine}` : lastLine}
         </Text>
       </TouchableOpacity>
-      <View style={styles.cardBtns}>
+      <View style={styles.cardBtns} {...actionsTarget}>
         {followBtn ? <View style={{ flex: 1 }}>{followBtn}</View> : null}
         {variant === "queue" ? (tail ? <View style={{ flex: 1.4 }}>{tail}</View> : null) : tail}
       </View>
@@ -349,4 +353,5 @@ const styles = StyleSheet.create({
   cardOver: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine, borderLeftColor: colors.danger },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 6 },
   cardBtns: { flexDirection: "row", gap: spacing.sm },
+  btnRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 },
 });
