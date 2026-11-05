@@ -306,16 +306,23 @@ type AnyState = { key?: string; type?: string; index?: number; routes: AnyRoute[
 const focused = (s: AnyState | undefined): AnyRoute | undefined =>
   s?.routes?.length ? s.routes[typeof s.index === "number" ? s.index : s.routes.length - 1] : undefined;
 
+/**
+ * encodeURIComponent ที่เข้ารหัสวงเล็บด้วย — รหัสของสาขาที่ยกรหัสให้สาขาใหม่คือ "C0546 (เดิม)" (ลิงก์ "เคลมสาขานี้" ·
+ * "อะไหล่ที่สาขานี้ได้ไปแล้ว" ของใบงานสาขานั้น) encodeURIComponent ปล่อย ( ) ไว้ ลิงก์จึงจบด้วย ")" ซึ่งตัวทำลิงก์ในแชต
+ * หลายตัวตัดทิ้ง (ถือเป็นวงเล็บปิดของประโยค) — วางในไลน์แล้วได้ "…%E0%B8%A1" ไม่มีวงเล็บ เปิดแล้วหาสาขาไม่เจอ · อ่านกลับด้วย decode เดิมได้
+ */
+const enc = (v: string) => encodeURIComponent(v).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
 function pathOfScreen(screen: string, params: AnyParams): string | null {
   for (const page of PAGES) {
     if (page.screen !== screen) continue;
     const out = page.write ? page.write(params ?? {}) : {};
     if (out === null) continue;
-    const segs = page.path.split("/").map((s) => (s.startsWith(":") ? encodeURIComponent(out.seg?.[s.slice(1)] ?? "") : s));
+    const segs = page.path.split("/").map((s) => (s.startsWith(":") ? enc(out.seg?.[s.slice(1)] ?? "") : s));
     if (segs.includes("")) continue;
     const qs = Object.entries(out.q ?? {})
       .filter(([, v]) => v !== undefined && v !== null && v !== "")
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .map(([k, v]) => `${enc(k)}=${enc(String(v))}`)
       .join("&");
     return `/${segs.join("/")}${qs ? `?${qs}` : ""}`;
   }

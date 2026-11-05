@@ -10,6 +10,9 @@
  * ชื่อ (เจ้าของงานตัดสิน 4 พ.ย. 69: "แก้ชื่อในแอปได้ + นำเข้าไม่ทับ"): จำไว้เป็น BranchPin "name" · "คืนตามรายงาน"
  * กลับไปใช้ชื่อในรายงานเครื่องเสียล่าสุด · ประวัติสาขา (แก้ชื่อ คืนชื่อ ปิด/เปิดสาขา) อยู่ใต้ปุ่มบันทึกในแผงแก้ไข
  * ไม่มีการรวมสาขา (เจ้าของงานตัดสินวันเดียวกัน): ต้นทางเปลี่ยนรหัส = สาขาใหม่ทั้งหมด สาขาเดิมปิดไว้ เก็บประวัติของตัวเอง
+ *
+ * ใช้รหัสของสาขาที่ปิดแล้วกับสาขาใหม่ (พ.ย. 69): "เพิ่มสาขา" ด้วยรหัสนั้น → เซิร์ฟเวอร์ตอบ 409 พร้อมข้อมูลสาขาเดิม → กล่องยืนยัน
+ * → ส่งซ้ำพร้อม reuseClosedCode · สาขาเดิมเปลี่ยนรหัสเป็น "C0546 (เดิม)" เก็บใบงาน เครื่อง ประวัติไว้ (backend utils/branchCodeReuse.ts)
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
@@ -19,6 +22,7 @@ import Spinner from "../components/Spinner";
 import Dropdown from "../components/Dropdown";
 import AppModal from "../components/AppModal";
 import { useRefreshHandler } from "../components/RefreshButton";
+import axios from "axios";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
@@ -43,6 +47,29 @@ interface Row {
   editedInApp: string[];
   /** ชื่อในรายงานเครื่องเสียล่าสุด ของสาขาที่แก้ชื่อในแอปไว้ — ไม่ได้แก้ = null */
   reportName: string | null;
+  /** สาขาที่ยกรหัสให้สาขาใหม่แล้ว ("C0546 (เดิม)"): รหัสจริงก่อนยก · สาขาอื่น = null */
+  originalCode: string | null;
+  /** …และรหัสนั้นตอนนี้เป็นของสาขาไหน — มี = เปิดสาขานี้อีกครั้งไม่ได้ */
+  codeHolder: { id: number; code: string; name: string } | null;
+  /** สาขาที่รับรหัสต่อจากสาขาที่ปิดแล้ว: เมื่อไร และจากสาขาไหน (สาขาเดิมถูกลบไปแล้ว = null) */
+  reusedAt: string | null;
+  reusedFrom: { code: string; name: string } | null;
+}
+/** 409 ของ "เพิ่มสาขา" เมื่อรหัสเป็นของสาขาที่ปิดแล้ว — ข้อมูลสาขาเดิมให้กล่องยืนยัน */
+interface ReuseOffer {
+  id: number;
+  code: string;
+  name: string;
+  closedAt: string;
+  workOrders: number;
+  machines: number;
+  /** รหัสที่สาขาเดิมจะได้ — "C0546 (เดิม)" หรือ "(เดิม 2)" ถ้ารหัสนี้เคยถูกใช้ซ้ำมาแล้ว */
+  retiredCode: string;
+}
+function reuseOfferOf(e: unknown): ReuseOffer | null {
+  if (!axios.isAxiosError(e) || e.response?.status !== 409) return null;
+  const offer = (e.response.data as { reuse?: ReuseOffer } | undefined)?.reuse;
+  return offer && typeof offer.code === "string" ? offer : null;
 }
 interface BranchLogRow {
   id: number;
@@ -267,6 +294,9 @@ export default function ManageBranchesScreen() {
             style={[styles.tile, t.warn && styles.tileWarn, t.on && styles.tileOn]}
             onPress={t.apply}
             accessibilityLabel={`ตัวกรอง ${t.label} ${t.n ?? ""}`}
+            // เว็บไม่แปลง accessibilityState เป็น aria-selected — ใส่เอง ให้รู้ว่ากำลังดูแท็บไหน (ค้นรหัสในแท็บเปิดอยู่ขึ้นสาขา "(เดิม)" ที่ปิดแล้วด้วย)
+            accessibilityState={{ selected: t.on }}
+            aria-selected={t.on}
           >
             <Text style={styles.tileLabel}>{t.label}</Text>
             <Text style={[styles.tileNum, t.warn && { color: colors.warningInk }]}>{t.n?.toLocaleString("th-TH") ?? "—"}</Text>
@@ -423,7 +453,7 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
     }
   }
 
-  async function save() {
+  async function save(reuseClosedCode = false) {
     const la = lat.trim() === "" ? null : Number(lat);
     const lo = lng.trim() === "" ? null : Number(lng);
     if ((la === null) !== (lo === null)) return showAlert("พิกัดไม่ครบ", "ใส่ทั้งละติจูดและลองจิจูด หรือเว้นว่างทั้งคู่");
@@ -442,9 +472,18 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
     try {
       const body = { latitude: la, longitude: lo, radiusMeters: r, address: address.trim() || undefined };
       let id = row?.id;
+      let retired: { code: string; newCode: string } | undefined;
       if (adding) {
-        const res = await api.post<{ id: number }>("/branches", { ...body, code: code.trim().toUpperCase(), name: name.trim(), latitude: la ?? undefined, longitude: lo ?? undefined });
+        const res = await api.post<{ id: number; code: string; retired?: { code: string } }>("/branches", {
+          ...body,
+          code: code.trim().toUpperCase(),
+          name: name.trim(),
+          latitude: la ?? undefined,
+          longitude: lo ?? undefined,
+          ...(reuseClosedCode ? { reuseClosedCode: true } : {}),
+        });
         id = res.data.id;
+        if (res.data.retired) retired = { code: res.data.retired.code, newCode: res.data.code };
       } else await api.put(`/branches/${row!.id}`, newName ? { ...body, name: newName } : body);
       // ส่งเฉพาะช่องที่เปลี่ยน — ช่องที่ไม่ได้แตะต้องไม่ถูกจำว่า "แก้ในแอป" แล้วไปบังคับทับไฟล์รอบหน้า
       const changed = Object.fromEntries(REGISTRY.filter((f) => reg[f.key] && reg[f.key] !== (row?.[f.key] ?? null)).map((f) => [f.key, reg[f.key]]));
@@ -461,11 +500,35 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
       }
       await onChanged();
       if (newName) void loadLogs();
+      if (retired) {
+        // หน้าต่างเพิ่มสาขาปิดทันทีหลังบันทึก — บอกผลเป็นแถบด้านบน ไม่งั้นแอดมินไม่รู้ว่าสาขาเดิมเปลี่ยนรหัสไปแล้ว
+        showAlert(`เพิ่มสาขา ${retired.newCode} แล้ว`, `สาขาเดิมเปลี่ยนเป็น “${retired.code}” — ใบงาน เครื่อง และประวัติอยู่กับสาขาเดิมครบ`);
+      }
     } catch (e) {
-      showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
+      const offer = adding && !reuseClosedCode ? reuseOfferOf(e) : null;
+      if (offer) askReuse(offer);
+      else showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * รหัสนี้เป็นของสาขาที่ปิดแล้ว — ร้านใหม่ที่ได้รหัสเก่า หรือสาขาเดิมกลับมาเปิด ดูจากรหัสแยกไม่ออก ต้องให้คนตัดสิน
+   * (อย่างหลังต้องเปิดสาขาเดิมคืน ไม่ใช่เพิ่มใหม่ ไม่งั้นประวัติแยกเป็นสองสาขา) · กล่องยืนยันของแอปเอง — บนเว็บ Alert ใช้ไม่ได้
+   */
+  function askReuse(o: ReuseOffer) {
+    showAlert(
+      `รหัส ${o.code} เป็นของสาขาที่ปิดแล้ว`,
+      `${o.name} (ปิดเมื่อ ${dayText(o.closedAt)}) · ใบงาน ${o.workOrders.toLocaleString("th-TH")} ใบ · ` +
+        `เครื่อง ${o.machines.toLocaleString("th-TH")} เครื่อง\n\n` +
+        `เพิ่มเป็นสาขาใหม่ด้วยรหัสนี้? สาขาเดิมเก็บใบงาน เครื่อง และประวัติไว้ครบ รหัสของสาขาเดิมจะเปลี่ยนเป็น “${o.retiredCode}”\n\n` +
+        `ถ้าเป็นสาขาเดิมกลับมาเปิด ให้กด “เปิดสาขาอีกครั้ง” ที่สาขาเดิมแทน`,
+      [
+        { text: "ยกเลิก", style: "cancel" },
+        { text: "เพิ่มเป็นสาขาใหม่", onPress: () => void save(true) },
+      ]
+    );
   }
 
   /** คืนชื่อตามรายงาน — ยังไม่ได้บันทึก (แค่พิมพ์ค้างไว้) = ล้างที่พิมพ์ · แก้ไว้แล้ว = ให้เซิร์ฟเวอร์คืนชื่อและเลิกบังคับ */
@@ -563,6 +626,7 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
               {[row!.region, row!.zone && `ทีม ${row!.zone}`, `ใบค้าง ${row!.openWorkOrders} ใบ`].filter(Boolean).join(" · ")}
             </Text>
           </View>
+          <ReuseNote row={row!} />
           <NameField row={row!} name={name} setName={setName} onRestore={restoreName} busy={!!busy} />
         </>
       ) : (
@@ -650,7 +714,7 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
         <TouchableOpacity style={styles.btn} onPress={onClose} disabled={!!busy}>
           <Text style={styles.btnText}>ปิด</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={save} disabled={!!busy} accessibilityLabel={adding ? "บันทึกสาขาใหม่" : "บันทึกสาขา"}>
+        <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => void save()} disabled={!!busy} accessibilityLabel={adding ? "บันทึกสาขาใหม่" : "บันทึกสาขา"}>
           {busy ? <Spinner size="small" color="#fff" /> : <Text style={[styles.btnText, { color: "#fff" }]}>{adding ? "เพิ่มสาขา" : "บันทึก"}</Text>}
         </TouchableOpacity>
       </View>
@@ -685,9 +749,18 @@ function BranchEditor({ row, onClose, onChanged }: { row: Row | null; onClose: (
           {row!.cancelledAt ? (
             <>
               <Text style={styles.closedNote}>ปิดแล้ว{row!.cancelledNote ? ` — ${row!.cancelledNote}` : ""}</Text>
-              <TouchableOpacity style={styles.btn} onPress={reopen} disabled={!!busy} accessibilityLabel="เปิดสาขาอีกครั้ง">
-                <Text style={styles.btnText}>เปิดสาขาอีกครั้ง</Text>
-              </TouchableOpacity>
+              {row!.codeHolder ? (
+                // เปิดคืนไม่ได้: รหัสจริงเป็นของสาขาใหม่แล้ว ไฟล์ไหนก็จับคู่สาขานี้ไม่ได้อีก (เซิร์ฟเวอร์ก็ไม่รับ)
+                <Text style={styles.hint} accessibilityLabel="เหตุผลที่เปิดอีกครั้งไม่ได้">
+                  เปิดอีกครั้งไม่ได้ — รหัส {row!.originalCode} ใช้กับสาขาใหม่ “{row!.codeHolder.name}” แล้ว
+                </Text>
+              ) : (
+                <TouchableOpacity style={styles.btn} onPress={reopen} disabled={!!busy} accessibilityLabel="เปิดสาขาอีกครั้ง">
+                  <Text style={styles.btnText}>
+                    {row!.originalCode && row!.originalCode !== row!.code ? `เปิดสาขาอีกครั้ง (คืนรหัส ${row!.originalCode})` : "เปิดสาขาอีกครั้ง"}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </>
           ) : closing ? (
             // ยืนยันในแผงเลย ไม่เปิดหน้าต่างซ้อน — บนมือถือแผงนี้อยู่ในหน้าต่างอยู่แล้ว หน้าต่างซ้อนหน้าต่างไม่น่าเชื่อถือบนเว็บ
@@ -763,6 +836,30 @@ function NameField({ row, name, setName, onRestore, busy }: { row: Row; name: st
   );
 }
 
+/**
+ * บอกในแผงว่ารหัสนี้เคยเป็นของใคร — สาขา "(เดิม)": รหัสจริงไปอยู่ที่ไหน · สาขาใหม่: รับรหัสมาจากไหน และทำไมไฟล์สาขายกเลิกไม่ปิดสาขานี้
+ * (ไฟล์นั้นสะสม แถวรหัสนี้ที่ค้างอยู่คือการปิดสาขาเดิม ตัวนำเข้าจึงข้าม — ไม่บอกตรงนี้แอดมินจะงงว่าทำไมอัปไฟล์แล้วสาขาไม่ปิด)
+ */
+function ReuseNote({ row }: { row: Row }) {
+  if (row.originalCode && row.originalCode !== row.code) {
+    return (
+      <Text style={styles.reuseNote} accessibilityLabel="รหัสเดิมของสาขา">
+        รหัสเดิม {row.originalCode} —{" "}
+        {row.codeHolder ? `ใช้กับสาขาใหม่ “${row.codeHolder.name}” แล้ว` : "ไม่มีสาขาอื่นใช้รหัสนี้แล้ว"} · สาขานี้เก็บใบงาน เครื่อง และประวัติของตัวเองไว้
+      </Text>
+    );
+  }
+  if (!row.reusedAt) return null;
+  return (
+    <Text style={styles.reuseNote} accessibilityLabel="รับรหัสต่อจากสาขาที่ปิดแล้ว">
+      รับรหัสต่อจากสาขาที่ปิดแล้ว{row.reusedFrom ? ` ${row.reusedFrom.code} “${row.reusedFrom.name}”` : ""} เมื่อ {dayText(row.reusedAt)} ·
+      ไฟล์สาขายกเลิกไม่ปิดสาขานี้ (แถวรหัสนี้ในไฟล์คือสาขาเดิม) — ปิดได้ในแอปเท่านั้น
+    </Text>
+  );
+}
+
+const dayText = (iso: string) => new Date(iso).toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "2-digit" });
+
 const logTime = (iso: string) =>
   new Date(iso).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 
@@ -776,7 +873,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ความกว้างคอลัมน์ตาราง (จอกว้าง) — ชื่อสาขายาวที่สุด ได้ส่วนที่เหลือ
-const COLS = [{ width: 80 }, { flex: 1, minWidth: 200 }, { width: 120 }, { width: 120 }, { width: 110 }, { width: 96 }, { width: 110 }, { width: 60 }];
+// รหัสกว้างพอให้ "C0546 (เดิม)" อยู่บรรทัดเดียว (สาขาที่ยกรหัสให้สาขาใหม่) — "(เดิม 2)" ขึ้นบรรทัดใหม่ได้ ไม่ทับคอลัมน์ชื่อ
+const COLS = [{ width: 132 }, { flex: 1, minWidth: 200 }, { width: 120 }, { width: 120 }, { width: 110 }, { width: 96 }, { width: 110 }, { width: 60 }];
 
 const styles = StyleSheet.create({
   regGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
@@ -853,4 +951,5 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm },
   danger: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.md, gap: spacing.sm },
   closedNote: { fontSize: 13, color: colors.textMuted },
+  reuseNote: { fontSize: 12.5, lineHeight: 19, color: colors.body, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 8 },
 });

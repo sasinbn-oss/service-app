@@ -25,6 +25,8 @@ interface CancelledPlan {
   toRestore: { code: string; name: string; machineCode: string | null }[];
   alreadyCancelled: number;
   notFound: string[];
+  /** รหัสที่ใช้กับสาขาใหม่แล้ว (สาขาเดิมปิด รหัสไปร้านใหม่) — ข้าม ไม่ปิดสาขาใหม่ · เหตุผลอยู่ใน warnings · เซิร์ฟเวอร์รุ่นเก่าไม่มี */
+  skippedReused?: { code: string; name: string; rows: number }[];
   openCasesToClose: number;
   errors: string[];
   warnings: string[];
@@ -358,6 +360,9 @@ export default function MachineImportScreen() {
             <Row label="ทำเครื่องหมายไว้อยู่แล้ว" value={String(cancelledPlan.alreadyCancelled)} />
             {cancelledPlan.notFound.length > 0 ? (
               <Row label="รหัสที่ไม่มีในระบบ" value={`${cancelledPlan.notFound.length} (ข้ามไป)`} tone="warning" />
+            ) : null}
+            {cancelledPlan.skippedReused?.length ? (
+              <Row label="รหัสที่ใช้กับสาขาใหม่แล้ว (ไม่ปิดสาขาใหม่)" value={`${cancelledPlan.skippedReused.length} (ข้ามไป)`} tone="warning" />
             ) : null}
           </View>
 

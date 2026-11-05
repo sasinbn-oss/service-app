@@ -188,13 +188,18 @@ async function buildHistory(scope: Prisma.WorkOrderWhereInput, f: Filters): Prom
       // ทั้งสองปลายนับรวม ตามเวลาไทย — ส่งตอนตีหนึ่งของวันที่ 15 ยังเป็นวันที่ 15
       f.to ? { createdAt: { lt: new Date(bkkDayStart(f.to).getTime() + DAY_MS) } } : {},
       f.brand ? { brand: f.brand } : {},
-      f.branchCode ? { branchCode: { equals: f.branchCode, mode: "insensitive" } } : {},
+      // สาขาของใบงาน ไม่ใช่ branchCode ในใบเคลม (ค่าตอนส่ง — เอกสารที่ออกไปแล้ว) — รหัสของสาขาที่ปิดแล้วใช้ซ้ำกับร้านใหม่ได้
+      // (utils/branchCodeReuse.ts): ใบเคลมเก่าของ "C0546 (เดิม)" ยังเขียนว่า C0546 ถ้าเทียบข้อความ ลิงก์ "เคลมสาขานี้" ของร้านใหม่
+      // จะขึ้นเคลมของร้านเก่า และลิงก์ของสาขาเดิมขึ้น 0 · สาขาที่ไม่เคยใช้รหัสซ้ำได้ผลเหมือนเดิม (ใบงานย้ายสาขาไม่ได้)
+      f.branchCode ? { workOrder: { branch: { code: { equals: f.branchCode, mode: "insensitive" } } } } : {},
       f.machineCode ? { machineCode: { equals: f.machineCode, mode: "insensitive" } } : {},
       q
         ? {
             OR: [
               { workOrder: { code: { contains: q, mode: "insensitive" } } },
               { branchCode: { contains: q, mode: "insensitive" } },
+              // รหัสตอนนี้ของสาขา ("C0546 (เดิม)") — ใบเคลมเก็บรหัสตอนส่ง ค้นด้วยรหัสที่เห็นในรายการสาขาต้องเจอด้วย
+              { workOrder: { branch: { code: { contains: q, mode: "insensitive" } } } },
               { branchName: { contains: q, mode: "insensitive" } },
               { partCode: { contains: q, mode: "insensitive" } },
               { partName: { contains: q, mode: "insensitive" } },

@@ -19,6 +19,7 @@ import {
   renameBranch,
   restoreBranchName,
 } from "../utils/branchPins";
+import { isRetiredCode, ReuseConflict, reuseClosedCode, reuseOffer } from "../utils/branchCodeReuse";
 import {
   applyBranchImport,
   parseBranchWorkbook,
@@ -188,24 +189,34 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
   const parsed = manageQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
   const q = parsed.data;
-  const where: Prisma.BranchWhereInput = {
-    cancelledAt: q.status === "closed" ? { not: null } : null,
-    ...(q.region ? { region: q.region } : {}),
-    ...(q.team ? { OR: [{ zone: q.team }, { pmTeam: q.team }] } : {}),
-    ...(q.coords === "has" ? { latitude: { not: null }, longitude: { not: null } } : {}),
-    ...(q.coords === "none" ? { OR: [{ latitude: null }, { longitude: null }] } : {}),
-    ...(q.noTeam ? { zone: null, pmTeam: null } : {}),
-  };
-  const and: Prisma.BranchWhereInput[] = [where];
+  // ทีมกับ "ยังไม่มีพิกัด" ต่างก็เป็น OR — แยกเป็นคนละเงื่อนไขใน AND (เดิมรวมในก้อนเดียว ตัวหลังทับตัวแรก เลือกทั้งสองแล้วทีมไม่มีผล)
+  const and: Prisma.BranchWhereInput[] = [
+    {
+      ...(q.region ? { region: q.region } : {}),
+      ...(q.coords === "has" ? { latitude: { not: null }, longitude: { not: null } } : {}),
+      ...(q.noTeam ? { zone: null, pmTeam: null } : {}),
+    },
+  ];
+  if (q.team) and.push({ OR: [{ zone: q.team }, { pmTeam: q.team }] });
+  if (q.coords === "none") and.push({ OR: [{ latitude: null }, { longitude: null }] });
+  const codeMatch: Prisma.BranchWhereInput[] = q.search
+    ? [{ code: { contains: q.search, mode: "insensitive" } }, { originalCode: { contains: q.search, mode: "insensitive" } }]
+    : [];
   if (q.search) {
     and.push({
       OR: [
-        { code: { contains: q.search, mode: "insensitive" } },
+        ...codeMatch,
         { name: { contains: q.search, mode: "insensitive" } },
         { address: { contains: q.search, mode: "insensitive" } },
       ],
     });
   }
+  if (q.status === "closed") and.push({ cancelledAt: { not: null } });
+  else if (codeMatch.length) {
+    // ค้นรหัสที่เคยยกให้สาขาใหม่ (C0546) — ขึ้นทั้งสาขาใหม่และ "C0546 (เดิม)" ที่ปิดไปแล้วคู่กัน
+    // คนค้นรหัสนี้อยากรู้ว่ารหัสนี้คือร้านไหน และเคยเป็นร้านไหน · ค้นด้วยชื่อ/ที่อยู่ยังเห็นเฉพาะสาขาที่เปิดอยู่
+    and.push({ OR: [{ cancelledAt: null }, { originalCode: { not: null }, OR: codeMatch }] });
+  } else and.push({ cancelledAt: null });
   const [total, rows, open, noCoords, noTeam, closed] = await Promise.all([
     prisma.branch.count({ where: { AND: and } }),
     prisma.branch.findMany({
@@ -216,6 +227,7 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
       select: {
         id: true, code: true, name: true, address: true, region: true, zone: true, pmTeam: true, ownership: true,
         latitude: true, longitude: true, radiusMeters: true, cancelledAt: true, cancelledNote: true,
+        originalCode: true, reusedAt: true, reusedFrom: { select: { code: true, name: true } },
         teamMoves: { select: { field: true } },
         pins: { select: { field: true, fromValue: true } },
       },
@@ -233,6 +245,12 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
       })
     : [];
   const openOf = new Map(openOrders.map((o) => [o.branchId, o._count]));
+  // สาขา "(เดิม)": รหัสจริงตอนนี้เป็นของสาขาไหน — แผงแก้ไขบอกว่ารหัสไปไหน และทำไมเปิดสาขานี้อีกครั้งไม่ได้
+  const given = rows.filter((r) => r.originalCode && r.originalCode !== r.code).map((r) => r.originalCode!);
+  const holders = given.length
+    ? await prisma.branch.findMany({ where: { code: { in: given } }, select: { id: true, code: true, name: true } })
+    : [];
+  const holderOf = new Map(holders.map((h) => [h.code, h]));
   res.json({
     total,
     counts: { open, noCoords, noTeam, closed },
@@ -243,6 +261,7 @@ router.get("/manage", requireAuth, requireAdmin, async (req, res) => {
       editedInApp: [...teamMoves.map((m) => m.field), ...pins.map((p) => p.field)],
       // ชื่อในรายงานเครื่องล่าสุด ของสาขาที่แก้ชื่อในแอป — แผงแก้ไขโชว์คู่กับปุ่ม "คืนตามรายงาน" · ไม่ได้แก้ = null
       reportName: pins.find((p) => p.field === "name")?.fromValue ?? null,
+      codeHolder: r.originalCode ? holderOf.get(r.originalCode) ?? null : null,
     })),
   });
 });
@@ -593,7 +612,8 @@ router.get("/:code/machines", requireAuth, async (req: AuthRequest, res) => {
 
 const branchSchema = z.object({
   name: z.string().min(1),
-  code: z.string().min(1),
+  // ตัดช่องว่างหัวท้าย — " C0546" ที่หลุดลงฐานคือสาขาที่ไฟล์ทุกชนิดจับคู่ไม่ได้ (และชนกับรหัสจริงไม่ได้ด้วย)
+  code: z.string().trim().min(1),
   address: z.string().optional(),
   // พิกัดไม่บังคับ สาขาที่ยังไม่ได้ไปวัดพิกัดก็ขึ้นในแดชบอร์ดเครื่องได้
   // แต่จะรายงานตัวด้วย GPS ไม่ได้จนกว่าจะใส่พิกัด
@@ -630,17 +650,57 @@ function branchDates(body: { openedAt?: string | null; warrantyExpiresAt?: strin
   return out;
 }
 
-router.post("/", requireAuth, requireAdmin, async (req, res) => {
-  const parsed = branchSchema.safeParse(req.body);
+/**
+ * เพิ่มสาขา — รหัสของสาขาที่ปิดแล้วใช้ซ้ำได้เมื่อแอดมินยืนยัน (เจ้าของงานตัดสิน 4 พ.ย. 69 · utils/branchCodeReuse.ts)
+ *
+ * รหัสของสาขาที่เปิดอยู่: 409 เหมือนเดิม · รหัสของสาขาที่ปิดแล้ว: 409 พร้อม reuse (ชื่อ วันที่ปิด ใบงาน เครื่อง รหัสที่สาขาเดิมจะได้)
+ * ให้แอปขึ้นกล่องยืนยัน แล้วส่งซ้ำพร้อม reuseClosedCode: true — ไม่ทำให้เองเพราะ "สาขาเดิมกลับมาเปิด" กับ "ร้านใหม่ได้รหัสเก่า"
+ * ดูจากรหัสอย่างเดียวแยกไม่ออก ต้องให้คนตัดสิน (อย่างแรกต้องกด "เปิดสาขาอีกครั้ง" ที่สาขาเดิม ไม่ใช่เพิ่มสาขา)
+ */
+const addSchema = branchSchema.extend({ reuseClosedCode: z.boolean().optional() });
+
+router.post("/", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  const parsed = addSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: branchInputError(parsed.error) });
+  const { reuseClosedCode: reuse, ...input } = parsed.data;
+  const code = input.code;
+  // "(เดิม)" เป็นรหัสที่ระบบตั้งให้สาขาที่ยกรหัสไปแล้ว — เพิ่มเองได้จะมีสาขาที่ดูเหมือนสาขาเก่าแต่ไม่ใช่
+  if (isRetiredCode(code)) {
+    return res.status(400).json({ error: `รหัสลงท้าย “(เดิม)” ระบบตั้งให้สาขาที่ยกรหัสให้สาขาใหม่เท่านั้น — ใส่รหัสตามทะเบียน เช่น C0546` });
+  }
+  const data = { ...input, ...branchDates(input) };
 
-  const existing = await prisma.branch.findUnique({ where: { code: parsed.data.code } });
-  if (existing) return res.status(409).json({ error: `มีสาขารหัส ${parsed.data.code} อยู่แล้ว` });
-
-  const branch = await prisma.branch.create({
-    data: { ...parsed.data, ...branchDates(parsed.data) },
+  const existing = await prisma.branch.findUnique({
+    where: { code },
+    select: { id: true, code: true, name: true, cancelledAt: true, cancelledNote: true },
   });
-  res.status(201).json(branch);
+  const taken = () => res.status(409).json({ error: `มีสาขารหัส ${code} อยู่แล้ว` });
+  if (existing && !existing.cancelledAt) return taken();
+  if (existing && !reuse) {
+    const offer = await reuseOffer({ ...existing, cancelledAt: existing.cancelledAt! });
+    return res.status(409).json({
+      // แอปรุ่นเก่าไม่รู้จัก reuse — ขึ้นข้อความนี้ตรง ๆ ต้องบอกว่าทำไมและทำอะไรต่อ
+      error:
+        `รหัส ${code} เป็นของสาขาที่ปิดแล้ว (${existing.name}) — ใช้กับสาขาใหม่ได้เมื่อกดยืนยัน ` +
+        `ไม่เห็นหน้าต่างยืนยัน = แอปรุ่นเก่า กดปุ่ม “อัปเดต”`,
+      reuse: offer,
+    });
+  }
+  try {
+    if (existing) {
+      const actor = await branchActor(req.auth!.userId);
+      const out = await reuseClosedCode(code, data, actor);
+      return res.status(201).json({ ...out.branch, retired: out.retired });
+    }
+    const branch = await prisma.branch.create({ data });
+    res.status(201).json(branch);
+  } catch (e) {
+    // อีกคนเพิ่มรหัสนี้/เปิดสาขาเดิมคืนไปก่อนหน้าเสี้ยววินาที — ไม่ใช่ข้อผิดพลาดของระบบ
+    if (e instanceof ReuseConflict || (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")) {
+      return res.status(409).json({ error: `มีสาขารหัส ${code} อยู่แล้ว — สาขาเพิ่งถูกเพิ่มหรือเปิดคืนพร้อมกัน โหลดหน้าใหม่แล้วดูอีกครั้ง` });
+    }
+    throw e;
+  }
 });
 
 const updateSchema = branchSchema.partial();
@@ -789,23 +849,56 @@ router.post("/:id/close", requireAuth, requireAdmin, async (req: AuthRequest, re
 router.post("/:id/reopen", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสสาขาไม่ถูกต้อง" });
-  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, cancelledAt: true, cancelledNote: true } });
+  const branch = await prisma.branch.findUnique({ where: { id }, select: { code: true, originalCode: true, cancelledAt: true, cancelledNote: true } });
   if (!branch) return res.status(404).json({ error: "ไม่พบสาขานี้" });
   if (!branch.cancelledAt) return res.status(400).json({ error: `${branch.code} ยังเปิดอยู่` });
-  const actor = await branchActor(req.auth!.userId);
-  const reopened = await prisma.$transaction(
-    async (tx) => {
-      const b = await tx.branch.update({ where: { id }, data: { cancelledAt: null, cancelledNote: null } });
-      // เหตุผลที่เคยปิด (รวมที่ปิดจากไฟล์สาขายกเลิก ซึ่งไม่ได้ลงประวัติตอนปิด) เก็บไว้ใน meta ก่อนถูกล้าง
-      await logBranch(tx, id, "REOPENED", "เปิดสาขาอีกครั้ง", actor, {
-        closedAt: branch.cancelledAt!.toISOString(),
-        closedNote: branch.cancelledNote,
+  /**
+   * สาขาที่ยกรหัสให้สาขาใหม่แล้ว ("C0546 (เดิม)") — เปิดคืนทั้งที่สาขาใหม่ถือรหัสอยู่ = สาขาเปิดที่ไม่มีไฟล์ไหนจับคู่ได้เลย
+   * (รายงานเครื่อง/ทะเบียนเขียน C0546 ซึ่งคือสาขาใหม่) จึงไม่ให้เปิด · สาขาใหม่ถูกลบไปแล้ว (เพิ่มผิด ลบได้เพราะยังว่าง)
+   * = รหัสว่าง เปิดคืนพร้อมรหัสเดิม — ทางแก้เมื่อกดใช้รหัสซ้ำผิดสาขา
+   */
+  const backTo = branch.originalCode && branch.originalCode !== branch.code ? branch.originalCode : null;
+  if (backTo) {
+    const holder = await prisma.branch.findUnique({ where: { code: backTo }, select: { name: true } });
+    if (holder) {
+      return res.status(400).json({
+        error: `เปิด ${branch.code} อีกครั้งไม่ได้ — รหัส ${backTo} ใช้กับสาขาใหม่ “${holder.name}” แล้ว · ใบงาน เครื่อง และประวัติของสาขานี้ยังเปิดดูได้ตามเดิม`,
       });
-      return b;
-    },
-    { timeout: 30_000, maxWait: 15_000 }
-  );
-  res.json(reopened);
+    }
+  }
+  const actor = await branchActor(req.auth!.userId);
+  try {
+    const reopened = await prisma.$transaction(
+      async (tx) => {
+        const b = await tx.branch.update({
+          where: { id },
+          data: { cancelledAt: null, cancelledNote: null, ...(backTo ? { code: backTo, originalCode: null } : {}) },
+        });
+        // เหตุผลที่เคยปิด (รวมที่ปิดจากไฟล์สาขายกเลิก ซึ่งไม่ได้ลงประวัติตอนปิด) เก็บไว้ใน meta ก่อนถูกล้าง
+        await logBranch(
+          tx,
+          id,
+          "REOPENED",
+          backTo ? `เปิดสาขาอีกครั้ง — คืนรหัส ${backTo} (ไม่มีสาขาอื่นใช้รหัสนี้แล้ว)` : "เปิดสาขาอีกครั้ง",
+          actor,
+          {
+            closedAt: branch.cancelledAt!.toISOString(),
+            closedNote: branch.cancelledNote,
+            ...(backTo ? { codeFrom: branch.code, codeTo: backTo } : {}),
+          }
+        );
+        return b;
+      },
+      { timeout: 30_000, maxWait: 15_000 }
+    );
+    res.json(reopened);
+  } catch (e) {
+    // มีคนเพิ่มสาขารหัสนี้ระหว่างที่กดเปิด
+    if (backTo && e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return res.status(409).json({ error: `เปิด ${branch.code} อีกครั้งไม่ได้ — รหัส ${backTo} เพิ่งถูกใช้กับสาขาอื่น` });
+    }
+    throw e;
+  }
 });
 
 export default router;

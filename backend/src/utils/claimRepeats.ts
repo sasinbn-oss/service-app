@@ -4,6 +4,8 @@
  * (อะไหล่ชิ้นเดิมเคลมซ้ำในเวลาสั้น ๆ = ผู้ขายถามแน่ หรือของที่ส่งไปรอบก่อนยังไม่ได้แก้ต้นเหตุ)
  *
  * เครื่องเดียวกัน = สาขาเดียวกัน + รหัสเครื่องตรงกันไม่สนตัวพิมพ์ (กติกาเดียวกับลิงก์ประวัติเคลม) · แถวล่าสุดต่อ (ใบ, ชิ้น)
+ * สาขาเดียวกัน = ใบงานของเคลมอยู่สาขาเดียวกับใบที่ถาม (id) ไม่ใช่ branchCode ในใบเคลม — รหัสของสาขาที่ปิดแล้วใช้ซ้ำกับร้านใหม่ได้
+ * (utils/branchCodeReuse.ts) เทียบข้อความแล้ว W1 ของร้านใหม่จะ "เคยเคลม" ด้วยเคลมของ W1 ร้านเก่า
  * ตัดเฉพาะแถวของงานซ่อมครั้งนี้ของใบนี้ (หลังเปิดใบใหม่ครั้งล่าสุด) — ใบเดียวกันที่อนุมัติไปตอนซ่อมครั้งก่อนเปิดใหม่ต้องขึ้น
  * เพราะนั่นคือการเคลมซ้ำจริง · ใบทดสอบไม่นับให้ใบจริง (คัดลอกใบจริงไปลองปิดพร้อมเคลม ไม่ได้แปลว่าเครื่องเคลมซ้ำ)
  * "เคย" = ส่งก่อนแถวล่าสุดของใบนี้ — เปิดดูใบเก่าทีหลังต้องไม่ขึ้นเคลมของใบที่ใหม่กว่าว่า "เครื่องนี้เคยเคลม"
@@ -29,10 +31,9 @@ export async function claimRepeatsOf(ids: number[]): Promise<Map<number, ClaimRe
     SELECT DISTINCT ON (me.id, c."workOrderId", COALESCE('id:' || c."sparePartId", 'code:' || c."partCode"))
            me.id AS "forId", c."workOrderId", w.code, c."partCode", c."partName", c.status, c."createdAt"
     FROM "WorkOrder" me
-    JOIN "Branch" b ON b.id = me."branchId"
     JOIN "Machine" m ON m.id = me."machineId"
-    JOIN "PartClaim" c ON c."branchCode" = b.code AND lower(c."machineCode") = lower(m.code)
-    JOIN "WorkOrder" w ON w.id = c."workOrderId"
+    JOIN "PartClaim" c ON lower(c."machineCode") = lower(m.code)
+    JOIN "WorkOrder" w ON w.id = c."workOrderId" AND w."branchId" = me."branchId"
     WHERE me.id = ANY(${ids}::int[])
       AND (me."isTest" OR NOT w."isTest")
       -- เคลมของใบในถังขยะไม่นับเป็น "เครื่องนี้เคยเคลม" — ใบที่ลบคือใบที่ไม่ควรมี (ทดสอบ · เปิดซ้ำ · เปิดผิดเครื่อง)

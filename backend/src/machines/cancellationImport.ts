@@ -16,6 +16,7 @@
  */
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
+import { isRetiredCode, retiredRowsNote, reusedSkipNote } from "../utils/branchCodeReuse";
 
 export interface CancelledSheetRow {
   code: string;
@@ -161,6 +162,13 @@ export interface CancelledImportPlan {
   alreadyCancelled: number;
   /** รหัสในไฟล์ที่ไม่มีในระบบ — ข้ามไป พร้อมบอกให้รู้ */
   notFound: string[];
+  /**
+   * แถวของรหัสที่ใช้กับสาขาใหม่แล้ว (สาขาเดิมปิด รหัสไปร้านใหม่ — utils/branchCodeReuse.ts) ข้ามทั้งยกเลิก/คืน ทั้งสาขา/รายเครื่อง
+   * ไฟล์นี้สะสมและไม่มีวันที่ แถวรหัสนั้นที่ยังค้างคือการปิดสาขาเดิม ปล่อยตามรหัส = ปิดสาขาใหม่ทั้งสาขา
+   */
+  skippedReused: { code: string; name: string; rows: number; reusedAt: Date }[];
+  /** แถวที่รหัสเป็นแบบ "(เดิม)" — ระบบตั้งให้สาขาที่ยกรหัสไปแล้ว ไม่ใช่รหัสในทะเบียน ไฟล์เปิด/ปิดสาขาพวกนี้ไม่ได้ */
+  skippedRetired: string[];
   /** เคสที่เปิดค้างอยู่ทั้งหมดที่จะถูกปิดพร้อมกัน ทั้งระดับสาขาและระดับเครื่อง */
   openCasesToClose: number;
   errors: string[];
@@ -176,6 +184,7 @@ async function buildPlan(parsed: CancelledParseResult): Promise<CancelledImportP
       code: true,
       name: true,
       cancelledAt: true,
+      reusedAt: true,
       _count: { select: { outages: { where: { endedAt: null } } } },
       machines: { select: { id: true, code: true, removedAt: true } },
     },
@@ -198,10 +207,23 @@ async function buildPlan(parsed: CancelledParseResult): Promise<CancelledImportP
   const machinesToRemove: CancelledImportPlan["machinesToRemove"] = [];
   const toRestore: CancelledImportPlan["toRestore"] = [];
   const notFound: string[] = [];
+  const reused = new Map<string, CancelledImportPlan["skippedReused"][number]>();
+  const skippedRetired: string[] = [];
   let alreadyCancelled = 0;
 
   for (const row of parsed.rows) {
+    // "(เดิม)" ไม่ใช่รหัสในทะเบียน — คืนสาขาแบบนี้จากไฟล์ = เปิดสาขาที่ยกรหัสไปแล้ว ข้ามการกันในแอป (เปิดคืนต้องคืนรหัสด้วย)
+    if (isRetiredCode(row.code)) {
+      skippedRetired.push(row.code);
+      continue;
+    }
     const branch = byCode.get(row.code);
+    if (branch?.reusedAt) {
+      const r = reused.get(branch.code) ?? { code: branch.code, name: branch.name, rows: 0, reusedAt: branch.reusedAt };
+      r.rows += 1;
+      reused.set(branch.code, r);
+      continue;
+    }
     if (!branch) {
       notFound.push(row.machineCode ? `${row.code}/${row.machineCode}` : row.code);
       continue;
@@ -263,6 +285,8 @@ async function buildPlan(parsed: CancelledParseResult): Promise<CancelledImportP
         `โดยบันทึกเหตุผลว่าไม่ใช่ "ซ่อมเสร็จ" เวลาเฉลี่ยในรายงานจึงไม่เพี้ยน`
     );
   }
+  for (const r of reused.values()) warnings.push(reusedSkipNote(r.code, r.reusedAt, r.rows));
+  if (skippedRetired.length > 0) warnings.push(retiredRowsNote(skippedRetired));
   if (notFound.length > 0) {
     warnings.push(
       `${notFound.length} รายการในไฟล์ไม่มีในระบบ ข้ามไป — ${notFound.slice(0, 5).join(", ")}` +
@@ -279,6 +303,8 @@ async function buildPlan(parsed: CancelledParseResult): Promise<CancelledImportP
     toRestore,
     alreadyCancelled,
     notFound,
+    skippedReused: [...reused.values()],
+    skippedRetired,
     openCasesToClose,
     errors: parsed.errors,
     warnings,

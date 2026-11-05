@@ -334,6 +334,21 @@ model Branch {
   coverFor          User?            @relation("CoverFor", fields: [coverForId], references: [id], onDelete: SetNull)
   coverForName      String?
   coverSince        DateTime?
+  // ใช้รหัสของสาขาที่ปิดแล้วกับสาขาใหม่ (เจ้าของงานตัดสิน 4 พ.ย. 69: "ไม่รวมสาขา เปลี่ยนใหม่ คือข้อมูลใหม่ทั้งหมด เเต่ยังเก็บประวัติเก่าอยู่")
+  //
+  // บริษัทเอารหัสของสาขาที่ปิดไปแล้วมาใช้กับร้านอื่น (C0546 นครปฐม → ภูเก็ต) — code เป็น @unique และไฟล์ทุกชนิดจับคู่สาขาด้วยรหัส
+  // สาขาเดิมจึงเปลี่ยนรหัสเป็น "C0546 (เดิม)" ("(เดิม 2)" ถ้าซ้ำ) แล้วเก็บใบงาน เครื่อง ประวัติของตัวเองไว้ครบ (ผูกด้วย id)
+  // ไฟล์รอบหน้าที่ยังมี C0546 ไปลงสาขาใหม่ ไม่ปนกับของเดิม · ดู utils/branchCodeReuse.ts
+  //
+  // originalCode = รหัสก่อนยกให้สาขาใหม่ (อยู่ที่สาขาเดิม) — ค้น "C0546" เจอทั้งสองสาขา และรู้ว่า "(เดิม)" มาจากรหัสไหน
+  originalCode      String?
+  // สาขาใหม่: รับรหัสต่อจากสาขาไหน (ลบสาขาเดิมได้เฉพาะสาขาที่ไม่มีอะไรผูก — ลบแล้วช่องนี้ว่าง)
+  reusedFromId      Int?
+  reusedFrom        Branch?          @relation("BranchCodeReuse", fields: [reusedFromId], references: [id], onDelete: SetNull)
+  reusedBy          Branch[]         @relation("BranchCodeReuse")
+  // สาขาใหม่: เวลาที่รับรหัสต่อ — ไฟล์สาขายกเลิกเป็นไฟล์สะสมไม่มีวันที่ แถวรหัสนี้ที่ยังค้างในไฟล์คือการปิดสาขาเดิม
+  // ตัวนำเข้าไฟล์นั้นจึงข้ามรหัสของสาขาที่มีค่านี้ (ปิดสาขาใหม่ให้กดในแอป) · แยกจาก reusedFromId เพราะต้องอยู่แม้สาขาเดิมถูกลบ
+  reusedAt          DateTime?
   createdAt         DateTime         @default(now())
   checkIns          BranchCheckIn[]
   workLogs          WorkLog[]
@@ -1150,7 +1165,7 @@ model BranchLog {
   id        Int      @id @default(autoincrement())
   branchId  Int
   branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  // RENAMED | NAME_RESTORED | CLOSED | REOPENED
+  // RENAMED | NAME_RESTORED | CLOSED | REOPENED | CODE_RETIRED (สาขาเดิมยกรหัสให้สาขาใหม่) | CODE_REUSED (สาขาใหม่รับรหัสต่อ)
   action    String
   note      String
   meta      Json?
