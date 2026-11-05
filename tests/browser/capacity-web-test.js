@@ -16,6 +16,18 @@ const DIR = __dirname;
   }
   const fx = await setup();
   let outageId = null;
+  // ใบของช่วง "เปิดเอง" เปิดจากฟอร์มจริงโดยไม่มีเคส — ขั้นลบตาม outageId ตอนจบมองไม่เห็น เดิมค้างใบละรอบ
+  // จดเลขใบล่าสุดก่อนกดเปิด แล้วหาด้วยอาการ + สาขา เฉพาะใบหลังเลขนั้น — ใบอาการเดียวกันที่ค้างจากรอบก่อน ๆ ไม่ใช่ของรอบนี้
+  // ขอบเขตเป็นเลขใบแทนเวลา — เลขใบออกจากฐานข้อมูลที่เดียว ไม่ต้องสงสัยว่าเวลาที่จดกับ createdAt มาจากนาฬิกาเครื่องเดียวกันไหม
+  // (เครื่องที่รันเทสต์ · backend · ฐานข้อมูลคนละ region เป็นคนละเครื่องกันได้)
+  const MANUAL_SYMPTOM = "น้ำไม่เข้า ทดสอบขนาด";
+  let manualFrom = null;
+  const manualOrders = () =>
+    fx
+      .sql(`select id from "WorkOrder" where id > ${manualFrom} and symptom='${MANUAL_SYMPTOM}'
+            and "branchId"=(select id from "Branch" where code='C0006')`)
+      .split("\n")
+      .filter(Boolean);
   // อะไหล่ข้ามยี่ห้อที่รอบนกระดาน (ใส่ทาง SQL) — ลบตอนจบหลังลบใบและเคส
   const crossCode = `CAPX${process.pid}`;
   // ใช้ chromium ที่ติดตั้งไว้แล้วถ้ามี ไม่งั้นให้ playwright หาเอง
@@ -136,7 +148,7 @@ const DIR = __dirname;
       ? pass("แอดมิน: ไม่มีช่องอะไหล่ที่ต้องใช้ในฟอร์มเปิดใบงาน")
       : fail("แอดมินเห็นช่องอะไหล่ที่ต้องใช้ ทั้งที่เป็นช่องของช่าง");
     const symptom = page.getByLabel("อาการที่พบของเครื่องที่ 1").locator("visible=true").first();
-    await symptom.fill("น้ำไม่เข้า ทดสอบขนาด");
+    await symptom.fill(MANUAL_SYMPTOM);
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(DIR, "cap-2-filled.png") });
     // แอดมินไม่บังคับรูปหน้างาน (เจ้าของงานขอ ต.ค. 69 — ตำแหน่งอื่นยังบังคับ ดู admin-photo-web-test) · ยังแนบได้ตามปกติ
@@ -145,12 +157,18 @@ const DIR = __dirname;
       : fail("แอดมินถูกล็อกเรื่องรูป หรือไม่มีป้าย");
     await attachPhoto(page);
     (await seen("ยังบันทึกไม่ได้", false)) === 0 ? pass("แนบรูปแล้วยังเปิดได้") : fail("แนบรูปแล้วกลับล็อก");
+    manualFrom = Number(fx.sql(`select coalesce(max(id),0) from "WorkOrder"`));
     await submitForm();
     await page.waitForTimeout(5000);
     await page.screenshot({ path: path.join(DIR, "cap-3-detail.png") });
     (await seen("WO-", false)) > 0
       ? pass("บันทึกแล้วไปหน้ารายละเอียดใบงาน")
       : fail("ยังค้างอยู่ที่ฟอร์ม ไม่ได้บันทึก");
+    // ยืนยันที่ฐานข้อมูล — "WO-" บนจออาจเป็นใบเก่าในรายการข้างหลังหน้าต่างลอย · เลขใบนี้คือใบที่ต้องลบตอนจบ
+    const manualIds = manualOrders();
+    manualIds.length === 1
+      ? pass("ฐานข้อมูล: เปิดเองได้ใบงานหนึ่งใบที่ C0006")
+      : fail(`ฐานข้อมูล: ใบที่เปิดเองมี ${manualIds.length} ใบ (ควรเป็น 1)`);
     (await seen("ขนาดเครื่อง (ไม่บังคับ)", true)) === 0 && (await seen("13 kg", false)) > 0
       ? pass("ใบงานแสดงขนาดเครื่อง")
       : fail("ใบงานไม่แสดงขนาดเครื่อง");
@@ -318,6 +336,15 @@ const DIR = __dirname;
     await page.screenshot({ path: path.join(DIR, "cap-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${e.message}`);
   } finally {
+    // ใบที่เปิดเอง — หาใหม่ตรงนี้แทนการใช้เลขที่อ่านหลังกดเปิด เพราะเทสต์อาจพังระหว่างกดเปิดกับตอนอ่าน แล้วใบหลุดอีก
+    // ลบผ่าน API ไม่ใช่ SQL เพราะใบนี้มีรูปหน้างานที่อยู่ในถัง — ลบแถวตรง ๆ ไฟล์ค้างในถังโดยไม่มีอะไรชี้ถึง
+    if (manualFrom !== null) {
+      try {
+        for (const id of manualOrders()) await fx.call(fx.A, "DELETE", `/work-orders/${id}`);
+      } catch (e) {
+        fail(`ลบใบที่เปิดเองไม่ได้ (อาการ "${MANUAL_SYMPTOM}" เลขใบหลัง ${manualFrom}): ${e.message}`);
+      }
+    }
     // ใบงานที่เปิดจากกระดานลบผ่าน API (ลบรูป/ประวัติให้ครบ) ก่อนลบเคส — ลบเคสก่อน ใบงานหลุดจากเคสแล้วหาไม่เจอ
     if (outageId) {
       try {

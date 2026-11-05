@@ -13,7 +13,15 @@ ENC() { node -pe "encodeURIComponent(process.argv[1])" "$1"; }
 CODE() { curl -s -o /dev/null -w "%{http_code}" "localhost:4000/api/$2" -H "$(H $1)"; }
 
 U=zz.usage
-cleanup() { DB "delete from \"User\" where \"employeeCode\"='$U'" >/dev/null; }
+# ช่วง "ดูในฐานะ" ท้ายไฟล์จดแถว ViewAsLog (A001 → T001) ทุกรอบ — ตารางนี้ไม่ผูกกับ User ลบผู้ใช้ทดสอบแล้วไม่หายตาม
+# จดเลขแถวล่าสุดไว้ก่อนเริ่ม แล้วลบเฉพาะแถวหลังจากนั้นของคู่นี้ — แถว A001 → T001 ที่มีอยู่ก่อนไม่ใช่ของชุดนี้
+VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
+cleanup() {
+  DB "delete from \"ViewAsLog\" where id > $VSTART
+        and \"byUserId\"=(select id from \"User\" where \"employeeCode\"='A001')
+        and \"targetUserId\"=(select id from \"User\" where \"employeeCode\"='T001');
+      delete from \"User\" where \"employeeCode\"='$U'" >/dev/null
+}
 cleanup; trap cleanup EXIT
 DB "insert into \"User\"(\"employeeCode\",name,role,team,\"passwordHash\") select '$U','ช่างทดสอบการใช้งาน','EMPLOYEE','ทีมทดสอบใช้งาน',\"passwordHash\" from \"User\" where \"employeeCode\"='A001'" >/dev/null
 UID_=$(DB "select id from \"User\" where \"employeeCode\"='$U'")
