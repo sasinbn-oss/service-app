@@ -4,6 +4,7 @@
 #   · ไฟล์มี 8 ชีตตามลำดับ · จำนวนแถวพนักงาน/สาขา/เครื่อง/ใบงานตรงกับฐานข้อมูล
 #   · ช่วงวันที่กรองชีตใบงาน (ใบที่เปิดวันนี้อยู่ ใบที่ย้อนไปเมื่อปีก่อนไม่อยู่) · ไม่นับใบทดสอบ
 #   · เบอร์โทรพนักงานมา · ไม่มีรหัสผ่าน (hash) หรือเลขบัตรเติมน้ำมันหลุดเข้าไฟล์
+#   · ชีตใบงานบอกอะไหล่ของแต่ละใบ: ที่ใช้ตอนปิดงาน (USED) กับที่ระบุ/เบิกพร้อมสถานะ (WAITING) แยกคอลัมน์ · ของนอกสโตร์ขึ้นชื่อ+หน่วย
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -24,6 +25,7 @@ cleanup() {
   DB "update \"User\" set phone=nullif('$OLD_PHONE','') where \"employeeCode\"='T001'" >/dev/null
   [ -n "$VID" ] && DB "delete from \"VehicleCard\" where \"fleetCardNo\"='ZZFLEET998877'" >/dev/null
   purge_orders "$A" $IDS
+  DB "delete from \"SparePart\" where \"partCode\"='ZZ-SYSREP-OFF'" >/dev/null
   rm -f $XLSX
 }
 trap cleanup EXIT
@@ -36,6 +38,15 @@ NEWWO() { POST $A work-orders "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"prio
 W1=$(NEWWO "ทดสอบรายงานทั้งระบบ วันนี้"); W2=$(NEWWO "ทดสอบรายงานทั้งระบบ ปีก่อน"); W3=$(NEWWO "ทดสอบรายงานทั้งระบบ ใบทดสอบ"); IDS="$W1 $W2 $W3"
 DB "update \"WorkOrder\" set \"createdAt\"=now()-interval '400 days' where id=$W2; update \"WorkOrder\" set \"isTest\"=true where id=$W3" >/dev/null
 C1=$(DB "select code from \"WorkOrder\" where id=$W1"); C2=$(DB "select code from \"WorkOrder\" where id=$W2"); C3=$(DB "select code from \"WorkOrder\" where id=$W3")
+# อะไหล่ของ W1: ใช้ไป 2 ชิ้น (USED) · ระบุไว้แล้วเบิก (WAITING + ใบเบิก) · ระบุไว้แต่ของหมด · ของนอกสโตร์ที่ระบุไว้
+# ใส่ด้วย SQL ตรง — เทสต์นี้ดูว่ารายงานอ่านแถวพวกนี้ออกมาถูกไหม เส้นทางที่สร้างแถวมีเทสต์ของตัวเองแล้ว
+SP1=$(DB "select id from \"SparePart\" where not \"offCatalog\" order by id limit 1"); SP2=$(DB "select id from \"SparePart\" where not \"offCatalog\" order by id offset 1 limit 1")
+P1=$(DB "select \"partCode\" from \"SparePart\" where id=$SP1"); P2=$(DB "select \"partCode\" from \"SparePart\" where id=$SP2")
+SPOFF=$(DB "insert into \"SparePart\"(\"partCode\",name,\"offCatalog\",\"updatedAt\") values ('ZZ-SYSREP-OFF','สายน้ำทิ้งทดสอบรายงาน',true,now()) returning id" | head -1)
+DB "insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",quantity,kind) values ($W1,$SP1,2,'USED');
+    insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\",\"requisitionNo\") values ($W1,$SP1,3,'WAITING',true,'RQ-SYSREP-1');
+    insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",quantity,kind,\"inStock\") values ($W1,$SP2,1,'WAITING',false);
+    insert into \"WorkOrderPart\"(\"workOrderId\",\"sparePartId\",quantity,kind,unit) values ($W1,$SPOFF,2,'WAITING','เส้น')" >/dev/null
 
 echo "═══ สิทธิ์"
 [ "$(CODE $S)" = 403 ] && pass "หัวหน้าภาคออกไม่ได้ (403)" || fail "หัวหน้าภาคได้ $(CODE $S)"
@@ -62,6 +73,10 @@ what = sys.argv[2]
 if what == "sheets": print("/".join(wb.sheetnames))
 elif what == "count": print(len(rows(sys.argv[3])))
 elif what == "codes": print(" ".join(str(r[1]) for r in rows("ใบงาน")))
+elif what == "parts":
+    r = next(r for r in rows("ใบงาน") if r[1] == sys.argv[3]); print(f"{r[17] or ''}|||{r[18] or ''}")
+elif what == "head":
+    print("/".join(str(c) for c in next(wb["ใบงาน"].iter_rows(min_row=4, max_row=4, values_only=True)) if c))
 elif what == "phone":
     r = next(r for r in rows("พนักงาน") if r[0] == sys.argv[3]); print(r[5] or "")
 elif what == "all":
@@ -84,6 +99,21 @@ echo "$ALL" | grep -q '^\$2[aby]\$' && fail "มี password hash ในไฟ�
 CARDS=$(DB "select string_agg(x, ' ') from (select \"fleetCardNo\" x from \"VehicleCard\" union all select \"easyPassNo\" from \"VehicleCard\") t where x is not null and x<>''" 2>/dev/null || true)
 LEAK=""; for c in $CARDS; do echo "$ALL" | grep -qF "$c" && LEAK="$LEAK $c"; done
 [ -z "$LEAK" ] && pass "ไม่มีเลขบัตรเติมน้ำมัน/Easy Pass ($(echo $CARDS | wc -w) ใบในระบบ)" || fail "เลขบัตรหลุด:$LEAK"
+
+echo
+echo "═══ อะไหล่ในชีตใบงาน"
+HEAD=$(READ head)
+echo "$HEAD" | grep -q "ผลปิดงาน/อะไหล่ที่ใช้ (ช่างบันทึกตอนปิดงาน)/อะไหล่ที่ระบุ / เบิก$" && pass "คอลัมน์อะไหล่สองช่องต่อท้าย คอลัมน์เดิมไม่เลื่อน" || fail "หัวตาราง: $HEAD"
+PARTS=$(READ parts $C1); USED=${PARTS%%|||*}; WAIT=${PARTS##*|||}
+NAME1=$(DB "select name from \"SparePart\" where id=$SP1"); NAME2=$(DB "select name from \"SparePart\" where id=$SP2")
+[ "$USED" = "$P1 $NAME1 ×2" ] && pass "ที่ใช้: $USED" || fail "ที่ใช้ = '$USED' (ต้อง '$P1 $NAME1 ×2')"
+echo "$WAIT" | grep -qxF "$P1 $NAME1 ×3 · เบิกแล้ว (RQ-SYSREP-1)" && pass "ที่ระบุ: เบิกแล้วพร้อมเลขใบเบิก" || fail "ไม่มีแถวเบิกแล้ว: $WAIT"
+echo "$WAIT" | grep -qxF "$P2 $NAME2 ×1 · ของหมด" && pass "ที่ระบุ: ของหมด" || fail "ไม่มีแถวของหมด: $WAIT"
+echo "$WAIT" | grep -qxF "สายน้ำทิ้งทดสอบรายงาน ×2 เส้น (นอกสโตร์) · ของนอกสโตร์" && pass "ของนอกสโตร์ขึ้นชื่อ + หน่วย ไม่ขึ้นรหัสภายใน" || fail "ของนอกสโตร์: $WAIT"
+echo "$WAIT" | grep -q "ZZ-SYSREP-OFF" && fail "รหัสภายในของของนอกสโตร์หลุด" || pass "ไม่มีรหัสภายในของของนอกสโตร์"
+[ "$(echo "$WAIT" | wc -l)" = 3 ] && pass "ที่ระบุแยกบรรทัดละตัว (3 บรรทัด)" || fail "บรรทัด: $(echo "$WAIT" | wc -l)"
+P2PARTS=$(READ parts $C2)
+[ "$P2PARTS" = "|||" ] && pass "ใบที่ไม่มีอะไหล่ ช่องว่าง" || fail "ใบไม่มีอะไหล่: '$P2PARTS'"
 
 echo
 echo "═══ เลือกช่วงวันที่ = วันนี้"
