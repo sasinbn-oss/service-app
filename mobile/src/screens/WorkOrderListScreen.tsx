@@ -316,13 +316,13 @@ interface ListPrefs {
   kind: "" | "normal" | "sub";
   /** ใบงานเคลม (เจ้าของงานขอ ต.ค. 69) — "any" = ทุกใบที่แจ้งเคลม หรือเจาะสถานะเคลม */
   claim?: "" | "any" | "PENDING" | "APPROVED" | "REJECTED" | "DECLINED";
-  /**
-   * หัวข้อบนสุดของกล่องงานที่ย่อไว้ (เลยนัด · รอลูกค้าจ่ายเงิน · ไม่มีคนรับ) — เจ้าของงานขอ 5 พ.ย. 69
-   * หัวข้อละหลายสิบใบดันรายการจริงลงไปพ้นจอ · จำไว้ในเครื่องแบบตัวกรองอื่น เปิดหน้าใหม่ยังย่ออยู่
-   * ไม่ล้างตอน "ล้างตัวกรอง" — นี่คือหน้าตาที่คนเลือก ไม่ใช่ตัวกรอง
-   */
-  folded?: string[];
 }
+/**
+ * หัวข้อบนสุดของกล่องงานที่กดขยายไว้ (เลยนัด · รอลูกค้าจ่ายเงิน · ไม่มีคนรับ) — เจ้าของงานขอ 5 พ.ย. 69
+ * หัวข้อละหลายสิบใบดันรายการจริงลงไปพ้นจอ เจ้าของงานจึงให้เปิด/รีเฟรชมาแล้วย่อไว้ก่อนเสมอ
+ * จำไว้แค่ในหน่วยความจำ ไม่ลงเครื่อง: ไปหน้าอื่นแล้วกลับมายังขยายอยู่ แต่รีเฟรชแล้วกลับมาย่อ
+ */
+const openAttn = new Set<string>();
 const DEFAULT_PREFS: ListPrefs = { owner: "", who: "", btype: "", sort: "urgent", supTab: "repair", kind: "", claim: "" };
 
 /** ป้าย/ตัวกรองใบงานเคลม — สถานะเคลมเป็นคำที่ Admin Spare Part ใช้ */
@@ -1424,13 +1424,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           role={user?.role ?? null}
           adminCut={adminCut}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
-          folded={prefs.folded ?? []}
-          onFold={(key) =>
-            setPrefs((p) => {
-              const f = p.folded ?? [];
-              return { ...p, folded: f.includes(key) ? f.filter((k) => k !== key) : [...f, key] };
-            })
-          }
         />
       ) : null}
     </View>
@@ -2303,8 +2296,6 @@ function InboxAttention({
   role,
   adminCut,
   onOpen,
-  folded,
-  onFold,
 }: {
   /** ใบที่เห็นอยู่ในแท็บ/ตัวกรองนี้ — หัวข้อของแอดมิน (ไม่มีคนรับ · เลยนัด) */
   rows: WorkOrderRow[];
@@ -2316,10 +2307,14 @@ function InboxAttention({
   /** แอดมินที่ไม่ใช่ Admin Spare Part ในกล่องงาน — หัวข้อ "ขอนัดด่วน" ของแอดมิน */
   adminCut: boolean;
   onOpen: (id: number) => void;
-  /** key ของหัวข้อที่ย่อไว้ (จำในเครื่อง) — ย่อแล้วเหลือแค่ชื่อหัวข้อกับจำนวน */
-  folded: string[];
-  onFold: (key: string) => void;
 }) {
+  // ตั้งต้นย่อทุกหัวข้อ — ดู openAttn · state แค่ให้วาดใหม่ตอนกด ค่าจริงอยู่ที่ openAttn
+  const [opened, setOpened] = useState<string[]>(() => [...openAttn]);
+  const onFold = (key: string) => {
+    if (openAttn.has(key)) openAttn.delete(key);
+    else openAttn.add(key);
+    setOpened([...openAttn]);
+  };
   // นาฬิกาเซิร์ฟเวอร์ของแถบนี้เอง — แถบ "รอนัดวัน" ขึ้น/หายตามเวลาโดยไม่ต้องวาดรายการทั้งหน้าใหม่
   const now = useServerClock(serverNow, cutoff?.time, (role === "SUPERVISOR" || adminCut) && !!allRows);
   /**
@@ -2386,7 +2381,7 @@ function InboxAttention({
       */}
       {asks ? <CutoffBanners groups={[asks]} withRows onOpen={onOpen} /> : null}
       {groups.map((g) => {
-        const shut = folded.includes(g.key);
+        const shut = !opened.includes(g.key);
         return (
         <View
           key={g.key}
