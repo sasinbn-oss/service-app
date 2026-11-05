@@ -123,8 +123,91 @@ curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file
   && pass "แถว PM ที่ใส่เครื่องมา: เปิดเป็นงานทั้งร้าน ไม่ผูกเครื่อง (เลขเครื่องเก็บไว้ในรายละเอียด)" || fail "แถว PM ผูกเครื่อง"
 rm -f "$X4"
 
+# ── ยืนยันทีละชุด (only) — เจ้าของงานเจอ 5 พ.ย. 69: ไฟล์ 196 ใบในคำขอเดียวชนเพดานเวลา (P2028) ทุกครั้ง ไม่มีใบไหนเข้า ──
+# ไฟล์แบบของจริง: วันที่ว่าง · หัว "ผู้ติดต่อสาขา" · รูปฝังหลายแถว · ตู้ขายน้ำยา (ไม่ผูกเครื่อง) · เครื่องใหม่ปนเครื่องที่มีอยู่
+B=$((N + 100))
+DB "insert into \"Machine\" (\"branchId\",code,type,status,brand,\"capacityKg\",\"updatedAt\") select id,'W$((B + 1))','WASHER','ON','Huebsch',25,now() from \"Branch\" where code='C0006';
+    insert into \"Machine\" (\"branchId\",code,type,status,\"updatedAt\") select id,'W$((B + 2))','WASHER','ON',now() from \"Branch\" where code='C0006'" >/dev/null
+SPEC=$(mktemp --suffix=.json); X5=$(mktemp --suffix=.xlsx)
+cat > "$SPEC" <<EOF
+[{"branch":"C0006","jobType":"CM","machine":"W$B","model":"OASIS","size":"13 Kg","symptom":"ทดสอบนำเข้า ชุด แถว2 ไม่ปั่น","contact":"คุณชุด","phone":"081-000-0002","image":true},
+ {"branch":"C0006","jobType":"ตู้ขายน้ำยา","machine":"","symptom":"ทดสอบนำเข้า ชุด แถว3 น้ำยาไม่ออก","contact":"คุณชุด","phone":"081-000-0003","image":true},
+ {"branch":"C0006","jobType":"CM","machine":"W$((B + 1))","model":"OASIS","size":"13 Kg","symptom":"ทดสอบนำเข้า ชุด แถว4 รู้ยี่ห้อแล้ว","contact":"คุณชุด","phone":"081-000-0004"},
+ {"branch":"C0006","jobType":"CM","machine":"W$((B + 2))","model":"OASIS","size":"25 Kg","symptom":"ทดสอบนำเข้า ชุด แถว5 ยังไม่รู้ยี่ห้อ","contact":"คุณชุด","phone":"081-000-0005"},
+ {"branch":"C0006","jobType":"ตู้ขายน้ำยา","machine":"ตู้น้ำยา 1","symptom":"ทดสอบนำเข้า ชุด แถว6 หยอดเหรียญไม่ขึ้น","contact":"คุณชุด","phone":"081-000-0006","image":true},
+ {"branch":"C0006","jobType":"CM","machine":"W$B","model":"OASIS","size":"13 Kg","symptom":"ทดสอบนำเข้า ชุด แถว7 เครื่องเดียวกับแถว2","contact":"คุณชุด","phone":"081-000-0007"},
+ {"branch":"C0006","jobType":"CM","machine":"W$((B + 3))","model":"OASIS","size":"13 Kg","symptom":"ทดสอบนำเข้า ชุด แถว8 น้ำไม่เข้า","contact":"คุณชุด","phone":"081-000-0008","image":true},
+ {"branch":"C0006","jobType":"CM","machine":"W$((B + 4))","model":"OASIS","size":"13 Kg","symptom":"ทดสอบนำเข้า ชุด พังแถวนี้","contact":"คุณชุด","phone":"081-000-0009"},
+ {"branch":"C0006","jobType":"CM","machine":"W$((B + 5))","model":"OASIS","size":"13 Kg","symptom":"ทดสอบนำเข้า ชุด แถว10 ประตูล็อค","contact":"คุณชุด","phone":"081-000-0010","image":true}]
+EOF
+SIZES=$(NODE_PATH=backend/node_modules node tests/fixtures-repair-form.js "$SPEC" "$X5")
+C() { curl -s -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file=@$X5" "$@"; }
+BATCH="symptom like 'ทดสอบนำเข้า ชุด%'"
+[ "$(C | J 'JSON.stringify([d.summary.new,d.summary.open,d.summary.photos,d.rows.map(r=>r.status).join(",")])')" = '[8,1,5,"NEW,NEW,NEW,NEW,NEW,OPEN,NEW,NEW,NEW"]' ] \
+  && pass "ไฟล์แบบของจริง (วันที่ว่าง · ผู้ติดต่อสาขา · รูปฝัง 5 แถว): ใบใหม่ 8 · แถว 7 เครื่องซ้ำกับแถว 2 ในไฟล์" || fail "พรีวิวไฟล์ชุด: $(C | J 'JSON.stringify(d.summary)||d.error')"
+
+# ชุดแรก: เฉพาะแถว 2–4 — ที่เหลือในไฟล์ยังไม่ถูกเปิด
+R1=$(C -F apply=true -F only=2,3,4)
+[ "$(echo "$R1" | J 'JSON.stringify([d.created.length,d.pending,d.stale,d.rows.map(r=>r.line),d.summary.photosAttached])')" = '[3,[],[],[2,3,4],2]' ] \
+  && [ "$(DB "select count(*) from \"WorkOrder\" where $BATCH")" = "3" ] \
+  && pass "ยืนยันชุดแรก only=2,3,4 → เปิด 3 ใบ (แนบรูป 2) · ฐานข้อมูลมี 3 ใบ ไม่เปิดแถวอื่นในไฟล์" || fail "only ชุดแรก: $(echo "$R1" | J 'JSON.stringify({c:d.created,p:d.pending,s:d.stale,sum:d.summary,e:d.error})') · ในฐาน $(DB "select count(*) from \"WorkOrder\" where $BATCH")"
+# ส่งชุดเดิมซ้ำ (คำตอบหายกลางทางแล้วแอปส่งใหม่) — ไม่เกิดใบซ้ำ บอกว่าแถวไหนเข้าไปแล้ว
+R1B=$(C -F apply=true -F only=2,3,4)
+[ "$(echo "$R1B" | J 'JSON.stringify([d.created,d.stale])')" = '[[],[2,3,4]]' ] && [ "$(DB "select count(*) from \"WorkOrder\" where $BATCH")" = "3" ] \
+  && pass "ส่งชุดเดิมซ้ำ → ไม่เปิดเพิ่ม (stale 2,3,4) · ฐานข้อมูลยังมี 3 ใบ" || fail "ส่งชุดซ้ำ: $(echo "$R1B" | J 'JSON.stringify({c:d.created,s:d.stale,e:d.error})')"
+# ชุดแรกเข้าแล้ว (แบบของจริงที่ก้อนแรก ๆ commit ไปก่อนพัง) → ดูตัวอย่างใหม่: 3 แถวขึ้น "นำเข้าไปแล้ว" ที่เหลือยังเป็นใบใหม่
+P2=$(C)
+echo "$P2" | J 'const by=Object.fromEntries(d.rows.map(r=>[r.line,r])); [2,3,4].every(l=>by[l].status==="IMPORTED"&&/^นำเข้าไปแล้ว \(WO-/.test(by[l].reason))&&d.summary.new===5&&by[7].status==="OPEN"?"ok":"bad"' | grep -q ok \
+  && pass "หลังชุดแรก ดูตัวอย่างใหม่: แถว 2–4 'นำเข้าไปแล้ว (WO-…)' · เหลือใบใหม่ 5 · แถว 7 ยังข้าม (เครื่องมีใบค้างแล้ว)" || fail "พรีวิวหลังชุดแรก: $(echo "$P2" | J 'JSON.stringify([d.summary,d.rows.map(r=>r.line+":"+r.status)])')"
+
+# แถวพังกลางทาง — trigger ชั่วคราวในฐานข้อมูลทดสอบให้แถว 9 สร้างไม่ได้ (_po_psql ปฏิเสธฐานข้อมูลบนคลาวด์) · ลบใน trap เสมอ
+drop_fail_trigger() { _po_psql 'drop trigger if exists test_import_fail on "WorkOrder"; drop function if exists test_import_fail()' >/dev/null 2>&1; }
+trap drop_fail_trigger EXIT
+_po_psql "create or replace function test_import_fail() returns trigger as \$\$ begin
+  if new.symptom = 'ทดสอบนำเข้า ชุด พังแถวนี้' then raise exception 'ทดสอบ: แถวนี้ต้องพัง'; end if; return new; end \$\$ language plpgsql;
+  create trigger test_import_fail before insert on \"WorkOrder\" for each row execute function test_import_fail()" >/dev/null
+# ไม่ส่ง only (แอปรุ่นก่อนที่เปิดค้างอยู่) — ทั้งไฟล์ที่เหลือ: แถว 5 6 8 เข้า แล้วพังที่แถว 9
+RF=$(curl -s -w '\n%{http_code}' -X POST localhost:4000/api/work-orders/import-form -H "$(H $A)" -F "file=@$X5" -F apply=true)
+RFB=$(echo "$RF" | head -n -1)
+echo "$RFB" | J 'd.code==="IMPORT_FAILED"&&d.line===9&&d.created.length===3&&d.photosAttached===2&&/ตอนเปิดแถว 9/.test(d.error)&&/รอบนี้เปิดไปแล้ว 3 ใบ/.test(d.error)&&!/แจ้งแอดมินให้ดู log/.test(d.error)?"ok":"bad"' | grep -q ok \
+  && [ "$(echo "$RF" | tail -1)" = "500" ] \
+  && [ "$(DB "select string_agg(code, ',' order by id) from \"WorkOrder\" where $BATCH and symptom similar to '%แถว(5|6|8) %'")" = "$(echo "$RFB" | J 'd.created.join(",")')" ] \
+  && pass "พังกลางทางที่แถว 9 → ตอบเป็นภาษาไทยว่าพังแถวไหน เปิดไปแล้ว 3 ใบ (รหัสตรงกับในฐานข้อมูล) ไม่ใช่ 'แจ้งแอดมินให้ดู log'" || fail "พังกลางทาง: $(echo "$RF" | tail -1) $(echo "$RFB" | J 'JSON.stringify({code:d.code,line:d.line,c:d.created,e:d.error})' 2>&1 | head -c 400)"
+[ "$(DB "select count(*) from \"WorkOrder\" where $BATCH")" = "6" ] && [ "$(DB "select count(*) from \"WorkOrder\" where symptom='ทดสอบนำเข้า ชุด พังแถวนี้'")" = "0" ] \
+  && [ "$(DB "select count(*) from \"Machine\" where code='W$((B + 4))'")" = "0" ] \
+  && pass "แถวที่พังไม่ทิ้งอะไรไว้ (ใบ · เครื่องใหม่ของแถวนั้นถูก rollback) · แถวก่อนหน้าอยู่ครบ 6 ใบ" || fail "หลังพัง: ใบ $(DB "select count(*) from \"WorkOrder\" where $BATCH") · เครื่อง W$((B + 4)) $(DB "select count(*) from \"Machine\" where code='W$((B + 4))'")"
+drop_fail_trigger
+# ยืนยันทั้งไฟล์ซ้ำหลังแก้ปัญหา — ที่เปิดแล้วขึ้น "นำเข้าไปแล้ว" เปิดเฉพาะที่เหลือ ไม่มีใบซ้ำ
+RR=$(C -F apply=true)
+[ "$(echo "$RR" | J 'JSON.stringify([d.summary.created,d.summary.imported,d.summary.open,d.pending])')" = '[2,6,1,[]]' ] \
+  && [ "$(DB "select count(*)||'|'||count(distinct \"importKey\") from \"WorkOrder\" where $BATCH")" = "8|8" ] \
+  && pass "ยืนยันทั้งไฟล์ซ้ำ → เปิดเฉพาะ 2 ใบที่เหลือ (6 แถวนำเข้าไปแล้ว) · ฐานข้อมูล 8 ใบ importKey ไม่ซ้ำ" || fail "ยืนยันซ้ำ: $(echo "$RR" | J 'JSON.stringify(d.summary||d.error)')"
+
+# หน้าตาใบที่เปิดทีละชุด = แบบเดิมทุกช่อง (ทั้งที่เปิดผ่าน only และทั้งไฟล์) — ประเภท · หัวข้อ · ขั้น · ที่มา · เครื่อง/รุ่น/ขนาด ·
+# ผู้ติดต่อ · รายละเอียด · รหัสจาก id · importKey · ประวัติเปิดใบ 1 แถว · รูปจากไฟล์ (ชื่อ ขนาด รูปย่อ) · ยี่ห้อที่รู้แล้วไม่ถูกทับ (D7)
+AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
+GOT=$(DB "select string_agg(concat_ws('|', substring(w.symptom from 'แถว[0-9]+|พังแถวนี้'), w.\"jobType\", w.title, w.status, w.source, w.priority, coalesce(m.code,'-'),
+  coalesce(m.brand,'-'), coalesce(m.model,'-'), coalesce(m.\"capacityKg\"::text,'-'), w.\"contactName\", w.\"contactPhone\", coalesce(w.detail,'(null)'),
+  (w.code = 'WO-'||lpad(w.id::text,greatest(5,length(w.id::text)),'0')), (w.\"importKey\" ~ '^[0-9a-f]{40}$'), (w.\"createdById\"=$AID), w.\"assignedTeam\" is null, w.\"scheduledAt\" is null,
+  (select count(*) from \"WorkOrderLog\" l where l.\"workOrderId\"=w.id and l.action='CREATED' and l.status='NEW' and l.\"userId\"=$AID),
+  coalesce((select string_agg(a.\"fileName\"||':'||a.\"sizeBytes\"||':'||(a.thumbnail is not null), ',') from \"WorkOrderAttachment\" a where a.\"workOrderId\"=w.id), ''),
+  (select count(*) from \"WorkOrderLog\" l where l.\"workOrderId\"=w.id and l.action='ATTACHED')), E'\n' order by w.id)
+  from \"WorkOrder\" w left join \"Machine\" m on m.id=w.\"machineId\" where w.$BATCH")
+SZ() { echo "$SIZES" | J "d[$1]"; }
+WANT="แถว2|CM|งาน CM|NEW|FORM|NORMAL|W$B|-|Oasis|13|คุณชุด|081-000-0002||t|t|t|t|t|1|ฟอร์มแจ้งซ่อม-แถว2.jpg:$(SZ 2):true|1
+แถว3|DETERGENT|ตู้ขายน้ำยา|NEW|FORM|NORMAL|-|-|-|-|คุณชุด|081-000-0003||t|t|t|t|t|1|ฟอร์มแจ้งซ่อม-แถว3.jpg:$(SZ 3):true|1
+แถว4|CM|งาน CM|NEW|FORM|NORMAL|W$((B + 1))|Huebsch|-|13|คุณชุด|081-000-0004||t|t|t|t|t|1||0
+แถว5|CM|งาน CM|NEW|FORM|NORMAL|W$((B + 2))|-|Oasis|25|คุณชุด|081-000-0005||t|t|t|t|t|1||0
+แถว6|DETERGENT|ตู้ขายน้ำยา|NEW|FORM|NORMAL|-|-|-|-|คุณชุด|081-000-0006|อุปกรณ์ตามที่แจ้ง: ตู้น้ำยา 1|t|t|t|t|t|1|ฟอร์มแจ้งซ่อม-แถว6.jpg:$(SZ 6):true|1
+แถว8|CM|งาน CM|NEW|FORM|NORMAL|W$((B + 3))|-|Oasis|13|คุณชุด|081-000-0008||t|t|t|t|t|1|ฟอร์มแจ้งซ่อม-แถว8.jpg:$(SZ 8):true|1
+พังแถวนี้|CM|งาน CM|NEW|FORM|NORMAL|W$((B + 4))|-|Oasis|13|คุณชุด|081-000-0009||t|t|t|t|t|1||0
+แถว10|CM|งาน CM|NEW|FORM|NORMAL|W$((B + 5))|-|Oasis|13|คุณชุด|081-000-0010||t|t|t|t|t|1|ฟอร์มแจ้งซ่อม-แถว10.jpg:$(SZ 10):true|1"
+[ "$GOT" = "$WANT" ] && pass "ใบที่เปิดทีละชุดหน้าตาเหมือนเดิมทุกช่อง (8 ใบ: เครื่อง/รุ่น/ขนาด · ตู้ขายน้ำยาไม่ผูกเครื่อง · ยี่ห้อที่รู้แล้วไม่ถูกทับ · ประวัติ · รูป)" \
+  || fail "ช่องของใบที่นำเข้า (คาด → ได้): $(diff <(echo "$WANT") <(echo "$GOT") | grep "^[<>]" | sort -k1.3 -s | head -4 | tr '\n' ' ')"
+rm -f "$SPEC" "$X5"
+
 # เก็บกวาด
 purge_orders "$A" $(DB "select id from \"WorkOrder\" where symptom like 'ทดสอบนำเข้า%'")
-DB "delete from \"Machine\" where code in ('W$N','W$M2') and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
+DB "delete from \"Machine\" where code in ('W$N','W$M2','W$B','W$((B + 1))','W$((B + 2))','W$((B + 3))','W$((B + 4))','W$((B + 5))') and \"branchId\"=(select id from \"Branch\" where code='C0006')" >/dev/null
 rm -f "$X"
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"
