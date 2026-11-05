@@ -31,7 +31,9 @@ const POLL_MS = 5 * 60_000;
  * แถบอัปเดตเลยเด้งกลับมาทุกครั้งที่กด (เจ้าของงานเจอ ต.ค. 69) · ที่อยู่ใหม่แคชไม่มี จึงไปเอาจากเซิร์ฟเวอร์จริง
  */
 function freshReload(commit: string) {
-  window.location.replace(`${window.location.pathname}?v=${encodeURIComponent(commit)}`);
+  // ส่วนหลัง # คือหน้าที่เปิดอยู่ (navigation/linking.ts) — ต้องติดไปด้วย ไม่งั้นกดอัปเดตแล้วเด้งกลับหน้าแรก
+  // ?v= ต้องอยู่หน้า # — หลัง # ไม่ถูกส่งถึงเซิร์ฟเวอร์ แคชจะได้ที่อยู่เดิมแล้วตอบหน้าเก่า
+  window.location.replace(`${window.location.pathname}?v=${encodeURIComponent(commit)}${window.location.hash}`);
 }
 
 /** กดอัปเดตตอนมีฟอร์มเปิดค้าง — ถามก่อน ที่กรอกไว้จะหาย */
@@ -91,7 +93,10 @@ export default function UpdateGate() {
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
     // ล้าง ?v= ที่ใส่ไว้หลบแคชตอนโหลดรอบก่อน — ที่อยู่ในแถบเบราว์เซอร์กลับเป็นปกติ
-    if (/[?&]v=/.test(window.location.search)) window.history.replaceState(null, "", window.location.pathname);
+    // เก็บ # (หน้าที่เปิดอยู่) และ history.state ไว้ — state คือป้ายที่ React Navigation ใช้จับคู่ปุ่มย้อนกลับกับหน้า
+    // ล้างเป็น null แล้วกดย้อนกลับมาที่รายการนี้ แอปจะคิดว่าเป็นลิงก์ที่พิมพ์เองแล้วโหลดหน้าใหม่ (linking.ts)
+    if (/[?&]v=/.test(window.location.search))
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
     let stopped = false;
     let told: string | null = null;
     const check = async () => {

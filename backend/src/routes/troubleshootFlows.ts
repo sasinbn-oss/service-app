@@ -65,7 +65,8 @@ router.get("/:id", requireAuth, async (req, res) => {
       images: { select: { id: true, order: true }, orderBy: { order: "asc" } },
     },
   });
-  if (!flow) return res.status(404).json({ error: "Flow not found" });
+  // ลิงก์หน้าเว็บ /#/diagnose/:id ที่ส่งต่อกัน (ผังถูกลบไปแล้ว · พิมพ์เลขผิด) มาจบที่นี่ — ข้อความขึ้นบนจอผู้ใช้ตรง ๆ ต้องเป็นภาษาไทย
+  if (!flow) return res.status(404).json({ error: "ไม่พบผังวินิจฉัยนี้ — อาจถูกลบไปแล้ว" });
 
   res.json({
     ...flow,

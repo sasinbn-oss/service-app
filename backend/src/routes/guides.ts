@@ -44,7 +44,8 @@ router.get("/categories", requireAuth, async (_req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const guide = await prisma.troubleshootingGuide.findUnique({ where: { id } });
-  if (!guide) return res.status(404).json({ error: "Guide not found" });
+  // ลิงก์หน้าเว็บ /#/guides/:id ที่ส่งต่อกัน (คู่มือถูกลบไปแล้ว · พิมพ์เลขผิด) มาจบที่นี่ — ข้อความขึ้นบนจอผู้ใช้ตรง ๆ ต้องเป็นภาษาไทย
+  if (!guide) return res.status(404).json({ error: "ไม่พบคู่มือนี้ — อาจถูกลบไปแล้ว" });
   res.json(guide);
 });
 

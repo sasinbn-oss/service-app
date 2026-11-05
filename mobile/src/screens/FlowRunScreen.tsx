@@ -35,13 +35,15 @@ export default function FlowRunScreen({ route, navigation }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      navigation.setOptions({ title });
+      // เปิดจากลิงก์ (/#/diagnose/12) ไม่มีชื่อติดมา — รอชื่อจากผังที่โหลด ไม่งั้นหัวหน้าขึ้นชื่อภายใน "FlowRun"
+      navigation.setOptions({ title: title ?? "วินิจฉัย" });
       let active = true;
       setLoading(true);
       api
         .get<TroubleshootFlow>(`/troubleshoot-flows/${id}`)
         .then((res) => {
           if (!active) return;
+          if (!title) navigation.setOptions({ title: res.data.title });
           setFlow(res.data);
           setCurrentKey(res.data.rootKey ?? null);
           setHistory([]);

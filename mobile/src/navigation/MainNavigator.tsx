@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Animated, Image, Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import TouchableOpacity from "../components/Tap";
 import { createNativeStackNavigator, NativeStackHeaderProps } from "@react-navigation/native-stack";
@@ -18,7 +18,7 @@ import MyJobsScreen from "../screens/MyJobsScreen";
 import AppUsageScreen from "../screens/AppUsageScreen";
 import UsageButton from "../components/UsageButton";
 import { UpdateButton } from "../components/UpdateGate";
-import ReportsMenuScreen from "../screens/ReportsMenuScreen";
+import ReportsMenuScreen, { reportTitle } from "../screens/ReportsMenuScreen";
 import OpenerReportScreen from "../screens/OpenerReportScreen";
 import SystemReportScreen from "../screens/SystemReportScreen";
 import ConfirmedReportScreen from "../screens/ConfirmedReportScreen";
@@ -74,6 +74,7 @@ import HowToButton from "../components/HowToButton";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
+import { homeScreenFor, openLinkAfterLogin } from "./linking";
 import {
   AdminStackParamList,
   HistoryStackParamList,
@@ -386,7 +387,7 @@ function HomeStackNavigator() {
   // เดิมแอดมิน/หัวหน้าภาคเริ่มที่แผนงาน ช่างเริ่มที่งานของฉัน — เปลี่ยนให้ทุกคนเห็นงานที่ออกไปจริงวันนี้ก่อน
   // ขอบเขตตามสิทธิ์ (scopeFor): ช่าง = ทีมตัวเอง · หัวหน้าภาค = ทุกภาค/ทีมที่ดูแล · แอดมิน = ทั้งหมด
   return (
-    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={homeLayout} initialRouteName={isAreaTeam(user) ? "PlanBoard" : "MyJobs"}>
+    <HomeStack.Navigator screenOptions={commonScreenOptions} screenLayout={homeLayout} initialRouteName={homeScreenFor(user)}>
       <HomeStack.Screen name="PlanBoard" component={PlanBoardScreen} options={{ title: "แผนงาน" }} />
       <HomeStack.Screen name="MyJobs" component={MyJobsScreen} options={{ title: "งานของฉัน" }} />
       <HomeStack.Screen name="CoverageMap" component={CoverageMapScreen} options={{ title: "ผังผู้รับผิดชอบ" }} />
@@ -410,7 +411,8 @@ function HomeStackNavigator() {
       <HomeStack.Screen
         name="Report"
         component={ReportScreen}
-        options={({ route }) => ({ title: route.params.title })}
+        // เปิดจากลิงก์ (/#/reports/daily) ไม่มีชื่อติดมา — ใช้ชื่อเดียวกับการ์ดในหน้ารายงาน
+        options={({ route }) => ({ title: route.params.title ?? reportTitle(route.params.kind) })}
       />
       <HomeStack.Screen
         name="OpenerReport"
@@ -688,6 +690,8 @@ export default function MainNavigator() {
   // จอคอม: เมนูค้างไว้ด้านซ้ายและซ่อนแถบล่าง ตามต้นแบบ — เมนูข้างพาไปได้ทุกแท็บอยู่แล้ว
   // แถบล่างบนจอกว้างทำให้ต้องเลื่อนสายตาไปล่างสุดของจอเพื่อเปลี่ยนหน้า
   const { docked } = useDocked();
+  // เปิดลิงก์มาตอนยังไม่ได้เข้าระบบ — เข้าระบบ (และเปลี่ยนรหัสบังคับ) เสร็จแล้วไปหน้านั้น ไม่ใช่หน้าแรก (linking.ts)
+  useEffect(() => openLinkAfterLogin(), []);
 
   return (
     <View style={{ flex: 1 }}>
