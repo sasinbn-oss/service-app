@@ -274,8 +274,10 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
 
   // ── 6) ใบงาน — อ่านทีละชุด เขียนทีละแถว ──
   // ใบงานรู้จำนวนแถวตอนจบ ความกว้างจึงตั้งไว้ล่วงหน้าตามที่ข้อมูลจริงมักยาว
-  const woSheet = sheet(wb, "ใบงาน", `ใบงาน (${rangeLabel})`, sub, [18, 12, 22, 22, 10, 10, 30, 44, 26, 16, 16, 8, 10, 10, 26, 18, 22]);
-  const woHead = ["วันที่เปิด", "เลขใบงาน", "ผู้เปิด", "เรื่อง", "ประเภทงาน", "รหัสสาขา", "ชื่อสาขา", "อาการ", "สถานะ", "ภาค", "ทีมช่าง", "เครื่อง", "ความเร่งด่วน", "ที่มา", "ขั้นปัจจุบัน", "วันที่ปิด", "ผลปิดงาน"];
+  // อะไหล่สองคอลัมน์ท้ายสุด (เจ้าของงานขอ 5 พ.ย. 69 — "ไม่ได้ขึ้นว่าสาขาไหนใช้อะไหล่ตัวไหนไปบ้าง") · ต่อท้ายไม่แทรกกลาง
+  // ตัวอักษรคอลัมน์เดิม (A–Q) ไม่เลื่อน สูตร/ตัวกรองที่คนทำไว้กับไฟล์รอบก่อนยังชี้ช่องเดิม
+  const woSheet = sheet(wb, "ใบงาน", `ใบงาน (${rangeLabel})`, sub, [18, 12, 22, 22, 10, 10, 30, 44, 26, 16, 16, 8, 10, 10, 26, 18, 22, 40, 44]);
+  const woHead = ["วันที่เปิด", "เลขใบงาน", "ผู้เปิด", "เรื่อง", "ประเภทงาน", "รหัสสาขา", "ชื่อสาขา", "อาการ", "สถานะ", "ภาค", "ทีมช่าง", "เครื่อง", "ความเร่งด่วน", "ที่มา", "ขั้นปัจจุบัน", "วันที่ปิด", "ผลปิดงาน", "อะไหล่ที่ใช้ (ช่างบันทึกตอนปิดงาน)", "อะไหล่ที่ระบุ / เบิก"];
   header(woSheet, woHead);
   let cursor: number | undefined;
   let woCount = 0;
@@ -291,6 +293,13 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
         branch: { select: { code: true, name: true, region: true, zone: true } },
         machine: { select: { code: true } },
         createdBy: { select: { name: true } },
+        parts: {
+          orderBy: { id: "asc" },
+          select: {
+            kind: true, quantity: true, unit: true, inStock: true, requisitionNo: true,
+            sparePart: { select: { partCode: true, name: true, offCatalog: true } },
+          },
+        },
       },
     });
     for (const w of page) {
@@ -302,9 +311,11 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
         WORK_ORDER_PRIORITY_LABELS[w.priority] ?? w.priority, w.source === "OUTAGE" ? "จากกระดาน" : w.source === "FORM" ? "ฟอร์มแจ้งซ่อม" : "เปิดเอง",
         WORK_ORDER_STATUS_LABELS[w.status] ?? w.status, w.status === "DONE" ? thaiDateTime(w.closedAt) : "",
         w.status === "DONE" && w.closeResult ? WORK_ORDER_RESULT_LABELS[w.closeResult] ?? w.closeResult : "",
+        w.parts.filter((p) => p.kind === "USED").map((p) => partLine(p)).join("\n"),
+        w.parts.filter((p) => p.kind === "WAITING").map((p) => `${partLine(p)} · ${waitingState(p)}`).join("\n"),
       ]);
-      // อาการหลายบรรทัด (สาเหตุ/แก้ไข/หมายเหตุ) ตัดบรรทัดในช่อง
-      row.getCell(8).alignment = { wrapText: true, vertical: "top" };
+      // อาการหลายบรรทัด (สาเหตุ/แก้ไข/หมายเหตุ) และอะไหล่ทีละบรรทัด ตัดบรรทัดในช่อง
+      for (const c of [8, 18, 19]) row.getCell(c).alignment = { wrapText: true, vertical: "top" };
       row.commit();
     }
     woCount += page.length;
@@ -354,6 +365,31 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
   await wb.commit();
   await done;
   return Buffer.concat(chunks);
+}
+
+type PartRow = {
+  quantity: number;
+  unit: string | null;
+  inStock: boolean | null;
+  requisitionNo: string | null;
+  sparePart: { partCode: string; name: string; offCatalog: boolean };
+};
+/** "SPOT0070 ชื่อ ×2" · ของนอกสโตร์ไม่มี SKU (partCode เป็นรหัสภายใน) จึงขึ้นชื่อ + หน่วยที่หัวหน้าภาคใส่ แทนรหัส */
+function partLine(p: PartRow) {
+  const sp = p.sparePart;
+  return sp.offCatalog
+    ? `${sp.name} ×${p.quantity}${p.unit ? ` ${p.unit}` : ""} (นอกสโตร์)`
+    : `${sp.partCode} ${sp.name} ×${p.quantity}`;
+}
+/**
+ * สถานะของที่ระบุ — คำเดียวกับขั้นเช็คอะไหล่ของแอดมิน · "เบิกแล้ว" ใช้กฎเดียวกับ isIssued ของใบงาน (มีของ + มีเลขใบเบิก)
+ * แยกคอลัมน์จาก "ที่ใช้" เพราะสองอย่างไม่จำเป็นต้องตรงกัน (เบิก 2 ใช้ 1 · ไปถึงแล้วเสียคนละจุด) เหมือนรายงานอะไหล่ที่ไปแต่ละสาขา
+ */
+function waitingState(p: PartRow) {
+  if (p.sparePart.offCatalog) return "ของนอกสโตร์";
+  if (p.inStock === true) return p.requisitionNo ? `เบิกแล้ว (${p.requisitionNo})` : "มีของ ยังไม่เบิก";
+  if (p.inStock === false) return "ของหมด";
+  return "ยังไม่เช็คคลัง";
 }
 
 function thaiDay(ymd: string) {
