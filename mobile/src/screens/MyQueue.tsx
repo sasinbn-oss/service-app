@@ -1300,6 +1300,7 @@ function TopicRow({
         stageLabel={stageName(r.statusLabel)}
         isAdmin
         wide={wide}
+        fit={wide}
         onOpen={onOpen}
         onSend={() => onSend(r)}
         onReply={() => onReply(r)}
@@ -1309,10 +1310,12 @@ function TopicRow({
       />
     </View>
   );
+  // แถวตารางของหัวข้อ "ตอบหัวหน้าภาค" บอกคำถามในคอลัมน์ "หัวหน้าภาคถามว่า" แล้ว — ไม่วาดกล่องคำขอซ้ำใต้แถว (การ์ดบนมือถือยังมีกล่อง)
+  const showReview = !!r.adminReview && !(wide && kind === "review");
   const extra = (
     <>
       {r.orphan && r.orphanReason ? <Text style={styles.note}>{r.orphanReason}</Text> : null}
-      {r.adminReview ? <AdminReviewBox review={r.adminReview} viewer="admin" /> : null}
+      {showReview ? <AdminReviewBox review={r.adminReview!} viewer="admin" /> : null}
     </>
   );
   if (wide) {
@@ -1350,7 +1353,7 @@ function TopicRow({
           </View>
           {actions}
         </View>
-        {r.adminReview || (r.orphan && r.orphanReason) ? <View style={ad.rowExtra}>{extra}</View> : null}
+        {showReview || (r.orphan && r.orphanReason) ? <View style={ad.rowExtra}>{extra}</View> : null}
       </View>
     );
   }
@@ -1469,6 +1472,7 @@ function CardActions({
   stageLabel,
   isAdmin,
   wide,
+  fit = false,
   onOpen,
   onSend,
   onReply,
@@ -1481,6 +1485,11 @@ function CardActions({
   stageLabel: string;
   isAdmin: boolean;
   wide: boolean;
+  /**
+   * ช่องปุ่มกว้างคงที่ (แถวตารางของหน้าแอดมินแบบแยกหัวข้อ) — ปุ่มที่ไม่พอที่ลงบรรทัดใหม่ ไม่ใช่บีบปุ่มขั้นจนเหลือแต่ไอคอน
+   * หน้าเดิม (การ์ด) ไม่ส่ง — แถวปุ่มเหมือนเดิมทุกอย่าง
+   */
+  fit?: boolean;
   onOpen: Props["onOpen"];
   onSend: () => void;
   onReply: () => void;
@@ -1503,7 +1512,7 @@ function CardActions({
   const pendingReview = isAdmin && !!r.adminReview && !r.adminReview.answered;
   const reply = (full: boolean) => (
     <TouchableOpacity
-      style={[full ? styles.goFull : styles.goBtn, styles.replyBtn]}
+      style={[full ? styles.goFull : styles.goBtn, fit && !full && styles.goFit, styles.replyBtn]}
       onPress={onReply}
       accessibilityLabel={`ตรวจแล้ว ตอบกลับ ${r.code}`}
     >
@@ -1530,7 +1539,7 @@ function CardActions({
     ) : null;
     const grant = (full: boolean) =>
       canAct ? (
-        <TouchableOpacity style={full ? styles.goFull : styles.goBtn} onPress={onUrgent} accessibilityLabel={`แก้เป็นงานด่วน ${r.code}`}>
+        <TouchableOpacity style={[full ? styles.goFull : styles.goBtn, fit && !full && styles.goFit]} onPress={onUrgent} accessibilityLabel={`แก้เป็นงานด่วน ${r.code}`}>
           <Ionicons name="lock-open-outline" size={18} color="#fff" />
           <Text style={styles.goText} numberOfLines={1}>
             แก้เป็นงานด่วน
@@ -1539,7 +1548,7 @@ function CardActions({
       ) : null;
     if (wide) {
       return (
-        <View style={styles.actions}>
+        <View style={[styles.actions, fit && styles.actionsFit]}>
           {detail}
           {answer}
           {grant(false)}
@@ -1549,7 +1558,7 @@ function CardActions({
     }
     return (
       <View>
-        <View style={styles.actions}>
+        <View style={[styles.actions, fit && styles.actionsFit]}>
           {detail}
           {answer ? <View style={{ flex: 1 }}>{answer}</View> : null}
         </View>
@@ -1568,9 +1577,9 @@ function CardActions({
   // แอดมิน: คำขอที่รอตอบ — ปุ่มหลักคือตอบกลับ (ขั้นของใบทำจากหน้ารายละเอียด)
   if (kind === "review") {
     return (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
-        <TouchableOpacity style={[styles.goBtn, styles.replyBtn]} onPress={onReply} accessibilityLabel={`ตรวจแล้ว ตอบกลับ ${r.code}`}>
+        <TouchableOpacity style={[styles.goBtn, fit && styles.goFit, styles.replyBtn]} onPress={onReply} accessibilityLabel={`ตรวจแล้ว ตอบกลับ ${r.code}`}>
           <Ionicons name="checkmark-circle" size={18} color="#fff" />
           <Text style={styles.goText}>ตรวจแล้ว · ตอบกลับ</Text>
         </TouchableOpacity>
@@ -1579,7 +1588,7 @@ function CardActions({
   }
   if (kind === "answer") {
     return (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         {ack}
       </View>
@@ -1590,7 +1599,7 @@ function CardActions({
   const goLabel = r.status === "AWAITING_PAYMENT" ? PAY_GO_LABEL : stageLabel;
   const go = (
     <TouchableOpacity
-      style={!wide && !isAdmin ? styles.goFull : styles.goBtn}
+      style={!wide && !isAdmin ? styles.goFull : [styles.goBtn, fit && styles.goFit]}
       onPress={() => onOpen(r.id, r.status === "IN_PROGRESS" ? "close" : "stage")}
       accessibilityLabel={`ทำขั้น ${goLabel} ${r.code}`}
     >
@@ -1614,7 +1623,7 @@ function CardActions({
     // ใบเลยนัดที่มีคำขอตรวจสอบค้าง (อยู่หัวข้อ "เลยนัด" แทนหัวข้อคำขอ) — ตอบกลับได้จากการ์ดนี้
     const replyHere = kind === "past" && pendingReview;
     const row = (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         {r.overdue && r.scheduledAt && RESCHEDULE_STAGES.includes(r.status) && canMoveDates(user) ? (
           <TouchableOpacity style={[styles.sideBtn, styles.moveBtn]} onPress={() => onOpen(r.id, "reschedule")} accessibilityLabel={`เลื่อนวันนัด ${r.code}`}>
@@ -1664,7 +1673,7 @@ function CardActions({
   );
   if (wide) {
     return (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         {side}
         {go}
@@ -1673,7 +1682,7 @@ function CardActions({
   }
   return (
     <View>
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         <View style={{ flex: 1 }}>{side}</View>
       </View>
@@ -1910,6 +1919,9 @@ const styles = StyleSheet.create({
   pickFlashRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   pickFlashText: { flex: 1, fontSize: 13.5, lineHeight: 20, fontWeight: "600" },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
+  // ช่องปุ่มกว้างคงที่ (ตารางหน้าแอดมิน) — ปุ่มขั้นไม่ต่ำกว่านี้ ไม่พอที่ลงบรรทัดใหม่เต็มช่อง
+  actionsFit: { flexWrap: "wrap", marginTop: 0 },
+  goFit: { minWidth: 160 },
   detailBtn: {
     flexDirection: "row",
     alignItems: "center",

@@ -98,7 +98,7 @@ const APP = "http://localhost:8081";
       ? pass(`เปิดมาที่ภาพรวม: แถบ "ต้องทำก่อนวันนี้ ${asks + past} ใบ" = ขอนัดด่วน ${asks} + เลยนัด ${past} ของ API`) : fail(`แถบต้องทำก่อน: ${await page.locator("body").innerText().then((t) => t.slice(0, 300))}`);
     (await firstBar.innerText()).includes(`ร้านขอนัดด่วน ${asks} ใบ`) && (await firstBar.innerText()).includes(`เลยวันนัดแล้ว ${past} ใบ`)
       ? pass("แถบบอกขอนัดด่วน / เลยวันนัด แยกจำนวน") : fail(`แถบ: ${await firstBar.innerText()}`);
-    const nav = await pre("เมนูหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").slice(10)));
+    const nav = await pre("เมนูหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").replace(/^เมนูหัวข้อ /, "")));
     const navTopics = nav.slice(1).map((x) => x.replace(/ \d+$/, ""));
     const navN = Object.fromEntries(nav.map((x) => [x.replace(/ \d+$/, ""), Number(x.match(/ (\d+)$/)[1])]));
     JSON.stringify(navTopics.slice(0, 8)) === JSON.stringify(ORDER) && (navTopics.length === 8 || navTopics[8] === "อื่น ๆ")
@@ -135,7 +135,7 @@ const APP = "http://localhost:8081";
     const tmrN = Number(((await tmr.getAttribute("aria-label")) ?? "").match(/(\d+)$/)?.[1] ?? -1);
     await tmr.click();
     await page.waitForTimeout(700);
-    const tmrRows = await lbl(`รายการหัวข้อ ${WANT.INS}`).first().locator('[aria-label^="แถว "]').evaluateAll((ns) => ns.filter((n) => n.getClientRects().length).map((n) => n.getAttribute("aria-label").slice(4)));
+    const tmrRows = await lbl(`รายการหัวข้อ ${WANT.INS}`).first().locator('[aria-label^="แถว "]').evaluateAll((ns) => ns.filter((n) => n.getClientRects().length).map((n) => n.getAttribute("aria-label").replace(/^แถว /, "")));
     tmrN >= 1 && tmrRows.length === tmrN && tmrRows.includes(O.INS.code) && (await tmr.getAttribute("aria-selected")) === "true"
       ? pass(`ชิป "ตรวจพรุ่งนี้ ${tmrN}" กรองเหลือ ${tmrRows.length} แถว (มี ${O.INS.code}) · aria-selected`) : fail(`ชิปตรวจพรุ่งนี้: ${tmrN} · ${tmrRows.join(",")}`);
 
@@ -181,13 +181,13 @@ const APP = "http://localhost:8081";
     const box = lbl("ค้นหาในงานของฉัน").first();
     await box.fill(O.PAY.code);
     await page.waitForTimeout(900);
-    const groups = await pre("ผลค้นหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").slice(11)));
+    const groups = await pre("ผลค้นหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").replace(/^ผลค้นหัวข้อ /, "")));
     JSON.stringify(groups) === JSON.stringify([WANT.PAY]) && (await page.locator("body").innerText()).includes(`1 ใบ ที่ตรงกับ “${O.PAY.code}” จากทั้งหมด ${inbox.length} ใบ`)
       ? pass(`ค้นรหัส ${O.PAY.code}: เจอหัวข้อเดียว (${WANT.PAY}) · แถบ "แสดง 1 ใบ … จากทั้งหมด ${inbox.length} ใบ"`) : fail(`ค้นรหัส: ${groups.join(",")}`);
     for (const k of Object.keys(O)) {
       await box.fill(O[k].code);
       await page.waitForTimeout(500);
-      const g = await pre("ผลค้นหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").slice(11)));
+      const g = await pre("ผลค้นหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").replace(/^ผลค้นหัวข้อ /, "")));
       if (g.length !== 1 || g[0] !== WANT[k]) fail(`ค้น ${O[k].code}: อยู่หัวข้อ ${g.join(",")} ต้อง ${WANT[k]}`);
     }
     pass("ใบทดสอบทุกใบอยู่หัวข้อที่ถูก และอยู่หัวข้อเดียว (ค้นด้วยรหัสทีละใบ)");

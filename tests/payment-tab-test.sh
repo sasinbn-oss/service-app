@@ -103,7 +103,7 @@ S0=$(SUM $A "status=ACTIVE")
 echo "$S0" | node -e 'const [t,o,n,f,a]=require("fs").readFileSync(0,"utf8").trim().split("|").map(Number); process.exit(n+f===t&&o>=1&&n>=2&&f>=1&&a===3?0:1)' \
   && pass "ยังไม่เคยตาม + ตามแล้ว = ทั้งหมด · ใบทดสอบนับเข้าครบ (เกิน ≥1 · ยังไม่เคยตาม ≥2 · ตามแล้ว ≥1) · เส้น 3 วันจากเซิร์ฟเวอร์" || fail "สรุป $S0"
 OK=1
-for q in "status=INBOX" "status=AWAITING_PAYMENT" "status=DONE" "status=ALL&search=zzไม่มีทางเจอzz" "status=ACTIVE&assignedTo=me" "status=AWAITING_CONFIRM"; do
+for q in "status=INBOX" "status=AWAITING_PAYMENT" "status=DONE" "status=ALL&search=zzznomatch999" "status=ACTIVE&assignedTo=me" "status=AWAITING_CONFIRM"; do
   [ "$(SUM $A "$q")" = "$S0" ] || { OK=0; fail "payTab ตาม $q: $(SUM $A "$q") ≠ $S0"; }
 done
 [ $OK = 1 ] && pass "ตัวเลขแท็บเท่ากันทุกแท็บ/คำค้น/มอบหมายให้ฉัน — ป้ายบนแท็บขึ้นได้ตั้งแต่ยังเปิดแท็บอื่น"

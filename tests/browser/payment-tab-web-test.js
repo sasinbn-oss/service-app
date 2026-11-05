@@ -100,7 +100,7 @@ const APP = "http://localhost:8081";
     (await hash(page)) === "#/awaiting-payment" && (await page.title()).startsWith("รอลูกค้าจ่ายเงิน")
       ? pass("กดแท็บแล้วที่อยู่ #/awaiting-payment · ชื่อแท็บเบราว์เซอร์ \"รอลูกค้าจ่ายเงิน\"") : fail(`ที่อยู่ ${await hash(page)} · ชื่อ ${await page.title()}`);
     (await tab.getAttribute("aria-selected")) === "true" ? pass("แท็บติด (aria-selected)") : fail("แท็บไม่ติด");
-    const rowsText = async () => page.locator('[aria-label^="แถวรอจ่าย "]').locator("visible=true").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").slice(9)));
+    const rowsText = async () => page.locator('[aria-label^="แถวรอจ่าย "]').locator("visible=true").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").replace(/^แถวรอจ่าย /, "")));
     const codesShown = await rowsText();
     const ia = codesShown.indexOf(a.code), ib = codesShown.indexOf(b.code), ic = codesShown.indexOf(c.code);
     codesShown.length === dbTotal && ia >= 0 && ib > ia && ic > ib
@@ -122,7 +122,7 @@ const APP = "http://localhost:8081";
     const cl = await chipLabels();
     const wantLabels = Object.keys(CH).map((k) => `ชิปรอจ่าย ${CH[k]} ${W0[k]}`);
     JSON.stringify(cl.map((x) => x[0])) === JSON.stringify(wantLabels) && cl[0][1] === "true"
-      ? pass(`ชิป: ${wantLabels.map((l) => l.slice(9)).join(" · ")} (ตรง API) · "ทั้งหมด" ติดอยู่`) : fail(`ชิป ${JSON.stringify(cl)} ต้องเป็น ${JSON.stringify(wantLabels)}`);
+      ? pass(`ชิป: ${wantLabels.map((l) => l.replace(/^ชิปรอจ่าย /, "")).join(" · ")} (ตรง API) · "ทั้งหมด" ติดอยู่`) : fail(`ชิป ${JSON.stringify(cl)} ต้องเป็น ${JSON.stringify(wantLabels)}`);
     for (const k of ["over", "never", "followed", "all"]) {
       await lbl(`ชิปรอจ่าย ${CH[k]} ${W0[k]}`).first().click();
       await page.waitForTimeout(700);
