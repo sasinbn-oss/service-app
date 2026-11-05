@@ -72,7 +72,9 @@ echo "═══ ชื่อขั้น"
 OPT=$(curl -s localhost:4000/api/work-orders/options -H "$(H $A)")
 [ "$(echo "$OPT" | J 'const s=d.stages.find(x=>x.value==="ASSIGNED"); [s.label,s.action,s.doneLabel].join("|")')" = "หัวหน้าภาค · รับทราบ ปล่อยงาน|รับทราบ ปล่อยงาน|ปล่อยงานแล้ว" ] \
   && pass "ขั้นมีชื่อ ใคร · ทำอะไร / การกระทำ / ชื่อเมื่อผ่านแล้ว" || fail "ชื่อขั้น: $(echo "$OPT" | J 'JSON.stringify(d.stages.find(x=>x.value==="ASSIGNED"))')"
-[ "$(echo "$OPT" | J 'd.stages.every(s=>s.doneLabel && !s.doneLabel.startsWith("รอ") && !s.label.startsWith("รอ"))')" = "true" ] \
-  && pass "ไม่มีขั้นไหนขึ้นต้นด้วย \"รอ…\" แล้ว" || fail "ยังมีชื่อขั้นแบบรอ…"
+# ยกเว้นขั้นเดียว: รอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69 — ลูกบอลอยู่ที่ลูกค้า) · ชื่อเมื่อผ่านแล้วยังห้าม "รอ…" ทุกขั้น
+# (ปัญหาเดิมคือ ✓ คู่กับ "รอ…" บนขั้นที่ผ่านแล้ว)
+[ "$(echo "$OPT" | J 'd.stages.every(s=>s.doneLabel && !s.doneLabel.startsWith("รอ") && (!s.label.startsWith("รอ") || (s.value==="AWAITING_PAYMENT" && s.label==="รอลูกค้าจ่ายเงิน")))')" = "true" ] \
+  && pass "ไม่มีขั้นไหนขึ้นต้นด้วย \"รอ…\" ยกเว้นรอลูกค้าจ่ายเงิน (ชื่อเมื่อผ่านแล้วไม่มี \"รอ…\" ทุกขั้น)" || fail "ยังมีชื่อขั้นแบบรอ…"
 
 [ -z "$FAILED" ]
