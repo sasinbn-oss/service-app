@@ -4,8 +4,11 @@
  * แบบเดียวกับนำเข้ารถ: เลือกไฟล์ → เซิร์ฟเวอร์อ่านแล้วบอกทีละแถวว่าจะเปิดใบใหม่ ข้าม (นำเข้าแล้ว / เครื่องมีใบค้าง)
  * หรือนำเข้าไม่ได้เพราะอะไร → แอดมินยืนยัน → ส่งไฟล์เดิมอีกรอบพร้อม apply (เซิร์ฟเวอร์อ่านใหม่ ไม่เชื่อรายการจากหน้าจอ)
  * นำเข้าไฟล์เดิมซ้ำได้ แถวที่เข้าไปแล้วถูกข้ามให้เอง — ใช้ไฟล์ที่ส่งออกใหม่ทั้งก้อนทุกวันได้เลย
+ *
+ * ยืนยันส่งทีละชุด (APPLY_BATCH แถว) ไม่ใช่ทั้งไฟล์ในคำขอเดียว — ดู commit()
  */
 import React, { useState } from "react";
+import axios from "axios";
 import { StyleSheet, Text, View } from "react-native";
 import TouchableOpacity from "./Tap";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -13,6 +16,7 @@ import AppModal from "./AppModal";
 import Spinner from "./Spinner";
 import { fs } from "./FleetUI";
 import { api, apiErrorMessage } from "../api/client";
+import { feedback } from "./Feedback";
 import { showAlert } from "../utils/alert";
 import { PickedFile, droppedFile, pickFile } from "../utils/filePicker";
 import FileDropZone, { DropHint } from "./FileDropZone";
@@ -73,8 +77,19 @@ interface Result {
     photoFilled?: number;
   };
   created?: string[];
+  /** ยืนยันทีละชุด: แถวที่เวลาของคำขอหมดก่อนได้เริ่ม — ส่งใหม่ในชุดถัดไป */
+  pending?: number[];
+  /** ยืนยันทีละชุด: แถวที่ขอให้เปิดแต่ไม่ใช่ใบใหม่แล้ว (นำเข้าไปแล้วระหว่างนี้) — ไม่ได้เปิด */
+  stale?: number[];
   rows: Row[];
 }
+
+/**
+ * แถวต่อคำขอตอนยืนยัน — ฐานข้อมูลจริงอยู่คนละ region (ไปกลับรอบละ ~0.23 วิ) แถวหนึ่งรวมรูปใช้ ~1.5 วิ
+ * 10 แถว ≈ 15–20 วิต่อคำขอ ห่างจากเพดานของ Render (~100 วิ) มาก และตัวเลขความคืบหน้าขยับทุกไม่กี่วินาที
+ * (เจ้าของงานเจอ 5 พ.ย. 69: 196 ใบในคำขอเดียวพังทุกครั้ง ไม่มีใบไหนเข้า)
+ */
+const APPLY_BATCH = 10;
 
 const STATUS: Record<Status, { label: string; fg: string; bg: string }> = {
   NEW: { label: "เปิดใบใหม่", fg: colors.successInk, bg: colors.successSoft },
@@ -91,18 +106,51 @@ const ORDER: Record<Status, number> = { ERROR: 0, OPEN: 1, NEW: 2, SKIPPED: 2, I
 type Picks = { skip: number[]; force: number[] };
 const NO_PICKS: Picks = { skip: [], force: [] };
 
-async function send(file: PickedFile, apply: boolean, picks: Picks) {
+/** only = เลขแถวที่ให้ลงมือในคำขอนี้ (ยืนยันทีละชุด) — เซิร์ฟเวอร์ยังวางแผนจากทั้งไฟล์ กันซ้ำ/skip/force ใช้ทั้งไฟล์เหมือนเดิม */
+async function send(file: PickedFile, apply: boolean, picks: Picks, only?: number[]) {
   const form = new FormData();
   form.append("file", file.blob, file.name);
   if (apply) form.append("apply", "true");
   if (picks.skip.length) form.append("skip", picks.skip.join(","));
   if (picks.force.length) form.append("force", picks.force.join(","));
+  if (only) form.append("only", only.join(","));
   return (
     await api.post<Result>("/work-orders/import-form", form, {
       headers: { "Content-Type": "multipart/form-data" },
-      loadingText: apply ? "กำลังเปิดใบงาน..." : false,
+      // ยืนยันเปิดหน้าโหลดเองตลอดทุกชุด (commit) — ถ้าให้แต่ละคำขอเปิด/ปิดเอง หน้าโหลดกะพริบหายระหว่างชุด
+      loadingText: false,
     })
   ).data;
+}
+
+/** สิ่งที่เปิดไปแล้วในการกดยืนยันครั้งนี้ (รวมทุกชุด) */
+interface Applied {
+  created: string[];
+  photosAttached: number;
+  photosFailed: number;
+  photoFilled: number;
+  stale: number;
+}
+
+/**
+ * ข้อความตอนหยุดกลางทาง — บอกว่าเปิดไปแล้วกี่ใบ หยุดเพราะอะไร และทำอะไรต่อ
+ * (เดิมขึ้นแค่ "แจ้งแอดมินให้ดู log" แอดมินไม่รู้ว่ามีใบเข้าไปแล้วหรือยัง กดซ้ำจะได้ใบซ้ำไหม)
+ */
+function stopMessage(e: unknown, got: Applied, total: number): string {
+  const res = axios.isAxiosError(e) ? e.response : undefined;
+  const data = res?.data as { code?: string; reason?: string; line?: number | null; error?: unknown } | undefined;
+  const why =
+    data?.code === "IMPORT_FAILED" && data.reason
+      ? `${data.reason}${data.line ? ` ตอนเปิดแถว ${data.line}` : ""}`
+      : !res || (res.status >= 502 && typeof data?.error !== "string")
+        ? // คำขอหาย/พร็อกซีตัดก่อนเซิร์ฟเวอร์ตอบ — ชุดนั้นอาจเปิดไปบางใบแล้ว (กดซ้ำได้ ใบที่เปิดแล้วถูกข้าม)
+          "ชุดล่าสุดไม่ได้คำตอบจากเซิร์ฟเวอร์ (บางใบในชุดนั้นอาจเปิดไปแล้ว)"
+        : apiErrorMessage(e);
+  const n = got.created.length;
+  return (
+    `เปิดใบงานไปแล้ว ${n} จาก ${total} ใบ${n ? ` (${got.created[0]}–${got.created[n - 1]})` : ""} แล้วหยุด — ${why}\n` +
+    "กดยืนยันอีกครั้งเพื่อเปิดที่เหลือ — ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ"
+  );
 }
 
 const day = (iso: string | null) =>
@@ -200,28 +248,96 @@ export default function RepairImportModal({
     }
   }
 
+  /**
+   * ยืนยัน = ส่งไฟล์เดิมทีละชุด APPLY_BATCH แถว (only) แทนทั้งไฟล์ในคำขอเดียว — เจ้าของงานเจอ 5 พ.ย. 69:
+   * 196 ใบในคำขอเดียวชนเพดานเวลาของฐานข้อมูลทุกครั้ง ได้แค่ "แจ้งแอดมินให้ดู log" และไม่มีใบไหนเข้า
+   *
+   * แถวเติมรูปใบเดิมก่อน (ลำดับเดียวกับที่เซิร์ฟเวอร์เคยทำ) แล้วใบใหม่ตามลำดับแถว · หน้าโหลดบอกความคืบหน้า "กำลังเปิดใบงาน 40/196"
+   * ชุดที่เซิร์ฟเวอร์ทำไม่ทัน (pending) ส่งซ้ำต้นคิว · ชุดไหนพัง หยุดเลย บอกว่าเปิดไปแล้วกี่ใบ แล้วอ่านตัวอย่างใหม่
+   * ให้แถวที่เปิดแล้วขึ้น "นำเข้าแล้ว" — กดยืนยันอีกครั้งได้ทันที (importKey กันใบซ้ำอยู่ที่เซิร์ฟเวอร์)
+   */
   async function commit() {
-    if (!file) return;
+    if (!file || !preview) return;
+    const before = preview.summary;
+    const fillLines = preview.rows.filter((r) => r.photoFill).map((r) => r.line);
+    const newLines = preview.rows.filter((r) => r.status === "NEW").map((r) => r.line);
+    fillLines.sort((a, b) => a - b);
+    newLines.sort((a, b) => a - b);
+    const fillSet = new Set(fillLines);
+    const queue = [...fillLines, ...newLines];
+    const got: Applied = { created: [], photosAttached: 0, photosFailed: 0, photoFilled: 0, stale: 0 };
+    let doneFill = 0;
+    let doneNew = 0;
+    let stalls = 0;
     setBusy(true);
     setError(null);
     try {
-      const r = await send(file, true, picks);
+      while (queue.length) {
+        feedback.loading(
+          doneFill < fillLines.length ? `กำลังเติมรูปใบเดิม ${doneFill}/${fillLines.length}` : `กำลังเปิดใบงาน ${doneNew}/${newLines.length}`
+        );
+        const batch = queue.slice(0, APPLY_BATCH);
+        let r: Result;
+        try {
+          r = await send(file, true, picks, batch);
+        } catch (e) {
+          // ชุดที่พังอาจเปิดไปแล้วบางใบ — เซิร์ฟเวอร์บอกรหัสที่เปิดมาด้วย นับรวมก่อนสรุป
+          const data = axios.isAxiosError(e) ? (e.response?.data as { created?: unknown } | undefined) : undefined;
+          if (Array.isArray(data?.created)) got.created.push(...data!.created.map(String));
+          throw e;
+        }
+        got.created.push(...(r.created ?? []));
+        got.photosAttached += r.summary.photosAttached ?? 0;
+        got.photosFailed += r.summary.photosFailed ?? 0;
+        got.photoFilled += r.summary.photoFilled ?? 0;
+        got.stale += r.stale?.length ?? 0;
+        const pending = new Set(r.pending ?? []);
+        for (const line of batch) {
+          if (pending.has(line)) continue;
+          if (fillSet.has(line)) doneFill++;
+          else doneNew++;
+        }
+        // เซิร์ฟเวอร์ไม่ได้เริ่มสักแถวสองชุดติด = ช้าเกินจะไปต่อ — หยุดดีกว่าวนส่งไฟล์ซ้ำไม่รู้จบ
+        stalls = pending.size === batch.length ? stalls + 1 : 0;
+        if (stalls >= 2) throw new Error("stalled");
+        queue.splice(0, batch.length, ...batch.filter((line) => pending.has(line)));
+      }
+      feedback.loading(null);
       showAlert(
         "นำเข้าใบแจ้งซ่อมแล้ว",
-        `เปิดใบงานใหม่ ${r.summary.created ?? 0} ใบ — อยู่ขั้นแรก (หัวหน้าภาคระบุอะไหล่)` +
-          (r.summary.open ? ` · ข้ามเครื่องที่มีใบค้าง ${r.summary.open}` : "") +
-          (r.summary.error ? ` · นำเข้าไม่ได้ ${r.summary.error}` : "") +
-          (r.summary.skipped ? ` · เอาออก ${r.summary.skipped}` : "") +
-          (r.summary.photosAttached ? ` · แนบรูปจากไฟล์ ${r.summary.photosAttached} รูป` : "") +
-          (r.summary.photoFilled ? ` (เติมให้ใบเดิม ${r.summary.photoFilled} ใบ)` : "") +
+        `เปิดใบงานใหม่ ${got.created.length} ใบ — อยู่ขั้นแรก (หัวหน้าภาคระบุอะไหล่)` +
+          (before.open ? ` · ข้ามเครื่องที่มีใบค้าง ${before.open}` : "") +
+          (before.error ? ` · นำเข้าไม่ได้ ${before.error}` : "") +
+          (before.skipped ? ` · เอาออก ${before.skipped}` : "") +
+          // แถวที่ระหว่างนี้ถูกนำเข้าไปแล้ว (อีกหน้าจอ/คำขอก่อนหน้า) — ไม่ได้เปิดซ้ำ บอกให้ยอดตรงกับที่เห็นในตัวอย่าง
+          (got.stale ? ` · ข้าม ${got.stale} แถวที่ถูกนำเข้าไปแล้วระหว่างนี้` : "") +
+          (got.photosAttached ? ` · แนบรูปจากไฟล์ ${got.photosAttached} รูป` : "") +
+          (got.photoFilled ? ` (เติมให้ใบเดิม ${got.photoFilled} ใบ)` : "") +
           // อัปรูปไม่ผ่านต้องบอก — เดิมเงียบ คนนำเข้าเห็นว่าสำเร็จแต่ใบไม่มีรูป (26 ต.ค. 69)
-          (r.summary.photosFailed ? ` · แนบรูปไม่สำเร็จ ${r.summary.photosFailed} รูป — นำเข้าไฟล์เดิมอีกรอบเพื่อลองใหม่` : "")
+          (got.photosFailed ? ` · แนบรูปไม่สำเร็จ ${got.photosFailed} รูป — นำเข้าไฟล์เดิมอีกรอบเพื่อลองใหม่` : "")
       );
       onDone();
       close();
     } catch (e) {
-      setError(apiErrorMessage(e));
+      feedback.loading(null);
+      const msg =
+        e instanceof Error && e.message === "stalled"
+          ? `เปิดใบงานไปแล้ว ${got.created.length} จาก ${newLines.length} ใบ แล้วหยุด — เซิร์ฟเวอร์ช้าเกินกว่าจะเปิดต่อได้ตอนนี้\nลองกดยืนยันอีกครั้งภายหลัง — ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ`
+          : stopMessage(e, got, newLines.length);
+      setError(msg);
+      // กล่องที่ต้องกดตกลง (ไม่ใช่แถบที่หายเอง) — ข้อความยาวและต้องอ่านให้จบก่อนตัดสินใจกดซ้ำ
+      showAlert("หยุดนำเข้ากลางทาง", msg);
+      if (got.created.length) onDone();
+      // อ่านตัวอย่างใหม่: แถวที่เปิดแล้วขึ้น "นำเข้าแล้ว" ปุ่มยืนยันเหลือเฉพาะที่ยังไม่เปิด · อ่านไม่ได้ (เซิร์ฟเวอร์ยังล่ม) ก็ยังเห็นข้อความข้างบน
+      try {
+        setPreview(await send(file, false, picks));
+        setOnly(null);
+        setStuck([]);
+      } catch {
+        // ข้อความหยุดกลางทางยังอยู่บนจอ — พอให้รู้ว่าต้องลองใหม่
+      }
     } finally {
+      feedback.loading(null);
       setBusy(false);
     }
   }

@@ -858,6 +858,19 @@ async function rememberMachineSpec(
   machine: { id: number; brand: string | null; model: string | null; capacityKg: number | null },
   entry: { model?: string | null; capacityKg?: number | null }
 ) {
+  const data = machineSpecPatch(machine, entry);
+  if (Object.keys(data).length === 0) return;
+  await tx.machine.update({ where: { id: machine.id }, data });
+}
+
+/**
+ * ช่องที่ rememberMachineSpec จะเขียน (กติกาเดียวกันทุกข้อ) — แยกออกมาให้นำเข้าไฟล์ฟอร์มใส่รุ่น/ขนาดลงไปตอนสร้างเครื่องใหม่เลย
+ * ได้ค่าเหมือนสร้างแล้วค่อยเขียนทับ แต่ประหยัดการไปกลับฐานข้อมูลหนึ่งรอบต่อแถว (ฐานข้อมูลอยู่คนละ region — รอบละ ~0.23 วิ)
+ */
+function machineSpecPatch(
+  machine: { brand: string | null; model: string | null; capacityKg: number | null },
+  entry: { model?: string | null; capacityKg?: number | null }
+): { model?: string; capacityKg?: number } {
   const data: { model?: string; capacityKg?: number } = {};
   const model = entry.model?.trim() || null;
   if (model && !machineMake(machine)) data.model = model;
@@ -867,8 +880,7 @@ async function rememberMachineSpec(
   ) {
     data.capacityKg = entry.capacityKg;
   }
-  if (Object.keys(data).length === 0) return;
-  await tx.machine.update({ where: { id: machine.id }, data });
+  return data;
 }
 
 type WorkOrderRow = Awaited<
@@ -4052,12 +4064,18 @@ async function createWorkOrder(
     contactName?: string | null;
     contactPhone?: string | null;
     workStatus: string | null;
+    /**
+     * ลายนิ้วมือแถวของไฟล์ฟอร์มแจ้งซ่อม — เขียนพร้อมแถวใบงานเลย ไม่ต้องอัปเดตตามอีกรอบ
+     * และถ้าแถวนี้เพิ่งถูกนำเข้าจากอีกคำขอ (unique) ชนตั้งแต่ตอนสร้าง ไม่ได้ใบซ้ำ
+     */
+    importKey?: string | null;
   },
   waitingParts: { sparePartId: number; quantity: number }[],
   userId: number
 ) {
   const created = await tx.workOrder.create({
     data: { ...data, code: "", createdById: userId, status: "NEW" },
+    select: { id: true },
   });
   await tx.workOrder.update({
     where: { id: created.id },
@@ -4317,6 +4335,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
  * นำเข้าใบแจ้งซ่อมจากไฟล์ฟอร์ม COCO (Microsoft Forms → .xlsx) — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69)
  *
  * แบบเดียวกับนำเข้ารถ/รายชื่อ: ส่งไฟล์ครั้งแรกได้ตัวอย่าง (ไม่บันทึก) · ส่งไฟล์เดิมพร้อม apply=true ถึงบันทึก
+ * (แอปส่ง apply ทีละชุดพร้อม only = เลขแถว — เหตุผลอยู่ที่ส่วนยืนยันใน importRepairForm)
  * เซิร์ฟเวอร์อ่านไฟล์ใหม่ทุกครั้ง ไม่เชื่อรายการที่หน้าจอส่งกลับมา
  *
  * แต่ละแถวได้สถานะ:
@@ -4338,7 +4357,7 @@ async function attachFormPhoto(workOrderId: number, code: string, status: string
   try {
     // key ในถังเป็นภาษาอังกฤษ (Supabase ไม่รับอักษรไทย) — ชื่อไทยเก็บใน fileName ให้คนเห็น
     const objectKey = buildObjectKey(code || `WO-${workOrderId}`, `form-row${line}.${img.ext}`);
-    await uploadObject({ key: objectKey, body: img.data, contentType: img.mime });
+    await uploadObject({ key: objectKey, body: img.data, contentType: img.mime, timeoutMs: 15_000 });
     await prisma.$transaction(async (tx) => {
       await tx.workOrderAttachment.create({
         data: {
@@ -4362,7 +4381,72 @@ async function attachFormPhoto(workOrderId: number, code: string, status: string
   }
 }
 
+/**
+ * ความคืบหน้าของการยืนยันในคำขอนี้ — ตัวจับ error ท้ายเส้นทางต้องบอกได้ว่าเปิดไปแล้วกี่ใบ และพังที่แถวไหน
+ * (ไม่งั้นแอดมินเห็นแค่ "แจ้งแอดมินให้ดู log" แบบที่เจ้าของงานเจอ 5 พ.ย. 69 แล้วไม่รู้ว่ามีใบเข้าไปแล้วหรือยัง)
+ */
+interface FormImportRun {
+  created: string[];
+  photosAttached: number;
+  photosFailed: number;
+  /** แถวที่กำลังทำตอนพัง — null = พังก่อน/หลังวนแถว (อ่านไฟล์ · วางแผน) */
+  line: number | null;
+}
+
+/**
+ * error จากฐานข้อมูลเป็นภาษาคน — ข้อความจริงไม่ส่งออกไป (บอกชื่อตาราง/คอลัมน์) เขียนลง log แทน
+ * แยกให้พอรู้ว่าต้องทำอะไรต่อ: ช้า/ต่อไม่ติด = ลองใหม่ได้เลย · อย่างอื่น = ส่ง log ให้คนดูแลระบบ
+ */
+function importFailureReason(e: unknown): string {
+  const code = (e as { code?: unknown })?.code;
+  if (code === "P2028") return "ฐานข้อมูลตอบช้าจนหมดเวลา";
+  if (code === "P2024") return "การเชื่อมต่อฐานข้อมูลเต็ม (มีงานอื่นใช้อยู่มาก)";
+  if (code === "P1001" || code === "P1002" || code === "P1008" || code === "P1017" || e instanceof Prisma.PrismaClientInitializationError)
+    return "ต่อฐานข้อมูลไม่ได้ชั่วคราว";
+  if (code === "P2002") return "ข้อมูลชนกับรายการที่เพิ่งบันทึกจากอีกหน้าจอ";
+  if (e instanceof Prisma.PrismaClientKnownRequestError) return `ฐานข้อมูลไม่รับข้อมูล (รหัส ${e.code})`;
+  return "เซิร์ฟเวอร์ทำรายการไม่สำเร็จ";
+}
+
 router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file"), async (req: AuthRequest, res) => {
+  const run: FormImportRun = { created: [], photosAttached: 0, photosFailed: 0, line: null };
+  try {
+    await importRepairForm(req, res, run);
+  } catch (e) {
+    // ดูตัวอย่างพัง = ไม่มีอะไรถูกบันทึก ให้ตัวจับ error กลางตอบตามเดิม
+    if (req.body?.apply !== "true" || res.headersSent) throw e;
+    console.error(
+      `[import-form] ยืนยันไม่สำเร็จ${run.line ? ` ที่แถว ${run.line}` : ""} — รอบนี้เปิดไปแล้ว ${run.created.length} ใบ${
+        run.created.length ? ` (${run.created[0]}–${run.created[run.created.length - 1]})` : ""
+      }`,
+      e
+    );
+    const reason = importFailureReason(e);
+    const n = run.created.length;
+    res.status(500).json({
+      error:
+        `เปิดใบงานไม่ครบ — ${reason}${run.line ? ` ตอนเปิดแถว ${run.line}` : ""} · ` +
+        (n ? `รอบนี้เปิดไปแล้ว ${n} ใบ (${run.created[0]}–${run.created[n - 1]})` : "รอบนี้ยังไม่ได้เปิดใบไหน") +
+        " · นำเข้าไฟล์เดิมอีกครั้งเพื่อเปิดที่เหลือ ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ",
+      code: "IMPORT_FAILED",
+      reason,
+      line: run.line,
+      created: run.created,
+      photosAttached: run.photosAttached,
+      photosFailed: run.photosFailed,
+    });
+  }
+});
+
+/**
+ * ยืนยันได้ไม่เกินเท่านี้ต่อคำขอ แล้วตอบกลับว่าเหลือแถวไหน (pending) — เกินจากนี้ไม่เริ่มแถวใหม่
+ * Render ตัดคำขอที่เกิน ~100 วิ (แอปได้ "เชื่อมต่อไม่ได้" ทั้งที่เซิร์ฟเวอร์ยังเปิดใบต่อ) · แอปส่งทีละชุดเล็กอยู่แล้ว
+ * ตัวนี้กันชุดที่ช้ากว่าที่คิด (ฐานข้อมูลช้าวันนั้น · แอปรุ่นก่อนที่ส่งทั้งไฟล์มาในคำขอเดียว)
+ */
+const FORM_IMPORT_BUDGET_MS = 40_000;
+
+async function importRepairForm(req: AuthRequest, res: Response, run: FormImportRun) {
+  const startedAt = Date.now();
   if (!req.file) return res.status(400).json({ error: "ต้องแนบไฟล์ฟอร์มแจ้งซ่อม (.xlsx)" });
   let rows: Awaited<ReturnType<typeof parseRepairForm>>;
   try {
@@ -4553,49 +4637,100 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
   if (req.body?.apply !== "true") return res.json({ applied: false, summary, rows: plan });
 
   /**
-   * เปิดทีละ 20 แถวต่อ transaction — ทั้งไฟล์ (เป็นร้อยใบ) ในก้อนเดียวชนเพดานเวลาของ Prisma บนฐานข้อมูลคนละ region
-   * ถ้าพังกลางทาง ก้อนที่บันทึกไปแล้วมี importKey อยู่ กดนำเข้าไฟล์เดิมอีกรอบได้ ไม่เกิดใบซ้ำ
+   * ยืนยันทีละชุด — แอปส่งเลขแถวที่จะให้เปิดในคำขอนี้มาทาง only (คั่นด้วย , แบบ skip/force) ทีละราว 10 แถว
+   * เจ้าของงานเจอ 5 พ.ย. 69: ไฟล์ 196 ใบเปิดในคำขอเดียว ก้อนละ 20 แถวต่อ transaction — ฐานข้อมูลอยู่คนละ region
+   * (ไปกลับรอบละ ~0.23 วิ แถวละ 6–7 รอบ) ก้อนแรกยังไม่ทันจบก็ชนเพดาน 30 วิ (P2028) ล้มทั้งก้อนทุกครั้งที่กด
+   * และต่อให้ transaction ผ่าน คำขอเดียวทั้งไฟล์ (รวมอัปรูป) ก็เกินเวลาที่ Render รอ (~100 วิ) อยู่ดี
+   *
+   * วางแผนทั้งไฟล์เหมือนเดิมทุกครั้ง (กันซ้ำ/ใบค้าง/skip/force ใช้ทั้งไฟล์) แล้วลงมือเฉพาะแถวใน only ที่ยังเป็นใบใหม่
+   * หรือเป็นแถวเติมรูป · แถวที่ขอมาแต่ไม่ใช่ใบใหม่แล้ว (ชุดก่อนเปิดไปแล้ว — เช่นคำตอบหายกลางทางแล้วแอปส่งซ้ำ) ข้าม
+   * บอกกลับใน stale · ไม่ส่ง only = ทั้งไฟล์ (แอปที่เปิดค้างก่อนอัปเดต) ซึ่งยังทำงานได้กับไฟล์เล็ก และไม่เกินเพดานเวลา
    */
-  const todo = plan.filter((p) => p.status === "NEW");
-  const createdCodes: string[] = [];
+  // ส่งช่องเดียวกันหลายครั้ง multer ให้มาเป็น array — ยังอ่านเป็นรายการแถว ไม่หลุดไปเป็น "ทั้งไฟล์"
+  const only = req.body?.only != null ? lines(req.body.only) : null;
+  const asked = (line: number) => !only || only.has(line);
+  const todo = plan.filter((p) => p.status === "NEW" && asked(p.line));
+  const fills = plan.filter((p) => "photoFill" in p && p.photoFill && asked(p.line));
+  const stale = only ? [...only].filter((l) => !todo.some((p) => p.line === l) && !fills.some((p) => p.line === l)) : [];
   const imageOf = new Map(rows.filter((r) => r.photoImage).map((r) => [r.line, r.photoImage!]));
-  let photosAttached = 0;
-  // รูปที่อัปไม่สำเร็จต้องบอก — เดิมข้ามเงียบ ๆ คนนำเข้าเห็นว่าสำเร็จแต่ใบไม่มีรูป ไม่รู้ว่าพังตรงไหน
-  let photosFailed = 0;
+  // รูปที่อัปไม่สำเร็จต้องบอก — เดิมข้ามเงียบ ๆ คนนำเข้าเห็นว่าสำเร็จแต่ใบไม่มีรูป ไม่รู้ว่าพังตรงไหน (นับใน run)
   const filled: string[] = [];
+  // แถวที่ไม่ได้เริ่มเพราะเวลาของคำขอนี้หมด — แอปส่งมาใหม่ในชุดถัดไป
+  const pending: number[] = [];
+  const outOfTime = () => Date.now() - startedAt > FORM_IMPORT_BUDGET_MS;
   // ใบเดิมที่ยังไม่มีรูปจากฟอร์ม — แถวเดียวกันในไฟล์อาจซ้ำหลายแถว (ส่งฟอร์มซ้ำ) เติมครั้งเดียว
-  for (const p of plan) {
-    if (!("photoFill" in p) || !p.photoFill) continue;
+  for (const p of fills) {
+    if (outOfTime()) {
+      pending.push(p.line);
+      continue;
+    }
     const wo = fillBy.get(p.line);
     const img = imageOf.get(p.line);
     if (!wo || !img || filled.includes(wo.code)) continue;
+    run.line = p.line;
     if (await attachFormPhoto(wo.id, wo.code, wo.status, img, p.line, req.auth!.userId)) {
       filled.push(wo.code);
-      photosAttached++;
-    } else photosFailed++;
+      run.photosAttached++;
+    } else run.photosFailed++;
   }
-  for (let i = 0; i < todo.length; i += 20) {
-    const chunk = todo.slice(i, i + 20);
-    const ids = await prisma.$transaction(
-      async (tx) => {
-        const out: number[] = [];
-        for (const r of chunk) {
-          const branch = branchBy.get(r.branchCode)!;
-          let machine: { id: number; brand: string | null; model: string | null; capacityKg: number | null } | null = null;
-          if (r.machineCode && !NO_MACHINE_JOB_TYPES.has(r.jobType)) {
+
+  /**
+   * เครื่องของทั้งชุดถามทีเดียว (เดิม findFirst ทีละแถวใน transaction) · เครื่องที่ยังไม่มีสร้างพร้อมรุ่น/ขนาดในคำสั่งเดียว
+   * จำไว้หลังแต่ละแถว commit แล้วเท่านั้น — แถวที่ล้มต้องไม่ทิ้งเครื่องที่ถูก rollback ไว้ให้แถวถัดไปอ้าง
+   */
+  type ImportMachine = { id: number; brand: string | null; model: string | null; capacityKg: number | null };
+  const machineOf = (r: (typeof todo)[number]) =>
+    r.machineCode && !NO_MACHINE_JOB_TYPES.has(r.jobType) ? `${branchBy.get(r.branchCode)!.id}|${r.machineCode}` : null;
+  const wantMachines = todo.filter((r) => machineOf(r));
+  const machines = new Map<string, ImportMachine>(
+    (wantMachines.length
+      ? await prisma.machine.findMany({
+          where: { OR: wantMachines.map((r) => ({ branchId: branchBy.get(r.branchCode)!.id, code: r.machineCode! })) },
+          select: { id: true, branchId: true, code: true, brand: true, model: true, capacityKg: true },
+        })
+      : []
+    ).map((m) => [`${m.branchId}|${m.code}`, m])
+  );
+
+  /**
+   * transaction ละแถว (เดิมละ 20 แถว) — แถวเดียวช้าไม่ลากอีก 19 แถวล้มไปด้วย และพังแล้วรู้ว่าแถวไหน
+   * แถวละ ~5 รอบไปกลับ: เริ่ม · สร้างใบ (importKey ไปพร้อมกัน) · ตั้งรหัสใบ · ประวัติ · commit (+ สร้าง/จำรุ่นเครื่องถ้าต้อง)
+   *
+   * อัปรูปอยู่นอก transaction เหมือนเดิม (ช้าและเป็นระบบอื่น) แต่ไม่รอให้รูปของแถวนี้เสร็จก่อนเริ่มแถวถัดไป —
+   * รูปหนึ่งรูป (อัป + บันทึกแถวไฟล์) ใช้เวลาพอ ๆ กับเปิดใบหนึ่งใบ ทำทีละอย่างคือเวลารวมเกือบสองเท่า
+   * รูปยังเรียงกันทีละรูป (ใช้ connection เพิ่มแค่เส้นเดียว จาก 5 — ผู้ใช้คนอื่นยังมีเส้นเหลือ) และรอครบก่อนตอบเสมอ
+   * attachFormPhoto ไม่โยน error (นับเป็นแนบไม่สำเร็จ) สายรูปจึงไม่ขาดกลางทาง
+   */
+  let photoQueue: Promise<void> = Promise.resolve();
+  const queuePhoto = (id: number, code: string, img: FormImage, line: number) => {
+    photoQueue = photoQueue.then(async () => {
+      if (await attachFormPhoto(id, code, "NEW", img, line, req.auth!.userId)) run.photosAttached++;
+      else run.photosFailed++;
+    });
+  };
+  try {
+    for (const r of todo) {
+      if (outOfTime()) {
+        pending.push(r.line);
+        continue;
+      }
+      run.line = r.line;
+      const branch = branchBy.get(r.branchCode)!;
+      const key = machineOf(r);
+      const openRow = (known: ImportMachine | undefined) => {
+        // ช่องรุ่นในไฟล์ฟอร์ม COCO เขียนได้เฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ (D7) — ไฟล์มักมีรหัสรุ่น ไม่ใช่ยี่ห้อ
+        // ทับยี่ห้อที่หัวหน้าภาคแก้ไว้แล้ว เครื่องจะตกไปไฟล์ Other เลือกอะไหล่ของยี่ห้อตัวเองไม่ได้
+        const spec = machineSpecPatch(known ?? { brand: null, model: null, capacityKg: null }, { model: r.model, capacityKg: r.capacityKg });
+        return prisma.$transaction(async (tx) => {
+          let machine: ImportMachine | null = known ? { ...known, ...spec } : null;
+          if (key && known) {
+            if (Object.keys(spec).length) await tx.machine.update({ where: { id: known.id }, data: spec });
+          } else if (key) {
             // เครื่องที่ยังไม่มีในระบบสร้างให้เลย — เหตุผลเดียวกับเปิดใบงานเอง (ไฟล์รายงานมีแต่เครื่องที่เคยดับ)
-            machine =
-              (await tx.machine.findFirst({
-                where: { branchId: branch.id, code: r.machineCode },
-                select: { id: true, brand: true, model: true, capacityKg: true },
-              })) ??
-              (await tx.machine.create({
-                data: { branchId: branch.id, code: r.machineCode, type: machineTypeFromCode(r.machineCode)! },
-                select: { id: true, brand: true, model: true, capacityKg: true },
-              }));
-            // ช่องรุ่นในไฟล์ฟอร์ม COCO เขียนได้เฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ (D7) — ไฟล์มักมีรหัสรุ่น ไม่ใช่ยี่ห้อ
-            // ทับยี่ห้อที่หัวหน้าภาคแก้ไว้แล้ว เครื่องจะตกไปไฟล์ Other เลือกอะไหล่ของยี่ห้อตัวเองไม่ได้
-            await rememberMachineSpec(tx, machine, { model: r.model, capacityKg: r.capacityKg });
+            machine = await tx.machine.create({
+              data: { branchId: branch.id, code: r.machineCode!, type: machineTypeFromCode(r.machineCode!)!, ...spec },
+              select: { id: true, brand: true, model: true, capacityKg: true },
+            });
           }
           const id = await createWorkOrder(
             tx,
@@ -4614,34 +4749,79 @@ router.post("/import-form", requireAuth, requireAdmin, formUpload.single("file")
               workStatus: null,
               contactName: r.contactName,
               contactPhone: r.contactPhone,
+              importKey: r.importKey,
             },
             [],
             req.auth!.userId
           );
-          await tx.workOrder.update({ where: { id }, data: { importKey: r.importKey } });
-          out.push(id);
+          return { id, machine };
+        }, STAGE_TX);
+      };
+      let made: { id: number; machine: ImportMachine | null } | null = null;
+      for (let attempt = 0; !made; attempt++) {
+        try {
+          made = await openRow(key ? machines.get(key) : undefined);
+        } catch (e) {
+          // target เป็นรายชื่อช่อง (["importKey"]) หรือชื่อ constraint ("WorkOrder_importKey_key") แล้วแต่ฐานข้อมูล — เทียบเป็นข้อความ
+          const err = e as { code?: unknown; meta?: { target?: unknown } } | null;
+          const clash = err?.code === "P2002" ? String(err.meta?.target ?? "") : "";
+          // แถวนี้เพิ่งถูกนำเข้าจากคำขออื่น (แอดมินอีกคน · คำขอก่อนหน้าที่แอปเลิกรอแต่เซิร์ฟเวอร์ยังทำต่อ) — ใบมีแล้ว ข้ามไป ไม่ใช่ความผิดพลาด
+          if (clash.includes("importKey")) break;
+          // คำขออื่นเพิ่งสร้างเครื่องเดียวกัน (ยังไม่มีตอนถามเครื่องของชุดนี้) — ใช้เครื่องนั้นแล้วลองแถวนี้ใหม่ครั้งเดียว
+          if (attempt === 0 && key && clash && !machines.has(key)) {
+            const now = await prisma.machine.findUnique({
+              where: { branchId_code: { branchId: branch.id, code: r.machineCode! } },
+              select: { id: true, brand: true, model: true, capacityKg: true },
+            });
+            if (now) {
+              machines.set(key, now);
+              continue;
+            }
+          }
+          throw e;
         }
-        return out;
-      },
-      { timeout: 30_000, maxWait: 15_000 }
-    );
-    const made = await prisma.workOrder.findMany({ where: { id: { in: ids } }, select: { id: true, code: true }, orderBy: { id: "asc" } });
-    createdCodes.push(...made.map((m) => m.code));
-    // แนบรูปหลังบันทึกใบแล้ว (อัปไฟล์อยู่นอก transaction — ช้าและเป็นระบบอื่น) · id ตรงลำดับกับ chunk
-    for (const [j, r] of chunk.entries()) {
+      }
+      if (!made) {
+        stale.push(r.line);
+        continue;
+      }
+      if (key && made.machine) machines.set(key, made.machine);
+      const code = workOrderCode(made.id);
+      run.created.push(code);
       const img = imageOf.get(r.line);
-      if (!img) continue;
-      if (await attachFormPhoto(ids[j], made.find((m) => m.id === ids[j])?.code ?? "", "NEW", img, r.line, req.auth!.userId)) photosAttached++;
-      else photosFailed++;
+      if (img) queuePhoto(made.id, code, img, r.line);
     }
+  } finally {
+    // แถวที่ล้มก็ต้องรอรูปของแถวก่อนหน้าให้จบ — ไม่งั้นคำตอบนับรูปไม่ครบ และยังมีงานวิ่งอยู่หลังตอบไปแล้ว
+    await photoQueue;
   }
-  res.json({
+  run.line = null;
+
+  const result = {
     applied: true,
-    summary: { ...summary, created: createdCodes.length, photosAttached, photosFailed, photoFilled: filled.length },
-    created: createdCodes,
-    rows: plan,
-  });
-});
+    summary: { ...summary, created: run.created.length, photosAttached: run.photosAttached, photosFailed: run.photosFailed, photoFilled: filled.length },
+    created: run.created,
+    pending,
+    stale: stale.sort((a, b) => a - b),
+    // ทั้งไฟล์มีเป็นร้อยแถว (พร้อมใบค้างของแต่ละสาขา) — ชุดย่อยตอบเฉพาะแถวที่ขอมา
+    rows: only ? plan.filter((p) => only.has(p.line)) : plan,
+  };
+  /**
+   * แอปรุ่นก่อน (ไม่ส่ง only) ส่งทั้งไฟล์มาทีเดียว — เวลาหมดก่อนครบต้องไม่ตอบเหมือนสำเร็จ
+   * แอปรุ่นนั้นขึ้น "นำเข้าแล้ว เปิด N ใบ" แล้วปิดหน้าต่าง แอดมินจะเข้าใจว่าครบ · ตอบเป็นข้อผิดพลาดให้ข้อความค้างในหน้าต่างแทน
+   */
+  if (!only && pending.length) {
+    const n = run.created.length;
+    return res.status(409).json({
+      ...result,
+      error:
+        `ไฟล์นี้ใหญ่เกินกว่าจะเปิดในครั้งเดียว — รอบนี้เปิดไปแล้ว ${n} ใบ เหลืออีก ${pending.length} แถว · ` +
+        "รีเฟรชหน้าเว็บ (ให้ได้แอปรุ่นที่เปิดทีละชุด) แล้วนำเข้าไฟล์เดิมอีกครั้ง ใบที่เปิดแล้วถูกข้ามให้เอง ไม่เกิดใบซ้ำ",
+      code: "IMPORT_PARTIAL",
+    });
+  }
+  res.json(result);
+}
 
 const fromOutageSchema = z.object({
   jobType: z.enum(JOB_TYPES).default("CM"),
