@@ -8,6 +8,8 @@ const FIXTURE = path.join(DIR, "..", "roster-fixture.ods");
 const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -Atc ${JSON.stringify(q)}`).toString().trim();
 
 (async () => {
+  // ประวัติการนำเข้า (5 พ.ย. 69): การนำเข้าที่กดบันทึกเขียนรอบลง ImportRun — จำ id ล่าสุดไว้ แล้วลบรอบที่ชุดนี้ทำให้เกิดตอนจบ
+  const IH0 = sql(`select coalesce(max(id),0) from "ImportRun"`);
   const fail = (m) => { console.log("FAIL", m); process.exitCode = 1; };
   const pass = (m) => console.log("PASS", m);
   const errors = [];
@@ -86,6 +88,11 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     fail(String(e));
     await page.screenshot({ path: path.join(DIR, "roster-fail.png"), fullPage: true }).catch(() => {});
   } finally {
+    try {
+      sql(`delete from "ImportRun" where id > ${IH0}`);
+    } catch {
+      // ไม่หยุดการเก็บกวาดส่วนอื่น
+    }
     sql(`delete from "User" where "employeeCode" like '99____'`);
     errors.length ? fail("page errors: " + errors.join(" | ")) : pass("ไม่มี error ในหน้า");
     await browser.close();

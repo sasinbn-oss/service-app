@@ -2,6 +2,8 @@
 # ทดสอบ: ย้ายสาขาเข้าทีม (แอดมิน) — ตั้งทีมใหม่ตามบันทึกแบ่งทีมได้โดยไม่ต้องแก้ไฟล์ทะเบียน
 #        อัปไฟล์ทะเบียนที่ยังเขียนทีมเดิม สาขาต้องไม่เด้งกลับ · คืนตามไฟล์ได้ · เปลี่ยนชื่อทีมแล้วยังคงอยู่
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -13,6 +15,7 @@ POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: 
 SUF=$RANDOM
 OLD="ทีมเดิมทดสอบย้าย$SUF"; NEW="นครศรีทดสอบ$SUF"; NEW2="นครศรีฯทดสอบ$SUF"
 cleanup() {
+  ih_clean
   DB "delete from \"Branch\" where code like 'ZM%$SUF'; delete from \"TeamRename\" where \"fromName\" in ('$NEW','$NEW2','$OLD')" >/dev/null
 }
 trap cleanup EXIT

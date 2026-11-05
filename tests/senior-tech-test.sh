@@ -17,6 +17,8 @@
 #     โทเคนเดิมหมดสิทธิ์ทันที — ขอบเขตอ่านจากฐานข้อมูลทุกคำขอ ไม่อยู่ในโทเคน
 # ยืนยันผลที่ฐานข้อมูลทุกข้อ (CLAUDE.md) · สร้างสาขา/ทีม/ทีมรวม/ผู้ใช้ ZS… เองแล้วลบทั้งหมด · ไม่แตะ T001/S001
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 cd "$(dirname "$0")/.."
 . tests/lib/fixture-parts.sh
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1" 2>/dev/null; }
@@ -51,6 +53,7 @@ VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 BRS="select id from \"Branch\" where code like 'CZS%$SUF'"
 USERS="select id from \"User\" where \"employeeCode\" like 'ZS%$SUF%' or \"employeeCode\" like '97${SUF}%'"
 cleanup() {
+  ih_clean
   # ใบลูก (แจ้งปัญหา) id มากกว่าใบแม่ — ลบจากมากไปน้อย
   for i in $(DB "select id from \"WorkOrder\" where \"branchId\" in ($BRS) order by id desc"); do
     purge_orders "$A" $i

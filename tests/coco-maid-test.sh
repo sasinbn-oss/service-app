@@ -6,6 +6,8 @@
 #   · ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69): Maid 403 ข้อความไทย · endpoint ที่ยังใช้ยัง 200
 #   · เพิ่มทีละคนในหน้าสิทธิ์ผู้ใช้: ต้องเลือกสาขา COCO · แก้สาขาได้ · เปลี่ยนตำแหน่งแล้วสาขาถูกล้าง
 #   · นำเข้าซ้ำ = แทนที่สาขาเดิม ไม่แตะรหัสผ่าน
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -20,6 +22,7 @@ CODE() { curl -s -o /dev/null -w "%{http_code}" -X "${3:-GET}" "localhost:4000/a
 
 LOGINS="'zz.maid1','zz.maid2','zz.maid3','zz.msup'"
 cleanup() {
+  ih_clean
   DB "delete from \"WorkOrder\" where \"createdById\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null
   DB "delete from \"WorkOrder\" where \"symptom\" = 'ทดสอบ maid'" >/dev/null
   DB "update \"Branch\" set \"cocoSupervisorId\"=null where \"cocoSupervisorId\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null

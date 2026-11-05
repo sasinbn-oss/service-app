@@ -4,6 +4,8 @@
 #   ขอบเขตหัวหน้าภาคตามทีม (ไม่มีภาค) · ค้นหา/กรองสาขาแล้วขอบเขตไม่หลุด (บั๊กเดิม)
 #
 # ไฟล์ roster-fixture.ods เป็นชื่อสมมุติ รหัส 99xxxx — ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -e
 SP="$(dirname "$0")"
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -12,7 +14,7 @@ pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; FAILED=1; }
 DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}"; }
-cleanup() { DB "delete from \"User\" where \"employeeCode\" like '99____'" >/dev/null; }
+cleanup() { ih_clean; DB "delete from \"User\" where \"employeeCode\" like '99____'" >/dev/null; }
 trap cleanup EXIT
 cleanup
 

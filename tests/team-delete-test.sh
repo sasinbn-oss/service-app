@@ -3,6 +3,8 @@
 #        ใบงานที่ปิดแล้วคงชื่อเดิม · อัปไฟล์ทะเบียนชื่อเดิม → ไปทีมที่รับต่อ (ทีมที่ลบไม่กลับมา)
 #        ทีมรวมที่ครอบคลุมทีมที่ลบ ครอบคลุมทีมที่รับต่อแทน · ทีมที่ไม่มีสาขา ลบได้โดยไม่ต้องเลือก
 # ยืนยันผลที่ฐานข้อมูลด้วยทุกข้อ (CLAUDE.md)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -e
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 H() { echo "Authorization: Bearer $1"; }
@@ -14,6 +16,7 @@ POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: 
 SUF=$RANDOM
 DEL="ทีมจะลบ$SUF"; KEEP="ทีมรับต่อ$SUF"; EMPTY="ทีมไม่มีสาขา$SUF"; GRP="กลุ่มลบทีม$SUF"
 cleanup() {
+  ih_clean
   DB "delete from \"WorkOrder\" where \"branchId\" in (select id from \"Branch\" where code like 'ZX%$SUF');
       delete from \"Branch\" where code like 'ZX%$SUF'; delete from \"User\" where \"employeeCode\" like 'ZX%$SUF';
       delete from \"TeamRename\" where \"fromName\" in ('$DEL','$EMPTY'); delete from \"TeamGroup\" where name='$GRP';

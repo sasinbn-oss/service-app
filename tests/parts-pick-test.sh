@@ -48,6 +48,8 @@
 #
 # หยุดกลางทาง = FAIL (run-all.sh นับแค่บรรทัด PASS/FAIL — set -e จบเงียบ ๆ ชุดนี้จะดูเหมือนผ่าน)
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 set -eE
 _pp_died() {
   if [ "${BASH_SUBSHELL:-0}" -eq 0 ]; then echo "FAIL สคริปต์หยุดกลางทาง (บรรทัด $1): $2"; fi
@@ -78,6 +80,7 @@ OUTAGES=""
 # จะย้อนการลบทุกอย่าง ทิ้งผู้ใช้ PARTS_ADMIN/AREA รหัสผ่าน test1234 และอะไหล่ในไฟล์ Other ที่ไปโผล่ในช่องของใช้ร่วมของชุดอื่น
 # และเกิดตอนที่ชุดนี้พังอยู่แล้วพอดี · || : กัน set -e ตัดการลบที่เหลือ
 cleanup() {
+  ih_clean
   purge_orders "$A" $ORDERS
   local codes ids outs; codes=$(for c in $MCODES; do printf "'%s'," "$c"; done); ids=$(echo $ORDERS | tr ' ' ','); outs=$(echo $OUTAGES | tr ' ' ',')
   DB "delete from \"WorkOrder\" where id in (${ids:-0})" >/dev/null 2>&1 || :

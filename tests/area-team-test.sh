@@ -7,6 +7,8 @@
 #   · ติดตามเครื่องเสีย · รายงาน · ผังผู้รับผิดชอบ เหลือเฉพาะ Area (เจ้าของงานขอ ต.ค. 69): Supervisor (COCO) 403 ข้อความไทยทุก endpoint
 #     · Area ยัง 200 · Supervisor (COCO) ยัง 200 ทุก endpoint ที่หน้าใบงาน/ฟอร์มเปิดใบงาน/แผนงานใช้
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/import-history.sh"  # ih_mark/ih_clean: ล้างรอบในประวัติการนำเข้าที่ชุดนี้ทำให้เกิด
+ih_mark
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"${2:-test1234}\"}" | J 'd.token'; }
@@ -24,6 +26,7 @@ VISIT=$(day 33)
 
 LOGINS="'zz.area','zz.sup1','zz.sup2'"
 cleanup() {
+  ih_clean
   # ใบที่แอดมินเปิดไว้เทียบขอบเขต (สาขาคนอื่น · แฟรนไชส์) — ไม่ได้สร้างโดยบัญชีทดสอบ ต้องลบเอง ไม่งั้นค้างสะสม
   purge_orders "$A" ${W6:-} ${WD:-}
   DB "delete from \"WorkOrder\" where \"createdById\" in (select id from \"User\" where \"employeeCode\" in ($LOGINS))" >/dev/null

@@ -7,6 +7,8 @@
 //     กดยืนยัน → คำขอละไม่เกิน 10 แถว (only) · หน้าโหลดบอก "กำลังเปิดใบงาน 0/23" → "10/23" · ชุดที่ 2 เน็ตหลุด (ตัดคำขอทิ้ง)
 //     → กล่อง "หยุดนำเข้ากลางทาง" บอกเปิดไปแล้ว 10 จาก 23 ใบ · ตัวอย่างอ่านใหม่ เหลือปุ่ม "เปิดใบงาน 13 ใบ" · กดอีกครั้ง → สรุป 13 ใบ
 //     → ฐานข้อมูลมี 23 ใบครบ (สาขา เครื่อง ประเภทงาน importKey ไม่ซ้ำ รูป) แล้วลบทิ้ง — ต้องมี DATABASE_URL
+//   · ประวัติการนำเข้า (5 พ.ย. 69): สรุปท้ายเป็นกล่องที่มีปุ่ม "ดูในประวัติการนำเข้า" (ไม่ใช่แถบที่หายเอง) · การกดยืนยันสองครั้ง = สองรอบ
+//     รอบแรก (เน็ตหลุด) หยุดกลางทาง เปิด 10 เหลือ 13 · รอบสองครบ 13 (ฐานข้อมูล) · ปุ่มพาไปรอบที่สองในหน้าประวัติ · ลบรอบตอนจบ
 const { chromium } = require("playwright");
 const os = require("os");
 const path = require("path");
@@ -45,6 +47,7 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     env: { ...process.env, NODE_PATH: path.join(__dirname, "../../backend/node_modules") },
   });
   const photoRows = spec.filter((r) => r.image).length;
+  const IH0 = sql(`select coalesce(max(id),0) from "ImportRun"`);
   const token = (
     await (await fetch("http://127.0.0.1:4000/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ employeeCode: "A001", password: "test1234" }) })).json()
   ).token;
@@ -166,15 +169,28 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     await page.evaluate(() => (window.__progress = []));
     const before = applies.length;
     await page.getByLabel("ยืนยันนำเข้าใบแจ้งซ่อม").locator("visible=true").click();
-    const done = vis(/^นำเข้าใบแจ้งซ่อมแล้ว — เปิดใบงานใหม่ 13 ใบ/, false);
+    // สรุปท้ายเป็นกล่องที่มีปุ่ม (ตัวอย่างประวัติการนำเข้า) — หัวกล่อง "นำเข้าใบแจ้งซ่อมแล้ว" ข้อความเริ่มที่ยอดที่เปิด
+    const done = vis(/^เปิดใบงานใหม่ 13 ใบ/, false);
     await done.waitFor({ timeout: 60000 }).catch(() => undefined);
     const doneText = (await done.count()) ? await done.first().innerText() : "";
     /เปิดใบงานใหม่ 13 ใบ — อยู่ขั้นแรก/.test(doneText) && /ข้ามเครื่องที่มีใบค้าง 1/.test(doneText) && /แนบรูปจากไฟล์ \d+ รูป/.test(doneText)
+      && (await vis("นำเข้าใบแจ้งซ่อมแล้ว").count()) > 0 && /ผลทีละแถวเก็บไว้ในประวัติการนำเข้าแล้ว/.test(doneText)
       ? pass(`สรุปท้าย: ${doneText.replace(/\s+/g, " ").slice(0, 120)}`)
       : fail(`ไม่ขึ้นสรุปท้าย: "${doneText}"`);
     seen = await page.evaluate(() => window.__progress);
     seen.includes("กำลังเปิดใบงาน 0/13") && seen.includes("กำลังเปิดใบงาน 10/13") ? pass("รอบสอง: กำลังเปิดใบงาน 0/13 → 10/13") : fail(`รอบสอง หน้าโหลด: ${JSON.stringify(seen)}`);
     await page.screenshot({ path: path.join(__dirname, "repair-import-done.png") });
+    // ประวัติการนำเข้า: กดยืนยันสองครั้ง = สองรอบ (รอบแรกเน็ตหลุดที่ชุด 2 → แอปบอกเซิร์ฟเวอร์ว่าหยุด)
+    const bigName = path.basename(bigFile);
+    const runs = sql(`select string_agg(u.status||':'||(select count(*) filter (where r.result='NEW')||'/'||count(*) filter (where r.result='PENDING') from "ImportRunRow" r where r."runId"=u.id), ',' order by u.id)
+      from "ImportRun" u where u.id > ${IH0} and u."fileName"='${bigName}'`);
+    runs === "STOPPED:10/13,DONE:13/0"
+      ? pass("ประวัติการนำเข้า: สองรอบ — รอบแรกหยุดกลางทาง (เปิด 10 · เหลือ 13) · รอบสองครบ 13 (ฐานข้อมูล)") : fail(`รอบในประวัติ: ${runs}`);
+    await vis("ดูในประวัติการนำเข้า").last().click();
+    await page.waitForTimeout(3500);
+    const lastRun = sql(`select max(id) from "ImportRun" where id > ${IH0} and "fileName"='${bigName}'`);
+    decodeURIComponent(new URL(page.url()).hash).includes(`run=r${lastRun}`) && (await vis(bigName).count()) > 0
+      ? pass(`ปุ่ม "ดูในประวัติการนำเข้า" → หน้าประวัติเปิดรอบที่เพิ่งนำเข้า (r${lastRun})`) : fail(`ดูในประวัติ: ${decodeURIComponent(new URL(page.url()).hash)}`);
     const sizes = applies.map((o) => (o ? o.split(",").length : 0));
     const lines = applies.filter(Boolean).flatMap((o) => o.split(",").map(Number));
     applies.every((o) => o) && sizes.every((n) => n > 0 && n <= 10) && applies.length === before + 2 && new Set(lines).size === 23
@@ -198,6 +214,7 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     fs.rmSync(specFile, { force: true });
     try {
       await purgeOrders(token, sql(`select id from "WorkOrder" where symptom like '${PREFIX}%'`).split("\n").filter(Boolean));
+      sql(`delete from "ImportRun" where id > ${IH0}`);
       sql(`delete from "Machine" m using "Branch" b where b.id=m."branchId" and b.code='D0012' and m.code in (${spec.slice(0, 15).map((r) => `'${r.machine}'`).join(",")})
            and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
     } catch (e) {
