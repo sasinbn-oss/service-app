@@ -838,8 +838,8 @@ function AdminTopics(p: AdminTopicsProps) {
   const [chip, setChip] = useState("all");
   const [paneW, setPaneW] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
-  // จอคอมที่เนื้อหาขวากว้างพอ = ตารางแบบตัวอย่าง · แคบกว่านั้น (จอ 1100–1300 ที่เมนูข้างค้าง) การ์ดแบบเดิมอ่านง่ายกว่าตารางที่บีบ
-  const grid = docked && paneW >= 760;
+  // จอคอมที่เนื้อหาขวากว้างพอ = ตารางแบบตัวอย่าง · แคบกว่านั้น (จอ 1100–1400 ที่เมนูข้างกางค้าง) การ์ดแบบเดิมอ่านง่ายกว่าตารางที่บีบ
+  const grid = docked && paneW >= 820;
   const topics = useMemo(() => (rows ? buildTopics(rows, cut, now, names) : []), [rows, cut, now, names]);
   const all = rows ?? [];
   const q = query.trim().toLowerCase();
@@ -942,10 +942,19 @@ function AdminTopics(p: AdminTopicsProps) {
   ) : null;
   const rest = topics.filter((t) => t.id !== "first");
   // การ์ดภาพรวม 3 ใบต่อแถว (2 ใบเมื่อเนื้อหาขวาแคบ) กว้างเท่ากันทุกใบ — ใบสุดท้ายที่เหลือเดี่ยวไม่ยืดเต็มแถว
-  const cols = paneW >= 900 ? 3 : 2;
+  const cols = paneW >= 780 ? 3 : 2;
   const cardW = paneW ? Math.floor((paneW - spacing.md * (cols - 1)) / cols) : undefined;
+  // กล่องว่างทั้งกล่อง — บอกตรง ๆ (หัวข้อทุกหัวข้อยังอยู่ที่เดิมเป็น 0 จาง ตำแหน่งไม่เปลี่ยน)
+  const allClear = all.length ? null : (
+    <View style={ad.clear}>
+      <Ionicons name="checkmark-done-outline" size={20} color={colors.successInk} />
+      <Text style={ad.clearTitle}>ไม่มีงานค้างรอคุณ</Text>
+      <Text style={ad.clearText}>ใบงานที่ถึงขั้นของคุณจะขึ้นที่นี่ทันที</Text>
+    </View>
+  );
   const home = docked ? (
     <View style={{ gap: spacing.md }}>
+      {allClear}
       {firstBar}
       <View style={ad.cards} {...howtoTarget("queue.group")}>
         {rest.map((t) => {
@@ -983,6 +992,7 @@ function AdminTopics(p: AdminTopicsProps) {
     </View>
   ) : (
     <View style={{ gap: spacing.sm }}>
+      {allClear}
       {firstBar}
       <Text style={ad.navHead}>หัวข้อที่ต้องทำ · เรียงตามลำดับงาน</Text>
       <View style={ad.list} {...howtoTarget("queue.group")}>
@@ -1056,6 +1066,26 @@ function AdminTopics(p: AdminTopicsProps) {
           <View style={{ flex: 1 }} />
           <Text style={ad.sortText}>เรียง: {t.sortText}</Text>
         </View>
+        {/*
+          คำอธิบายของหัวข้อปักเดิมยังอยู่ (ประโยคเดียวกับกล่องงาน — ตัวสร้างเดียวกัน): ขอนัดด่วนบอกสองทางที่แอดมินเลือกได้
+          ไม่ให้คิดว่าต้องแก้เป็นงานด่วนให้ทุกใบ · เลยนัดบอกว่าแก้ด้วยการเลื่อนวันนัดและค้างที่ใคร
+        */}
+        {t.id === "first" && (cut?.asks || cut?.past) ? (
+          <View style={{ gap: 2 }}>
+            {cut?.asks ? (
+              <Text style={styles.groupHint}>
+                <Text style={{ fontWeight: "700", color: colors.roleAdmin }}>ขอนัดด่วน: </Text>
+                {cut.asks.hint}
+              </Text>
+            ) : null}
+            {cut?.past ? (
+              <Text style={styles.groupHint}>
+                <Text style={{ fontWeight: "700", color: colors.dangerInk }}>เลยนัด: </Text>
+                {PAST_GROUP_HINT}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         {t.rows.length ? (
           <View style={grid ? ad.table : { gap: spacing.md }}>
             {tableHead(t)}
@@ -1304,8 +1334,17 @@ function TopicRow({
             <Hi text={work} q={q} style={ad.cell} numberOfLines={2} />
           </View>
           <View style={[QUEUE_COL.info, { gap: 2 }]}>
-            <Text style={[ad.info, info.tone === "red" && { color: colors.dangerInk }, info.tone === "ask" && { color: colors.roleAdmin }]}>{info.main}</Text>
-            {info.sub ? <Text style={ad.sub}>{info.sub}</Text> : null}
+            <Text
+              style={[ad.info, info.tone === "red" && { color: colors.dangerInk }, info.tone === "ask" && { color: colors.roleAdmin }]}
+              accessibilityLabel={info.tone === "ask" ? info.main : undefined}
+            >
+              {info.main}
+            </Text>
+            {info.sub ? (
+              <Text style={ad.sub} accessibilityLabel={info.tone === "ask" ? info.sub : undefined}>
+                {info.sub}
+              </Text>
+            ) : null}
             {info.note ? <Text style={styles.cutCause}>{info.note}</Text> : null}
             <View style={styles.cardTop}>{tags}</View>
           </View>
@@ -1330,8 +1369,18 @@ function TopicRow({
       </View>
       <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={styles.branch} numberOfLines={1} />
       <Hi text={work} q={q} style={styles.meta} numberOfLines={2} />
-      <Text style={[ad.info, info.tone === "red" && { color: colors.dangerInk }, info.tone === "ask" && { color: colors.roleAdmin }]}>{info.main}</Text>
-      {info.sub ? <Text style={ad.sub}>{info.sub}</Text> : null}
+      {/* แถวขอนัดด่วน: บรรทัด "ขอนัด … (วันนี้/พรุ่งนี้)" กับ "หัวหน้าภาค … · ขอเมื่อ …" มีชื่อให้โปรแกรมอ่านจอแบบการ์ดเดิม */}
+      <Text
+        style={[ad.info, info.tone === "red" && { color: colors.dangerInk }, info.tone === "ask" && { color: colors.roleAdmin }]}
+        accessibilityLabel={info.tone === "ask" ? info.main : undefined}
+      >
+        {info.main}
+      </Text>
+      {info.sub ? (
+        <Text style={ad.sub} accessibilityLabel={info.tone === "ask" ? info.sub : undefined}>
+          {info.sub}
+        </Text>
+      ) : null}
       {info.note ? <Text style={styles.cutCause}>{info.note}</Text> : null}
       {extra}
       {actions}
@@ -1343,7 +1392,7 @@ function TopicRow({
 function infoOf(t: Topic, r: WorkOrderRow, kind: RowKind, now: number): { main: string; sub?: string; note?: string | null; tone?: "red" | "ask" } {
   if (kind === "ask") {
     const a = askRowLines(r, now);
-    return a ? { main: `ขอนัดด่วน · ${a.appt}`, sub: a.who, note: a.note, tone: "ask" } : { main: "ขอนัดด่วน" };
+    return a ? { main: a.appt, sub: a.who, note: a.note, tone: "ask" } : { main: "ขอนัดด่วน" };
   }
   if (kind === "past") {
     const day = r.scheduledAt?.slice(0, 10);
@@ -2053,6 +2102,19 @@ const ad = StyleSheet.create({
   empty: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
   cardAsk: { borderColor: colors.roleAdminLine },
   cardPast: { borderColor: colors.dangerLine },
+  clear: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: colors.successLine,
+  },
+  clearTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.successInk },
+  clearText: { fontSize: 13, lineHeight: 20, color: colors.body },
   resHead: { flexDirection: "row", alignItems: "center", gap: 8 },
   resName: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.navy },
   resN: { fontSize: 13, lineHeight: 20, color: colors.textMuted },

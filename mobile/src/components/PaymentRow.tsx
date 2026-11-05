@@ -38,11 +38,11 @@ export type PayRow = WorkOrderRow & { payWait: PayWaitRow & { quoted?: { at: str
  */
 export const QUEUE_COL = StyleSheet.create({
   code: { width: 116 },
-  branch: { flex: 2.1, minWidth: 0 },
-  work: { flex: 1.2, minWidth: 0 },
-  info: { flex: 2.5, minWidth: 0 },
+  branch: { flex: 1.7, minWidth: 0 },
+  work: { flex: 1.3, minWidth: 0 },
+  info: { flex: 2.3, minWidth: 0 },
   // กว้างคงที่ — ปุ่มของแถว (รายละเอียด · ปุ่มขั้น · เลื่อนวันนัด) ยืดเต็มช่องนี้ ไม่ใช่บีบตามความยาวข้อความ
-  actions: { width: 300 },
+  actions: { width: 290 },
 });
 /** คอลัมน์ตารางของแท็บ (ตัวอย่าง paytab: ใบงาน · สาขา·งาน · ส่งใบเสนอราคา · รอมาแล้ว · ตามลูกค้าล่าสุด · ปุ่ม) */
 export const TAB_COL = StyleSheet.create({
