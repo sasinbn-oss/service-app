@@ -241,6 +241,7 @@ import {
   TECH_ROLES,
   STAGE_ACTOR_LINE,
   paymentWait,
+  PAYMENT_WAIT_ALERT_DAYS,
   QUOTE_DECLINE_REASONS,
   CANCEL_REASON_LABELS,
   MANUAL_CANCEL_REASONS,
@@ -2274,13 +2275,40 @@ type FollowRow = { createdAt: Date; note: string | null; user: { name: string } 
 function payFollowUps<T extends FollowRow>(since: Date, follows: T[]) {
   return follows.filter((f) => f.createdAt >= since);
 }
-function payWaitRow(since: Date, follows: FollowRow[], now: Date) {
+function payWaitRow(since: Date, follows: FollowRow[], now: Date, quoted: FollowRow | undefined) {
   const mine = payFollowUps(since, follows);
   const last = mine[0];
   return {
     ...paymentWait(since, now),
     follows: mine.length,
     last: last ? { at: last.createdAt, note: last.note, byName: last.user?.name ?? null } : null,
+    // แท็บ "รอลูกค้าจ่ายเงิน" มีคอลัมน์ "ส่งใบเสนอราคา" วันที่ · ใคร (ตัวอย่าง paytab) — ครั้งล่าสุด แบบเดียวกับการ์ดในหน้าใบงาน
+    quoted: quoted ? { at: quoted.createdAt, byName: quoted.user?.name ?? null } : null,
+  };
+}
+
+/**
+ * แท็บ "รอลูกค้าจ่ายเงิน" ของหน้าใบงานซ่อม (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง paytab "ทำตามที่แนะนำ") — แอดมินทั่วไปกับ Super Admin
+ * ขั้นนี้เป็นของแอดมิน หัวหน้าภาค ช่าง ทีม Area กดอะไรในขั้นนี้ไม่ได้ · Admin Spare Part ไม่ได้ดูแลข้อมูลใบงาน
+ * · ดูในฐานะ = ตำแหน่งของคนที่ถูกดู (แอดมินดูในฐานะได้แค่หัวหน้าภาค/ช่าง/ทีม Area) จึงไม่มีแท็บเหมือนกัน
+ * กติกาเดียวกับกล่องงานแอดมินทั่วไป (inboxTakesOrphans) — สองที่นี้ต้องพูดถึงคนกลุ่มเดียวกัน
+ */
+function seesPayTab(auth: AuthRequest["auth"]) {
+  return inboxTakesOrphans(auth);
+}
+
+/**
+ * ตัวเลขของแท็บ "รอลูกค้าจ่ายเงิน" — นับทุกใบขั้นนี้ในขอบเขตของคนดู ไม่ใช่เฉพาะรายการที่โหลด (แบบเดียวกับตัวเลขบนแท็บอื่น)
+ * ป้ายแดง "เกิน 3 วัน n" บนแท็บต้องขึ้นตั้งแต่ยังเปิดแท็บอื่นอยู่ · แถบบรรทัดเดียวในกล่องงานก็ใช้ชุดนี้ สองที่จึงบอกเลขเดียวกัน
+ * never = ยังไม่เคยตามในรอบรอเงินนี้ · followed = ตามแล้วอย่างน้อยครั้ง (สองตัวรวมกันเท่า total เสมอ)
+ */
+function payTabSummary(waits: { over: boolean; follows: number; alertDays: number }[]) {
+  return {
+    total: waits.length,
+    over: waits.filter((p) => p.over).length,
+    never: waits.filter((p) => p.follows === 0).length,
+    followed: waits.filter((p) => p.follows > 0).length,
+    alertDays: PAYMENT_WAIT_ALERT_DAYS,
   };
 }
 
@@ -2298,7 +2326,9 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
    *
    * รายการ ตัวเลขชิป และรายชื่อหัวหน้าภาค ไม่ขึ้นต่อกัน — ยิงพร้อมกันรอบเดียว (เดิมทีละคำถาม)
    */
-  const [rows, counts, inboxCount, supervisors] = await Promise.all([
+  // แท็บ "รอลูกค้าจ่ายเงิน" — ใบขั้นนี้ทุกใบในขอบเขต (ไม่ตามคำค้น/ตัวกรอง แบบเดียวกับตัวเลขชิป) · ไม่มีแท็บ = ไม่ถาม
+  const payTab = seesPayTab(req.auth);
+  const [rows, counts, inboxCount, supervisors, payScope] = await Promise.all([
     prisma.workOrder.findMany({
       where,
       select: listSelect,
@@ -2317,11 +2347,19 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true },
       orderBy: { name: "asc" },
     }),
+    payTab
+      ? prisma.workOrder.findMany({ where: { AND: [scope, { status: "AWAITING_PAYMENT" }] }, select: { id: true, createdAt: true } })
+      : Promise.resolve([] as { id: number; createdAt: Date }[]),
   ]);
 
   // ตัวกรอง "รอใคร" กับ "ค้างนานสุด" ทำที่หน้าจอจากรายการนี้ทั้งก้อน (รายการไม่แบ่งหน้า)
   // เซิร์ฟเวอร์จึงแค่เติมข้อมูลที่หน้าจอคิดเองไม่ได้ — คำถามรวดพร้อมกัน ไม่ใช่ทีละแถว
   const ids = rows.map((r) => r.id);
+  /**
+   * ใบรอเงินนอกรายการที่โหลด (เปิดแท็บอื่นอยู่) ต้องรู้วันที่เข้าขั้นกับการตามด้วย ตัวเลขแท็บถึงจะถูก — ถามรวมไปกับคำถามเดิม
+   * (ไม่เพิ่มรอบไปกลับฐานข้อมูล: ฐานข้อมูลอยู่คนละภูมิภาค รอบละ ~0.23 วิ)
+   */
+  const moveIds = [...new Set([...ids, ...payScope.map((p) => p.id)])];
   const releaseIds = rows.filter((r) => RELEASE_STAGES.includes(r.status)).map((r) => r.id);
   /**
    * เวลาปิดนัดงานพรุ่งนี้: คำขอนัดด่วนที่รอแอดมินของใบรอนัดวันในรายการ (ชิปบนการ์ด · หัวข้อ "ขอนัดด่วน")
@@ -2332,12 +2370,12 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       ? rows.filter((r) => SCHEDULE_STAGES.includes(r.status) && !r.isTest).map((r) => r.id)
       : [];
   // ใบรอลูกค้าจ่ายเงิน — การตามลูกค้าของแต่ละใบ (การ์ดในกล่องงาน/รายการบอก "ตามล่าสุด" หรือ "ยังไม่เคยตาม")
-  const payIds = rows.filter((r) => r.status === "AWAITING_PAYMENT").map((r) => r.id);
-  const [lastMoves, confirms, rollbacks, settles, asks, follows] = await Promise.all([
-    ids.length
+  const payIds = [...new Set([...rows.filter((r) => r.status === "AWAITING_PAYMENT").map((r) => r.id), ...payScope.map((p) => p.id)])];
+  const [lastMoves, confirms, rollbacks, settles, asks, payLogs] = await Promise.all([
+    moveIds.length
       ? prisma.workOrderLog.groupBy({
           by: ["workOrderId"],
-          where: { workOrderId: { in: ids }, action: { notIn: NON_STAGE_ACTIONS } },
+          where: { workOrderId: { in: moveIds }, action: { notIn: NON_STAGE_ACTIONS } },
           _max: { createdAt: true },
         })
       : Promise.resolve([]),
@@ -2373,14 +2411,22 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
         })
       : Promise.resolve([]),
     pendingAsks(bangkokDay(now), askIds),
+    // การตาม + ส่งใบเสนอราคาครั้งล่าสุด (คอลัมน์ "ส่งใบเสนอราคา" ของแท็บรอลูกค้าจ่ายเงิน) — คำถามเดียว ใบขั้นนี้มีไม่กี่สิบใบ
     payIds.length
       ? prisma.workOrderLog.findMany({
-          where: { workOrderId: { in: payIds }, action: "PAYMENT_FOLLOWUP" },
+          where: { workOrderId: { in: payIds }, action: { in: ["PAYMENT_FOLLOWUP", "QUOTED"] } },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          select: { workOrderId: true, createdAt: true, note: true, user: { select: { name: true } } },
+          select: { workOrderId: true, action: true, createdAt: true, note: true, user: { select: { name: true } } },
         })
       : Promise.resolve([]),
   ]);
+  const follows = new Map<number, typeof payLogs>();
+  const quotedOf = new Map<number, (typeof payLogs)[number]>();
+  for (const l of payLogs) {
+    if (l.action === "QUOTED") {
+      if (!quotedOf.has(l.workOrderId)) quotedOf.set(l.workOrderId, l);
+    } else follows.set(l.workOrderId, [...(follows.get(l.workOrderId) ?? []), l]);
+  }
   const confirmedBy = new Map(confirms.map((c) => [c.workOrderId, c.user?.name ?? null]));
   const lastSettle = new Map(settles.map((c) => [c.workOrderId, c.action]));
   const rolledBackFrom = new Map<number, ReturnType<typeof activeRollback>>();
@@ -2421,8 +2467,15 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       // ขั้นที่ย้อนมา (ไม่ได้ย้อน = null) — รายการติดป้าย ↩ ย้อนขั้น
       rolledBackFrom: rolledBackFrom.get(w.id)?.fromLabel ?? null,
       // รอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — รอมากี่วัน เกินเส้นไหม ตามล่าสุดเมื่อไร · ขั้นอื่น = null
-      payWait: w.status === "AWAITING_PAYMENT" ? payWaitRow(stageSince.get(w.id) ?? w.createdAt, follows.filter((f) => f.workOrderId === w.id), now) : null,
+      payWait:
+        w.status === "AWAITING_PAYMENT"
+          ? payWaitRow(stageSince.get(w.id) ?? w.createdAt, follows.get(w.id) ?? [], now, quotedOf.get(w.id))
+          : null,
     })),
+    // แท็บ "รอลูกค้าจ่ายเงิน" (ดู seesPayTab) — คนที่ไม่มีแท็บได้ null
+    payTab: payTab
+      ? payTabSummary(payScope.map((p) => payWaitRow(stageSince.get(p.id) ?? p.createdAt, follows.get(p.id) ?? [], now, undefined)))
+      : null,
     counts: {
       ...byStatus,
       AWAITING_CONFIRM: (byStatus.AWAITING_CONFIRM ?? 0) + (byStatus.INSPECT_CONFIRM ?? 0),
@@ -2547,12 +2600,19 @@ router.get("/locate", requireAuth, async (req: AuthRequest, res) => {
   ]);
   const inboxIds = new Set(inInbox.map((r) => r.id));
   const active = new Set<string>(ACTIVE_WORK_ORDER_STATUSES);
+  /**
+   * แท็บ "รอลูกค้าจ่ายเงิน" เจาะจงกว่ากล่องงาน (กล่องงานแอดมินย่อใบขั้นนี้เหลือแถบบรรทัดเดียวที่พาไปแท็บนี้) — คนที่มีแท็บ
+   * ได้แท็บนี้ก่อน · คนอื่นตามเดิม (ใบรอเงินอยู่ "ที่ยังค้าง")
+   */
+  const payTab = seesPayTab(req.auth);
   res.json({
     rows: rows.map((r) => ({
       id: r.id,
       status: r.status,
       outsource: isOutsourceTeam(r.assignedTeam),
-      tab: inboxIds.has(r.id)
+      tab: payTab && r.status === "AWAITING_PAYMENT"
+        ? "AWAITING_PAYMENT"
+        : inboxIds.has(r.id)
         ? "INBOX"
         : r.status === "AWAITING_CONFIRM" || r.status === "INSPECT_CONFIRM"
           ? "AWAITING_CONFIRM"
