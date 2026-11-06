@@ -44,7 +44,7 @@ export function vapidKeys() {
 export interface PushMessage {
   title: string;
   body: string;
-  /** ที่อยู่ในแอปที่จะเปิดเมื่อแตะ เช่น /wo/WO-04324 */
+  /** ที่อยู่ในแอปที่จะเปิดเมื่อแตะ เช่น /#/wo/WO-04324 (เว็บใช้ที่อยู่หลัง # — ดู navigation/linking.ts) */
   url: string;
   /** ข้อความเรื่องเดียวกันทับกัน ไม่กองเป็นสิบอันบนจอล็อก (เช่น chat-<id> · inbox) */
   tag: string;

@@ -45,7 +45,7 @@ export async function inboxPushRound() {
           ? {
               title: `งานเข้าใหม่ · ${first.code}${first.urgent ? " · ด่วน" : ""}`,
               body: `${first.branch} — ${first.title} (${first.statusLabel})`,
-              url: `/wo/${first.code}`,
+              url: `/#/wo/${first.code}`,
               tag: "inbox",
             }
           : {
@@ -54,7 +54,7 @@ export async function inboxPushRound() {
                 .slice(0, 3)
                 .map((i) => `${i.code} ${i.branch}`)
                 .join(" · ") + (items.length > 3 ? ` · และอีก ${items.length - 3} ใบ` : ""),
-              url: "/work-orders",
+              url: "/#/inbox",
               tag: "inbox",
             }
       );

@@ -2604,7 +2604,7 @@ router.post("/:id/chat", requireAuth, imageUpload, async (req: AuthRequest, res)
   pushLater(chatRecipients(id, req.auth!.userId, req.auth!.role, wo), {
     title: `แชท ${wo.code}`,
     body: `${me?.name ?? ""}: ${text.length > 140 ? `${text.slice(0, 140)}…` : text}`,
-    url: `/wo/${wo.code}`,
+    url: `/#/wo/${wo.code}`,
     tag: `chat-${id}`,
   });
   res.json({ messages: await chatThread(id, req.auth!.userId), readOnly: false });

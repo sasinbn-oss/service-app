@@ -96,8 +96,8 @@ IDS="$IDS $W1"; DB "update \"WorkOrder\" set status='PARTS_SOURCING' where id=$W
 C1=$(DB "select code from \"WorkOrder\" where id=$W1")
 R=$(ROUND)
 E=$(grep '"name":"admin"' $LOG | tail -1)
-[ "$(GOT admin)" = "1" ] && echo "$E" | J "d.payload.title.includes('$C1') && d.payload.url==='/wo/$C1' && d.payload.tag==='inbox' && d.payload.title.includes('ด่วน') && d.ttl==='43200'" | grep -q true \
-  && pass "งานเข้ากล่องแอดมินส่งถึงเครื่อง (ถอดรหัสได้: \"$(echo "$E" | J 'd.payload.title')\" · ลิงก์ /wo/$C1 · TTL 12 ชม.)" || fail "รอบแรก: $R · $(cat $LOG)"
+[ "$(GOT admin)" = "1" ] && echo "$E" | J "d.payload.title.includes('$C1') && d.payload.url==='/#/wo/$C1' && d.payload.tag==='inbox' && d.payload.title.includes('ด่วน') && d.ttl==='43200'" | grep -q true \
+  && pass "งานเข้ากล่องแอดมินส่งถึงเครื่อง (ถอดรหัสได้: \"$(echo "$E" | J 'd.payload.title')\" · ลิงก์ /#/wo/$C1 · TTL 12 ชม.)" || fail "รอบแรก: $R · $(cat $LOG)"
 ROUND >/dev/null
 [ "$(GOT admin)" = "1" ] && pass "รอบถัดไปไม่ส่งซ้ำ (ยังได้ 1 ครั้ง)" || fail "ส่งซ้ำ: $(GOT admin)"
 GET $A work-orders/$W1 >/dev/null
