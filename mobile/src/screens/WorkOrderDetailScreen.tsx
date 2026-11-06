@@ -22,7 +22,7 @@ import {
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import StepPulse from "../components/StepPulse";
-import { UrgentBadge, UrgentGlow } from "../components/Urgent";
+import { UrgentBadge } from "../components/Urgent";
 import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import CancelOrderModal from "../components/CancelOrderModal";
@@ -670,6 +670,9 @@ function stageButtonLabel(o: WorkOrder, opts: { partsOut: number; tech?: boolean
  * ปุ่มหลักของขั้นปัจจุบันในการ์ดขั้น — ปุ่มเดียวกันทุกคนทุกเวลา (ขั้นปล่อยงานไม่มีล็อกแล้ว ไม่มีปุ่มที่ต้องพลิกตามนาฬิกา)
  * คำขอนัดด่วนของหัวหน้าภาคมีกล่อง/ปุ่มของมันเองในการ์ดขั้น (AskAdminBox) ไม่แย่งปุ่มขั้น — แอดมินยังกดนัดวันแทนได้ตามเดิม
  */
+/** ความกว้างช่องของแถบขั้นตอนตอนปัดซ้ายขวา (จอแคบ) — พอให้ชื่อขั้นภาษาไทยขึ้นได้สองบรรทัด */
+const STEP_SWIPE_W = 96;
+
 function StagePrimaryButton({
   order,
   partsOut,
@@ -1440,6 +1443,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   const [reviewOutcome, setReviewOutcome] = useState<ReviewOutcome | null>(null);
   const [nexting, setNexting] = useState(false);
   const pageScroll = useRef<ScrollView>(null);
+  /** แถบขั้นตอนที่ปัดซ้ายขวาได้ (จอแคบ) — เปิดใบมาแล้วเลื่อนให้ขั้นปัจจุบันอยู่กลางแถบ */
+  const stepScroll = useRef<ScrollView>(null);
   const verdicts = useClaimVerdicts(
     order,
     !!order && order.status === "CLAIM_REVIEW" && canDecideClaims(me),
@@ -2017,57 +2022,39 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       <Text style={[styles.popTitle, headingFont]} numberOfLines={2}>
         {order.symptom?.trim() || order.title}
       </Text>
-      {/* บรรทัดเดียวที่ตัดคำเอง — จอแคบหักบรรทัดตามคำ ไม่ใช่หมุดค้างอยู่บรรทัดหนึ่งแล้วข้อความไปอีกบรรทัด */}
-      <Text style={styles.popLine}>
-        <Ionicons name="location-outline" size={14} color={colors.primary} /> สาขา <Text style={styles.popLineB}>{order.branchCode}</Text> ·{" "}
-        {order.branchName}
-        {order.region ? ` · ${order.region}` : ""} · {order.jobTypeLabel}
-        {order.machineCode ? ` · เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}` : ""}
-      </Text>
+      {/*
+        บรรทัดสาขา + ป้ายประเภทงาน/เครื่องแบบกรอบเดิม (เจ้าของงานขอให้เด่นเหมือนแบบเก่า 6 พ.ย. 69)
+        รหัส+ชื่อสาขาตัวหนาสีเข้ม (เจ้าของงานขอให้เน้น) — คนเปิดใบมาถามก่อนเลยว่าสาขาไหน · ภาคเป็นข้อมูลรองสีจาง
+        ข้อความสาขาตัดคำเอง — จอแคบหักบรรทัดตามคำ ป้ายต่อท้ายขึ้นบรรทัดใหม่ทั้งชิ้น
+      */}
+      <View style={styles.popRow}>
+        <Text style={[styles.popBranch, styles.popLineFlex]}>
+          <Ionicons name="location" size={16} color={colors.primary} /> {order.branchCode} · {order.branchName}
+          {order.region ? <Text style={styles.popLine}>{`  ·  ${order.region}`}</Text> : null}
+        </Text>
+        <View style={styles.tagLine}>
+          <Text style={styles.tagLineText}>{order.jobTypeLabel}</Text>
+        </View>
+        {order.machineCode ? (
+          <View style={styles.tagLine} accessibilityLabel={`เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}`}>
+            <Text style={styles.tagLineText}>เครื่อง {machineTag(order.machineCode, order.machineCapacityKg)}</Text>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
   /**
-   * แถบท้ายหน้าต่าง (หน้าตาใหม่ พ.ย. 69) — อยู่กับที่ ไม่เลื่อนตามเนื้อหา
-   * ซ้าย = เครื่องมือรอง (แก้ไขอาการ/สถานะ) · ขวา = ปิด + ปุ่มของขั้นปัจจุบัน (ปุ่มเดียวกับในการ์ดขั้น เปิดฟอร์มเดียวกัน)
-   * ไม่ใช่คิวของคนดู = บอกว่าขั้นนี้รอใครแทนปุ่ม · ใบปิดแล้ว/ยกเลิก/รอตรวจเคลมไม่มีปุ่มขั้น
+   * แถบท้ายหน้าต่าง (หน้าตาใหม่ พ.ย. 69) — อยู่กับที่ ไม่เลื่อนตามเนื้อหา · เครื่องมือรองของใบงาน
+   * ปุ่มของขั้นปัจจุบันไม่อยู่ที่นี่: เคยวางซ้ำกับปุ่มในการ์ดขั้น เจ้าของงานให้เอาออก คงไว้ในการ์ดที่เดียว (6 พ.ย. 69)
+   * ใบปิดแล้ว/ยกเลิก หรือคนที่ดูได้อย่างเดียว ไม่มีอะไรให้กด — ไม่วาดแถบเปล่า
    */
-  const footTurn = !done && order.status !== "CLAIM_REVIEW" && myTurn(order);
-  const popFoot = (
-    <>
-      {!done && !viewOnly ? (
-        <TouchableOpacity style={styles.footTool} onPress={() => setEditingNote(true)} activeOpacity={0.7} accessibilityLabel="แก้ไขอาการหรือสถานะ">
-          <Ionicons name="create-outline" size={15} color={colors.body} />
-          <Text style={styles.footToolText}>แก้ไขข้อมูล</Text>
-        </TouchableOpacity>
-      ) : null}
-      <View style={{ flex: 1 }} />
-      {!done && !footTurn && order.stageActorLabel && order.status !== "CLAIM_REVIEW" ? (
-        <View style={styles.footWait}>
-          <View style={[styles.statusDot, { backgroundColor: tone.fg }]} />
-          <Text style={[styles.footWaitText, { color: tone.fg }]}>ขั้นนี้รอ: {order.stageActorLabel}</Text>
-        </View>
-      ) : null}
-      <TouchableOpacity style={styles.footClose} onPress={() => navigation.goBack()} accessibilityLabel="ปิดใบงาน">
-        <Text style={styles.footCloseText}>ปิด</Text>
+  const popFoot =
+    !done && !viewOnly ? (
+      <TouchableOpacity style={styles.footTool} onPress={() => setEditingNote(true)} activeOpacity={0.7} accessibilityLabel="แก้ไขอาการหรือสถานะ">
+        <Ionicons name="create-outline" size={15} color={colors.body} />
+        <Text style={styles.footToolText}>แก้ไขข้อมูล</Text>
       </TouchableOpacity>
-      {footTurn ? (
-        order.status === "IN_PROGRESS" ? (
-          <TouchableOpacity style={[styles.action, styles.actionPrimary]} onPress={() => setClosing(true)} disabled={busy} activeOpacity={0.8}>
-            <Ionicons name="checkmark-done" size={18} color="#fff" />
-            <Text style={styles.actionPrimaryText}>{order.assignedOutsource ? "บันทึกผลงาน SUB" : "ปิดงาน"}</Text>
-          </TouchableOpacity>
-        ) : (
-          <StagePrimaryButton
-            order={order}
-            partsOut={partsOut.length}
-            busy={busy}
-            tech={user?.role === "EMPLOYEE"}
-            onStage={() => setStageOpen(true)}
-          />
-        )
-      ) : null}
-    </>
-  );
+    ) : undefined;
 
   return (
     <PopupScreen
@@ -2311,8 +2298,9 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           กดวงกลมขั้นปัจจุบันได้เหมือนกดปุ่ม ขั้นที่ทำแล้วกดดูว่าใครทำเมื่อไร
         */}
         {/*
-          ไม่เลื่อนซ้ายขวา (เจ้าของงานเลือกแบบ 1 ต.ค. 69) — ทุกช่องแบ่งความกว้างเท่ากัน · แคบจนชื่ออ่านไม่ออก
-          ซ่อนชื่อขั้นอื่น เหลือวงกับเลข ชื่อขั้นปัจจุบันยังเห็นเต็ม
+          จอกว้าง: ทุกช่องแบ่งความกว้างเท่ากัน ไม่ต้องเลื่อน
+          จอแคบ (ช่องละไม่ถึง ~74 px): ปัดซ้ายขวาด้วยนิ้ว ทุกขั้นขนาดเต็มพร้อมชื่อ — เจ้าของงานเปลี่ยนจากแบบย่อวง/ซ่อนชื่อ (6 พ.ย. 69)
+          เพราะแบบย่อเหลือแต่เลข อ่านไม่ออกว่าขั้นถัดไปคืออะไร
           โชว์เฉพาะขั้นที่ใบนี้ต้องผ่าน (แบบที่ตกลง ต.ค. 69 รอบสอง) — ใบส่วนใหญ่ 7 ขั้น ไม่ใช่ 12 ขั้นที่ครึ่งหนึ่งขึ้นว่าข้าม
           ตรวจหน้างานเป็นรอบแยกเหนือแถบ · โอนคลังอื่นเป็นขั้นย่อยใต้แถบ · "ข้าม N" เหลือเฉพาะขั้นบนทางที่ไม่ได้ทำจริง
         */}
@@ -2327,8 +2315,9 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
             else if (r.state === "skipped") items.push({ kind: "skip", rows: [r], at: i });
             else items.push({ kind: "step", row: r });
           });
-          // ช่องละไม่ถึง ~74 px ชื่อขั้นภาษาไทยขึ้นบรรทัดละสองสามตัวอักษร อ่านไม่ออก — ซ่อนดีกว่า
-          const tight = stepBarW > 0 && stepBarW / items.length < 74;
+          // ช่องละไม่ถึง ~74 px ชื่อขั้นภาษาไทยขึ้นบรรทัดละสองสามตัวอักษร อ่านไม่ออก — ให้ช่องกว้างเต็มแล้วปัดดูแทน
+          const swipe = stepBarW > 0 && stepBarW / items.length < 74;
+          const nowAt = items.findIndex((it) => it.kind === "step" && (it.row.state === "now" || it.row.state === "loop"));
           const opened = items.find((it) => it.kind === "skip" && it.at === skipOpen);
           const issueSub = path.rows.find((r) => r.key === "ISSUE")?.sub;
           return (
@@ -2384,48 +2373,60 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                   <Text style={styles.trackBack}>→ กลับไประบุอะไหล่</Text>
                 </View>
               ) : null}
-              <View style={styles.steps} onLayout={(e) => setStepBarW(e.nativeEvent.layout.width)}>
+              <View onLayout={(e) => setStepBarW(e.nativeEvent.layout.width)}>
+              <ScrollView
+                ref={stepScroll}
+                horizontal
+                scrollEnabled={swipe}
+                showsHorizontalScrollIndicator={false}
+                // จอกว้างไม่เลื่อน: เนื้อในกว้างเท่ากรอบพอดี ช่องแบ่งเท่ากันแบบเดิม (ไม่งั้นหดกองซ้าย)
+                contentContainerStyle={swipe ? styles.stepsSwipe : { width: stepBarW || "100%" }}
+                // วางขั้นปัจจุบันไว้กลางแถบตอนเปิดใบ (ขั้นท้าย ๆ จะไม่ซ่อนอยู่นอกจอ)
+                onContentSizeChange={() =>
+                  swipe && nowAt > 0 && stepScroll.current?.scrollTo({ x: Math.max(0, nowAt * STEP_SWIPE_W - (stepBarW - STEP_SWIPE_W) / 2), animated: false })
+                }
+              >
+              <View style={[styles.steps, swipe ? styles.stepsRow : styles.stepsFit]}>
                 {items.map((it, k) => {
                   if (it.kind === "skip") {
                     const isOpen = skipOpen === it.at;
                     return (
                       <TouchableOpacity
                         key={`skip-${it.at}`}
-                        style={[styles.stepSkipGroup, tight && styles.stepSkipGroupTight]}
+                        style={styles.stepSkipGroup}
                         activeOpacity={0.7}
                         onPress={() => setSkipOpen(isOpen ? null : it.at)}
                         accessibilityLabel={`ข้าม ${it.rows.length} ขั้น`}
                       >
-                        {k > 0 ? <View style={[styles.stepLine, tight && styles.stepLineTight]} /> : null}
-                        <View style={[styles.stepSkipPill, tight && styles.stepSkipPillTight, isOpen && styles.stepSkipPillOn]}>
+                        {k > 0 ? <View style={styles.stepLine} /> : null}
+                        <View style={[styles.stepSkipPill, isOpen && styles.stepSkipPillOn]}>
                           <Text style={styles.stepSkipText}>ข้าม {it.rows.length}</Text>
                         </View>
-                        {tight ? null : <Text style={styles.stageActor}>{isOpen ? "ปิด" : "กดดู"}</Text>}
+                        <Text style={styles.stageActor}>{isOpen ? "ปิด" : "กดดู"}</Text>
                       </TouchableOpacity>
                     );
                   }
                   const row = it.row;
                   const { state } = row;
                   const current = state === "now" || state === "loop";
-                  const showLabel = !tight || current;
+                  const showLabel = true;
                   const fromHere = !!rolledFrom && row.stages.includes(rolledFrom);
                   return (
                     <TouchableOpacity
                       key={row.key}
-                      style={[styles.step, tight && styles.stepTight, tight && current && styles.stepNowWide]}
+                      style={[styles.step, swipe && styles.stepSwipe]}
                       activeOpacity={0.7}
                       onPress={() => pressStep(row.key, state)}
                       accessibilityLabel={row.a11y}
                     >
                       {k > 0 ? (
                         <View
-                          style={[styles.stepLine, tight && styles.stepLineTight, (state === "done" || state === "now") && styles.stepLineDone]}
+                          style={[styles.stepLine, (state === "done" || state === "now") && styles.stepLineDone]}
                         />
                       ) : null}
                       <View
                         style={[
                           styles.stepDot,
-                          tight && styles.stepDotTight,
                           state === "done" && styles.stepDotDone,
                           // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
                           state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
@@ -2436,15 +2437,15 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                           fromHere && styles.stepDotFrom,
                         ]}
                       >
-                        {state === "now" ? <StepPulse size={tight ? 20 : 30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
+                        {state === "now" ? <StepPulse size={30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
                         {state === "done" ? (
                           <Ionicons name="checkmark" size={15} color="#fff" />
                         ) : state === "now" && partsOut.length ? (
                           <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
                         ) : state === "loop" ? (
-                          <Text style={[styles.stepNum, headingFont, tight && styles.stepNumTight, { color: tone.fg }]}>↻</Text>
+                          <Text style={[styles.stepNum, headingFont, { color: tone.fg }]}>↻</Text>
                         ) : (
-                          <Text style={[styles.stepNum, headingFont, tight && styles.stepNumTight, state === "now" && styles.stepNumNow]}>
+                          <Text style={[styles.stepNum, headingFont, state === "now" && styles.stepNumNow]}>
                             {row.number}
                           </Text>
                         )}
@@ -2467,8 +2468,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                       */}
                       {fromHere ? (
                         <View style={styles.stepFromPill} accessibilityLabel="ขั้นที่ย้อนมา">
-                          {/* แถบแคบ (มือถือ) คอลัมน์กว้างไม่กี่ตัวอักษร — ข้อความยาวจะตัดเป็นแนวตั้ง โชว์แค่ลูกศร วงประส้มบอกที่เหลือ */}
-                          <Text style={styles.stepFromPillText}>{tight ? "↩" : "↩ ย้อนจากตรงนี้"}</Text>
+                          <Text style={styles.stepFromPillText}>↩ ย้อนจากตรงนี้</Text>
                         </View>
                       ) : null}
                       {state === "now" && order.workStatus === MANUAL_STATUS ? (
@@ -2494,6 +2494,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     </TouchableOpacity>
                   );
                 })}
+              </View>
+              </ScrollView>
               </View>
               {/*
                 ขั้นย่อยเบิกอะไหล่ของใบที่โอนจากคลังอื่น — ไม่นับเป็นขั้นหลัก (แบบที่ตกลง) แต่ต้องเห็นว่าของถึงไหน
@@ -2592,8 +2594,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
 
 
       <View style={[card, styles.nowCard, payNow && (payLate ? styles.nowCardPayLate : styles.nowCardPay)]} {...howtoTarget("order.now")}>
-        {/* ออร่าวาดก่อนเนื้อหา — อยู่ใต้ทุกอย่างในการ์ด เหลือให้เห็นแค่ขอบกับแสงรอบนอก */}
-        {urgent ? <UrgentGlow radius={radius.xl} /> : null}
+        {/* ไม่มีออร่าแดงรอบการ์ดใบด่วนแล้ว (เจ้าของงานเอาออก 6 พ.ย. 69) — ป้าย "ด่วน" บนหัวหน้าต่างบอกอยู่แล้ว */}
         <View style={styles.nowHead}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.nowEyebrow, { color: done ? colors.textMuted : tone.fg }]}>
@@ -11533,18 +11534,11 @@ const styles = StyleSheet.create({
   steps: { flexDirection: "row", alignItems: "flex-start", paddingTop: 18, paddingBottom: 4 },
   // แบ่งความกว้างเท่ากันทุกช่อง ไม่มีขั้นต่ำ — ไม่ให้ล้นจนต้องเลื่อน (ดูที่แถบขั้นตอน)
   step: { flex: 1, flexBasis: 0, minWidth: 0, alignItems: "center", paddingHorizontal: 3 },
-  // จอแคบ ชื่อขั้นปัจจุบันเป็นชื่อเดียวที่โชว์ — ให้ที่มากกว่าช่องอื่น
-  stepNowWide: { flexGrow: 3 },
-  // จอแคบ: 11 วง × 30 px ก็เกือบเต็มจอมือถือแล้ว — ลดช่องไฟให้วงไม่ล้น
-  // ขั้นเบิก/โอนอะไหล่ของหัวหน้าภาคเพิ่มมาอีก 2 วง (พ.ย. 69) ช่องไฟ 1 px ก็ล้นแล้ว — วงชิดกันได้ เส้นเชื่อมยังคั่น
-  stepTight: { paddingHorizontal: 0 },
-  stepSkipGroupTight: { width: 40 },
-  // วงเล็กลงด้วย — 10 วง × 30 px + ปุ่มข้าม ยังเกินจอมือถือ 360 px
-  // 13 ขั้นบนจอ 420 เหลือช่องละ 21 px — วง 24 ยื่นเกินช่องสุดท้ายจนแถบเลื่อนได้ 2 px จึงเหลือ 20
-  stepDotTight: { width: 20, height: 20, borderRadius: 10 },
-  stepNumTight: { fontSize: 10, lineHeight: 13 },
-  stepLineTight: { top: 9, marginLeft: 12, marginRight: 12 },
-  stepSkipPillTight: { paddingHorizontal: 4, height: 22, marginTop: 1 },
+  // จอแคบ: ช่องกว้างคงที่ เรียงเกินจอได้ ปัดดูด้วยนิ้ว (ดูที่แถบขั้นตอน)
+  stepSwipe: { flex: 0, flexBasis: "auto", width: STEP_SWIPE_W, flexShrink: 0 },
+  stepsFit: { flex: 1 },
+  stepsSwipe: { flexGrow: 0 },
+  stepsRow: { flexShrink: 0 },
   // อยู่เหนือเส้นเชื่อมของขั้นถัดไป (เส้นลากย้อนมาครึ่งช่องของมันเอง) — ไม่งั้นเส้นพาดทับคำว่า "ข้าม"
   stepSkipGroup: { flexGrow: 0, flexShrink: 0, width: 58, alignItems: "center", zIndex: 2 },
   stepSkipPill: {
@@ -11676,7 +11670,8 @@ const styles = StyleSheet.create({
   codeChipText: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.text, fontVariant: ["tabular-nums"] },
   popTitle: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text },
   popLine: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
-  popLineB: { fontWeight: "700", color: colors.text },
+  popBranch: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.text },
+  popLineFlex: { flexShrink: 1, minWidth: 0 },
   footTool: {
     flexDirection: "row",
     alignItems: "center",
@@ -11689,10 +11684,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   footToolText: { fontSize: 13.5, lineHeight: 20, fontWeight: "600", color: colors.body },
-  footWait: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, backgroundColor: colors.tile },
-  footWaitText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
-  footClose: { height: 40, paddingHorizontal: 16, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  footCloseText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
   statusChip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
