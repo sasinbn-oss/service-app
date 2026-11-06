@@ -1784,6 +1784,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       setStepInfo(key);
       return;
     }
+    // แอดมิน/หัวหน้าภาคปิดงานได้ตั้งแต่ขั้นเข้างาน (ปุ่มล่างเป็น "ปิดงาน" อยู่แล้ว) — วงขั้นปิดงานต้องทำแบบเดียวกับปุ่ม
+    // ไม่งั้นกดชื่อขั้นที่ตรงกับปุ่มแล้วเงียบ (ขั้นนี้ยังเป็นขั้นข้างหน้าเพราะช่างยังไม่ถึง)
+    if (key === "IN_PROGRESS" && state === "future" && !isTech && order?.status === "IN_PROGRESS" && myTurn(order) && !busy) {
+      setClosing(true);
+      return;
+    }
     if ((state !== "now" && state !== "loop") || !order || !myTurn(order) || busy) return;
     // ขั้นเข้างาน: ช่างกดวงขั้น = กดถึงหน้างาน (ไม่มีฟอร์ม) · คนอื่นไม่มีอะไรให้กดที่วงนี้
     if (key === "ARRIVE") {
