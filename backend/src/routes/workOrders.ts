@@ -167,6 +167,7 @@ import {
   SIGNED_URL_TTL_SECONDS,
 } from "../storage/fileStore";
 import { imageUpload, storeImage, thumbnailUrl } from "../storage/imageUpload";
+import { pushLater } from "../push/webPush";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
@@ -2597,8 +2598,64 @@ router.post("/:id/chat", requireAuth, imageUpload, async (req: AuthRequest, res)
       imageThumb: image?.thumbnail ?? null,
     },
   });
+  // แจ้งเตือนเข้ามือถือ (พ.ย. 69) — ไม่รอผล คนส่งไม่ต้องรอผู้ให้บริการ push ของทุกเครื่อง
+  const me = await prisma.user.findUnique({ where: { id: req.auth!.userId }, select: { name: true } });
+  const text = parsed.data.body || "ส่งรูปภาพ";
+  pushLater(chatRecipients(id, req.auth!.userId, req.auth!.role, wo), {
+    title: `แชท ${wo.code}`,
+    body: `${me?.name ?? ""}: ${text.length > 140 ? `${text.slice(0, 140)}…` : text}`,
+    url: `/wo/${wo.code}`,
+    tag: `chat-${id}`,
+  });
   res.json({ messages: await chatThread(id, req.auth!.userId), readOnly: false });
 });
+
+/**
+ * ใครได้แจ้งเตือนแชทใบนี้ — "ใบที่เกี่ยวกับเรา" (เจ้าของงานเลือกข้อ 23)
+ * - ทุกคนที่เคยพิมพ์ในห้องนี้ (ยกเว้นคนส่ง)
+ * - ช่าง/หัวหน้าภาคถามแล้วยังไม่มีแอดมินคนไหนตอบในห้องนี้ → แอดมินทุกคน (ใครว่างตอบ) · มีแอดมินตอบแล้ว = แจ้งแค่คนที่อยู่ในห้อง
+ *   ไม่งั้นแอดมินทุกคนได้แจ้งเตือนทุกข้อความของทุกห้องทั้งวัน แล้วเลิกเปิดแจ้งเตือน
+ * - แอดมินพิมพ์ → ช่างทีมที่รับ (หรือคนที่ถือใบ) + หัวหน้าภาคเจ้าของใบ (+ คนดูแลงาน IT ของใบ IT) — คนที่ต้องตอบเรื่องใบนี้
+ * Admin Spare Part ไม่รับแชทแบบแอดมินทั่วไป (ดูแค่เคลม) · คนที่ถูกลบบัญชีไม่ได้
+ */
+export async function chatRecipients(
+  id: number,
+  sender: number,
+  role: string,
+  wo: { assignedTeam: string | null; assignedToId?: number | null }
+): Promise<number[]> {
+  const posters = await prisma.workOrderMessage.findMany({
+    where: { workOrderId: id, user: { deletedAt: null } },
+    distinct: ["userId"],
+    select: { userId: true, user: { select: { role: true } } },
+  });
+  const out = new Set(posters.map((p) => p.userId));
+  const isAdmin = (r: string) => r === "ADMIN" || r === "SUPER_ADMIN";
+  if (role !== "ADMIN") {
+    if (!posters.some((p) => p.userId !== sender && isAdmin(p.user.role))) {
+      const admins = await prisma.user.findMany({ where: { role: { in: ["ADMIN", "SUPER_ADMIN"] }, deletedAt: null }, select: { id: true } });
+      for (const a of admins) out.add(a.id);
+    }
+  } else {
+    const d = await loadDetail(id);
+    for (const sup of d?.supervisors ?? []) out.add(sup.id);
+    if (d?.itLead) out.add(d.itLead.id);
+    if (wo.assignedToId) out.add(wo.assignedToId);
+    if (wo.assignedTeam) {
+      const techs = await prisma.user.findMany({
+        where: {
+          deletedAt: null,
+          role: { in: ["EMPLOYEE", "SENIOR_TECH"] },
+          OR: [{ team: wo.assignedTeam }, { extraTeams: { has: wo.assignedTeam } }],
+        },
+        select: { id: true },
+      });
+      for (const t of techs) out.add(t.id);
+    }
+  }
+  out.delete(sender);
+  return [...out];
+}
 
 /** ลบข้อความของตัวเองภายใน 5 นาที — แถวยังอยู่ ขึ้นว่า "ลบข้อความแล้ว" · รูปลบออกจากถังด้วย */
 router.delete("/:id/chat/:messageId", requireAuth, async (req: AuthRequest, res) => {
@@ -3262,6 +3319,11 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
  * ใบที่เปิดดูแล้วกลับมาใหม่เมื่อเดินขั้นมาถึงคิวเราอีกรอบ · "อ่านแล้วทั้งหมด" = นับว่าเปิดดูทุกใบตอนนี้
  * นับเฉพาะใบที่เข้าขั้นหลัง User.bellSince — วันที่ขึ้นระบบกระดิ่งเริ่มจากศูนย์ (เจ้าของงานเลือก) ไม่ใช่ทุกใบที่ค้างในกล่องอยู่แล้ว
  */
+/** กระดิ่งของคนนี้โดยไม่มีคำขอ — รอบส่งแจ้งเตือนงานเข้ากล่อง (push/inboxPush.ts) ใช้กติกาเดียวกับตัวเลขบนกระดิ่ง */
+export function bellItemsFor(auth: NonNullable<AuthRequest["auth"]>) {
+  return bellItems({ auth } as AuthRequest);
+}
+
 async function bellItems(req: AuthRequest) {
   const me = req.auth!.userId;
   const bellSince = (await prisma.user.findUnique({ where: { id: me }, select: { bellSince: true } }))?.bellSince ?? new Date(0);

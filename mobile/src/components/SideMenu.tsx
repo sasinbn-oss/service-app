@@ -25,6 +25,7 @@ import { canReviewClaims, useClaimQueueCount } from "../utils/claimQueue";
 import { MainTabParamList } from "../navigation/types";
 import { colors, headingFont, radius, shadow, spacing } from "../theme";
 import ThemeToggle from "./ThemeToggle";
+import PushToggle from "./PushToggle";
 import { showAlert } from "../utils/alert";
 import { FadeSlot, openRevealMs, RevealRow, Turn, useGroupBusy } from "./MenuReveal";
 import { howtoTarget } from "../utils/howtoTarget";
@@ -910,12 +911,14 @@ function PanelTools({ onLeave, footer }: { onLeave: () => void; footer?: React.R
       </TouchableOpacity>
     </View>
   );
-  if (!footer) return tools;
+  // แจ้งเตือนเข้ามือถือ (พ.ย. 69) — แถวเต็มความกว้างเหนือโหมดมืด/ออกจากระบบ (ไม่ขึ้นเมื่อเครื่อง/ตำแหน่งนี้ใช้ไม่ได้)
+  const push = <PushToggle onDark />;
   // แถวเต็มความกว้างของตัวเอง — โหมดมืด + ออกจากระบบ + ปุ่มนี้ในแถวเดียวไม่พอในเมนูกว้าง 300 px
   return (
     <View style={styles.panelFoot}>
       {footer}
-      {tools}
+      <View style={styles.panelPush}>{push}</View>
+      {React.cloneElement(tools, { style: [styles.panelTools, styles.panelToolsUnder] })}
     </View>
   );
 }
@@ -1121,6 +1124,8 @@ const styles = StyleSheet.create({
   },
   // ใต้แถว "วิธีใช้หน้านี้" — เส้นคั่นกับระยะขอบอยู่ที่ panelFoot แล้ว
   panelToolsUnder: { borderTopWidth: 0, paddingHorizontal: 0, paddingTop: 0 },
+  // สวิตช์แจ้งเตือนชิดขอบเดียวกับปุ่มอื่นในท้ายเมนู (PushToggle เว้นขอบในตัว 14)
+  panelPush: { marginHorizontal: -14 },
   panelLogout: {
     flexDirection: "row",
     alignItems: "center",

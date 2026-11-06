@@ -15,6 +15,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import ThemeToggle from "./ThemeToggle";
+import PushToggle from "./PushToggle";
 import { activeMenuKey, menuItemsFor, openMenuKey } from "./SideMenu";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
@@ -165,6 +166,8 @@ export function ProfileMenu({ showName }: { showName: boolean }) {
                 <ThemeToggle />
               </View>
             ) : null}
+            {/* แจ้งเตือนเข้ามือถือ (พ.ย. 69) — บนจอคอมก็เปิดได้ (เบราว์เซอร์คอมแจ้งเตือนได้เหมือนกัน) */}
+            <PushToggle />
             <View style={styles.sep} />
             <Row
               icon="log-out-outline"

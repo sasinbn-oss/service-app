@@ -100,6 +100,8 @@ model User {
   // กระดิ่งงานเข้าใหม่นับเฉพาะใบที่เข้ากล่องหลังเวลานี้ (เจ้าของงานเลือก — วันแรกเริ่มจากศูนย์ ไม่ใช่ทุกใบที่ค้างอยู่แล้ว)
   // คนที่มีอยู่ตอนเพิ่มคอลัมน์ได้เวลาที่รัน migration · คนที่เพิ่มทีหลังได้เวลาที่สร้างบัญชี
   bellSince            DateTime              @default(now())
+  // แจ้งเตือนเข้ามือถือ: ส่งงานเข้ากล่องถึงเวลานี้แล้ว — รอบถัดไปส่งเฉพาะใบที่เข้าขั้นหลังจากนี้ (null = ยังไม่เคยส่ง เริ่มจากตอนสมัคร)
+  pushSince            DateTime?
   vehicleLogs          VehicleLog[]
   branchCheckIns       BranchCheckIn[]
   workLogs             WorkLog[]
@@ -114,6 +116,7 @@ model User {
   trashedWorkOrders    WorkOrder[]           @relation("TrashedWorkOrders")
   workOrderLogs        WorkOrderLog[]
   workOrderSeens       WorkOrderSeen[]
+  pushSubscriptions    PushSubscription[]
   workOrderMessages    WorkOrderMessage[]
   workOrderChatReads   WorkOrderChatRead[]
   adminReviewsSent     AdminReview[]         @relation("AdminReviewsSent")
@@ -1568,4 +1571,18 @@ model ImportRunRow {
   ref     String?
 
   @@index([runId, line])
+}
+
+// แจ้งเตือนเข้ามือถือ (Web Push · เจ้าของงานเลือก พ.ย. 69) — หนึ่งแถวต่อเบราว์เซอร์/แอปที่กดเปิดแจ้งเตือน
+// endpoint ไม่ซ้ำ: เครื่องเดียวเปลี่ยนคนล็อกอิน = แถวเดิมย้ายไปเป็นของคนใหม่ (ไม่ส่งของคนเก่าเข้าเครื่องคนใหม่)
+model PushSubscription {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
