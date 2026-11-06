@@ -687,6 +687,9 @@ export const WORK_ORDER_RESULT_LABELS: Record<string, string> = {
   RECOVERED: "เครื่องใช้งานได้แล้ว (หัวหน้าภาคปิด ไม่ต้องเข้าหน้างาน)",
   // ไม่อยู่ใน WORK_ORDER_RESULTS — ช่างเลือกตอนปิดหน้างานไม่ได้ ได้มาจากปุ่มของหัวหน้าภาคเท่านั้น
   SUPERVISOR_CLOSED: "หัวหน้าภาคปิด · ไม่เข้าหน้างาน",
+  // ใบ IT ที่แก้จากระยะไกล (ปุ่ม "แก้จากระยะไกลแล้ว · ปิดงาน") — ไม่อยู่ใน WORK_ORDER_RESULTS ช่างเลือกเองไม่ได้
+  // แยกรหัสจาก FIXED เพราะรายงาน/รายการต้องแยกใบที่ไม่มีใครเข้าหน้างานออกจากงานซ่อมหน้างานได้
+  REMOTE_FIXED: "แก้จากระยะไกล · ไม่เข้าหน้างาน",
 };
 
 /**
@@ -767,6 +770,7 @@ export const WORK_ORDER_ACTION_LABELS: Record<string, string> = {
   BACKFILLED: "ปิดงานย้อนหลัง (แอดมินกรอกแทน)",
   RECOVERED_CLOSED: "หัวหน้าภาคปิดงาน — เครื่องใช้งานได้แล้ว",
   SUPERVISOR_CLOSED: "หัวหน้าภาคปิดใบงาน",
+  REMOTE_CLOSED: "ปิดงาน (แก้จากระยะไกล)",
   CLAIM_SUBMITTED: "ส่งเคลมอะไหล่เก่า",
   CLAIM_APPROVED: "อนุมัติเคลม · ปิดงาน",
   CLAIM_REJECTED: "ตีกลับเคลม — ให้ช่างแก้",
@@ -1116,6 +1120,8 @@ export const ATTACHMENT_ROLES = [
   ...(["CLAIM_PART", "CLAIM_SYMPTOM", "CLAIM_ERROR_VIDEO", "CLAIM_CHECK_VIDEO"] as const),
   // รูปยืนยันเครื่องใช้งานได้ ของปุ่มหัวหน้าภาคปิดเองที่เอาออกแล้ว — คงไว้ให้ไฟล์ของใบเก่าแสดงป้ายได้
   "RECOVERY",
+  // ภาพหน้าจอหลักฐานของใบ IT ที่แก้จากระยะไกล — ปิดแบบนี้ไม่มีรูปก่อน/หลังซ่อม ภาพนี้คือสิ่งเดียวที่บอกว่าแก้แล้วจริง
+  "REMOTE_FIX",
 ] as const;
 
 /**
@@ -1266,6 +1272,7 @@ export const ATTACHMENT_ROLE_LABELS: Record<string, string> = {
   CLAIM_ERROR_VIDEO: "วิดีโอ Error code (เคลม)",
   CLAIM_CHECK_VIDEO: "วิดีโอการตรวจเช็ค (เคลม)",
   RECOVERY: "เครื่องใช้งานได้แล้ว",
+  REMOTE_FIX: "หลักฐานแก้จากระยะไกล",
 };
 
 export const ATTACHMENT_KIND_LABELS: Record<string, string> = {

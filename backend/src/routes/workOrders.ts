@@ -22,6 +22,7 @@ import {
   coversWorkOrder,
   isCrossTeam,
   OUT_OF_SCOPE,
+  outOfScopeText,
   ownTeamOf,
   ownTeamWhere,
   scopesOf,
@@ -34,6 +35,7 @@ import {
   workOrderVisible,
 } from "../utils/supervisorScope";
 import { cleanName } from "../utils/names";
+import { IT_JOB, IT_LEAD_ADMIN_STAGES, IT_LEAD_TITLE, NO_IT_LEAD_REASON, REMOTE_CLOSE_STAGES, currentItLead, itLeadAmong, onItLeadChange } from "../utils/itLead";
 import { Coverage, TEAM_HOLDER_SELECT, coverageOfTeams, coverageOfUserId, covers, teamsOf } from "../utils/teamGroups";
 import { workOrderTimeline } from "../utils/timeline";
 import {
@@ -1364,11 +1366,15 @@ type SupervisorRef = {
   region: string | null;
   extraRegions: string[];
   supervisedTeams: string[];
+  // หัวหน้าภาคที่ดูแลงาน IT — ใบ IT ทุกใบรอคนนี้ (coversWorkOrder อ่านจาก scope.itLead)
+  itLead?: boolean;
   scope: SupervisorScope;
 };
 
 /** เติมขอบเขต (รวมทีมที่คนอื่นดูแล — ทีมมาก่อนภาค) ให้รายชื่อหัวหน้าภาคที่ดึงมาครั้งเดียว */
-function withScopes<T extends { id: number; region: string | null; extraRegions: string[]; supervisedTeams: string[] }>(sups: T[]): (T & { scope: SupervisorScope })[] {
+function withScopes<T extends { id: number; name?: string; region: string | null; extraRegions: string[]; supervisedTeams: string[]; itLead?: boolean }>(
+  sups: T[]
+): (T & { scope: SupervisorScope })[] {
   const m = scopesOf(sups);
   return sups.map((u) => ({ ...u, scope: m.get(u.id)! }));
 }
@@ -1520,9 +1526,15 @@ function listShape(
             ...(rc.admin ? { phone: s.phone ?? null } : {}),
           }))
       : [];
+  const itLead = w.jobType === IT_JOB ? itLeadAmong(ctx.supervisors) : null;
   return {
     stageActor: actor,
     waitingOnSupervisors,
+    /**
+     * ใบ IT: หัวหน้าภาคที่ดูแลงาน IT — ขั้นของแอดมินในใบ IT คนนี้กดได้ด้วย ("รอแอดมิน / ชื่อ")
+     * ขั้นของหัวหน้าภาคอยู่ใน waitingOnSupervisors อยู่แล้ว · null = ใบไม่ใช่ IT หรือยังไม่ได้เลือกคน
+     */
+    itLead: itLead ? { id: itLead.id, name: itLead.name } : null,
     adminReview: reviewShape(w.adminReviews[0]),
     // จ่ายข้ามทีม — ทีมประจำสาขาที่ถูกข้าม (รายการติด "ข้ามทีม" ต่อชื่อทีม) · ไม่ข้าม = null
     crossFrom: isCrossTeam(w) ? ownTeamOf(w) : null,
@@ -1535,6 +1547,8 @@ function listShape(
     orphanReason:
       actor === "SUPERVISOR" && waitingOnSupervisors.length === 0
         ? (() => {
+            // ใบ IT ไม่ตามภาค/ทีม — ไม่มีคนรับเพราะยังไม่ได้เลือกหัวหน้าภาคที่ดูแลงาน IT (แก้ที่สิทธิ์ผู้ใช้ ไม่ใช่ที่สาขา)
+            if (w.jobType === IT_JOB) return `งาน IT · ภาค${w.branch.region ?? " —"} — ${NO_IT_LEAD_REASON}`;
             const team = w.assignedTeam ?? w.branch.zone ?? w.branch.pmTeam;
             const where = `ภาค${w.branch.region ?? " —"} · ทีม${team ?? " —"}`;
             if (!w.branch.region && !team) return `${where} — สาขายังไม่มีภาคและทีม (ตั้งที่จัดการข้อมูลสาขา)`;
@@ -1843,7 +1857,8 @@ async function blockedForViewer(req: AuthRequest, res: Response, wo: ViewableWor
   if (role === "SUPERVISOR") {
     const scope = viewer.scope ?? (await supervisorScope(req.auth!.userId));
     if (seesWorkOrder(scope, await teamsForSupervisor(scope), wo)) return false;
-    res.status(403).json({ error: OUT_OF_SCOPE });
+    // ใบ IT บอกว่าอยู่กับใคร — หัวหน้าภาคที่เคยถือใบนี้ (ก่อนแยกงาน IT) เปิดลิงก์เก่าแล้วรู้ว่าไปหาใคร
+    res.status(403).json({ error: outOfScopeText(scope, wo) });
     return true;
   }
   const me = req.auth!.userId;
@@ -2008,6 +2023,10 @@ async function writeLogPair(
  * แต่ละครั้งต้องดึงใบที่รอหัวหน้าภาคทั้งบริษัท · ช้าไปไม่เกินนาทีไม่มีผลกับงาน (ใบไม่มีคนรับค้างเป็นวัน)
  */
 let orphanCache: { at: number; ids: number[] } | null = null;
+// เปลี่ยนคนถือใบ IT (หรือคนถือถูกลบ/เปลี่ยนบทบาท) = ชุดไม่มีคนรับเปลี่ยนทันที — ไม่รอครบนาที (ดู utils/itLead.ts)
+onItLeadChange(() => {
+  orphanCache = null;
+});
 async function orphanSupervisorIds(): Promise<number[]> {
   if (orphanCache && Date.now() - orphanCache.at < 60_000) return orphanCache.ids;
   const ids = await computeOrphanSupervisorIds();
@@ -2022,7 +2041,11 @@ async function computeOrphanSupervisorIds(): Promise<number[]> {
       where: { ...ALIVE, status: { in: stages } },
       select: { id: true, jobType: true, assignedTeam: true, branch: { select: { region: true, zone: true, pmTeam: true } } },
     }),
-    prisma.user.findMany({ where: { role: "SUPERVISOR", deletedAt: null }, select: { id: true, region: true, extraRegions: true, supervisedTeams: true } }),
+    // itLead: ใบ IT รอหัวหน้าภาคที่ดูแลงาน IT คนเดียว — ยังไม่ได้เลือกคน = ใบ IT ที่รอหัวหน้าภาคเป็น "ไม่มีคนรับ" ทุกใบ
+    prisma.user.findMany({
+      where: { role: "SUPERVISOR", deletedAt: null },
+      select: { id: true, name: true, region: true, extraRegions: true, supervisedTeams: true, itLead: true },
+    }),
   ]);
   const scopes = withScopes(sups);
   return rows.filter((w) => !scopes.some((u) => coversWorkOrder(u.scope, w))).map((w) => w.id);
@@ -2086,6 +2109,15 @@ function stagesWaitingOn(auth: AuthRequest["auth"]): string[] {
   );
 }
 
+/**
+ * คนถามเป็นหัวหน้าภาคที่ดูแลงาน IT ไหม — อ่านสด (เปลี่ยนคนแล้วกล่องงานต้องย้ายทันที) · ถามเฉพาะหัวหน้าภาค
+ * ดูในฐานะ = ตามคนที่ถูกดู (userId ในโทเคนคือคนนั้น) แอดมินจึงเห็นกล่องงานของหัวหน้า IT ได้ตรงกับที่เขาเห็นจริง
+ */
+async function amItLead(req: AuthRequest): Promise<boolean> {
+  if (req.auth!.role !== "SUPERVISOR") return false;
+  return (await currentItLead())?.id === req.auth!.userId;
+}
+
 /** ตรวจเคลมอะไหล่ได้ไหม — Admin Spare Part (คนเช็คประกัน) และ Super Admin */
 function canReviewClaims(auth: AuthRequest["auth"]) {
   return !!(auth?.partsAdmin || auth?.superAdmin);
@@ -2143,7 +2175,7 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
   const now = new Date();
   // ค่าที่จำไว้ 30 วิพอสำหรับการอ่าน — ปุ่มที่ตัดสินจริงอ่านสดเอง (ดู readCutoff)
   const cfgP = readCutoff();
-  const [orphans, outsourceNow, scope, inboxScope, cfg, cutoffInbox] = await Promise.all([
+  const [orphans, outsourceNow, scope, inboxScope, cfg, cutoffInbox, itLeadMe] = await Promise.all([
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     // รีเฟรชก่อนเสมอ — แถวในรายการติดธง outsource จากรายชื่อนี้ (แท็บ "ใบงาน SUB" ของกล่องงานหัวหน้าภาค)
     freshOutsource(),
@@ -2151,8 +2183,9 @@ async function listWhere(req: AuthRequest, q: z.infer<typeof listQuery>) {
     scopeFor(req, true),
     cfgP,
     cutoffInboxFor(req.auth, cfgP, now),
+    amItLead(req),
   ]);
-  const inbox = inboxFilter(req.auth, inboxStages, orphans, outsourceNow, cutoffInbox);
+  const inbox = inboxFilter(req.auth, inboxStages, orphans, outsourceNow, cutoffInbox, itLeadMe);
   const statusFilter =
     q.status === "ALL"
       ? {}
@@ -2225,9 +2258,15 @@ function inboxFilter(
   inboxStages: string[],
   orphans: number[],
   outsourceNow: Set<string>,
-  cutoff: CutoffInbox | null = null
+  cutoff: CutoffInbox | null = null,
+  itLeadMe = false
 ): Prisma.WorkOrderWhereInput {
   const or: Prisma.WorkOrderWhereInput[] = [{ status: { in: inboxStages } }];
+  /**
+   * หัวหน้าภาคที่ดูแลงาน IT ถือใบ IT ตั้งแต่ต้นจนจบ — ขั้นของแอดมินในใบ IT เข้ากล่องของคนนี้ด้วย (ทำแทนได้ ดู itLeadActs)
+   * ใบเหล่านี้ยังอยู่ในกล่องแอดมินตามเดิม (เจ้าของงานแก้ 6 พ.ย. 69: แอดมินยังทำได้ แค่แยกหัวข้อ "งาน IT" ที่หน้าจอ)
+   */
+  if (itLeadMe) or.push({ jobType: IT_JOB, status: { in: [...IT_LEAD_ADMIN_STAGES] } });
   if (orphans.length) or.push({ id: { in: orphans } });
   if (auth?.role === "SUPERVISOR") {
     // หัวหน้าภาคปิดงานแทนทีม outsource — ใบที่ทีม outsource เข้างานอยู่เข้ากล่องของหัวหน้าภาคด้วย
@@ -2343,8 +2382,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     prisma.workOrder.count({ where: { AND: [inboxScope, inbox] } }),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      // phone ออกไปเฉพาะคำตอบของแอดมิน (listShape)
-      select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true },
+      // phone ออกไปเฉพาะคำตอบของแอดมิน (listShape) · itLead: ใบ IT รอคนนี้ (ชื่อขึ้นใน "รอใคร")
+      select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true, itLead: true },
       orderBy: { name: "asc" },
     }),
     payTab
@@ -2841,12 +2880,13 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
 router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
   // ขอบเขต · ใบไม่มีคนรับ · รายชื่อ outsource · คำขอนัดด่วน/เลยนัด (แอดมิน) ไม่ขึ้นต่อกัน — ถามพร้อมกัน แล้วนับทีเดียว
   // เงื่อนไขเดียวกับแท็บกล่องงาน (inboxFilter) ตัวเลขบนเมนูกับจำนวนแถวในกล่องจึงตรงกันเสมอ รวมคำขอที่หัวหน้าภาคเพิ่งส่ง
-  const [scope, orphans, outsource, cutoffInbox] = await Promise.all([
+  const [scope, orphans, outsource, cutoffInbox, itLeadMe] = await Promise.all([
     scopeFor(req, true),
     inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
     req.auth!.role === "SUPERVISOR" ? freshOutsource() : Promise.resolve(new Set<string>()),
     // ถามเวลาปิดนัดเฉพาะเมื่อใช้ — cutoffInboxFor ของคนอื่นคืน null โดยไม่รอ ถ้าถามไว้แล้วพังจะเป็น rejection ที่ไม่มีใครจับ
     inboxTakesOrphans(req.auth) ? cutoffInboxFor(req.auth, readCutoff(), new Date()) : Promise.resolve(null),
+    amItLead(req),
   ]);
   /**
    * ตัวเลขข้างเมนู "ถังขยะใบงาน" (แอดมินที่ลบได้) — ถามพร้อมกับกล่องงานในรอบเดียว เมนูข้างโหลดตัวนี้ทุกครั้งที่เปลี่ยนหน้าอยู่แล้ว
@@ -2855,7 +2895,7 @@ router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
   const trashKeeperAsks = req.auth!.role === "ADMIN" && !req.auth!.partsAdmin;
   const [inbox, trash] = await Promise.all([
     prisma.workOrder.count({
-      where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource, cutoffInbox)] },
+      where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource, cutoffInbox, itLeadMe)] },
     }),
     trashKeeperAsks ? prisma.workOrder.count({ where: IN_TRASH }) : Promise.resolve(null),
   ]);
@@ -3599,7 +3639,8 @@ async function loadDetail(id: number) {
     freshOutsource(),
     prisma.user.findMany({
       where: { role: "SUPERVISOR", deletedAt: null },
-      select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true },
+      // itLead: ใบ IT — "ใครดูแลใบนี้" คือหัวหน้าภาคที่ดูแลงาน IT ไม่ใช่หัวหน้าภาคตามพื้นที่
+      select: { id: true, name: true, phone: true, region: true, extraRegions: true, supervisedTeams: true, itLead: true },
       orderBy: { name: "asc" },
     }),
     // ชื่อช่างที่ส่ง/คนตัดสินเคลมของใบนี้ — PartClaim ไม่มี relation ไปหาผู้ใช้ จึง join เองในคำสั่งเดียว ถามพร้อมกับข้างบน
@@ -3645,16 +3686,20 @@ async function loadDetail(id: number) {
    * คนเปิดใบจะได้ไม่งงว่าทำไมทีมอื่นมาอยู่ในใบ หรือทำไมหัวหน้าภาคอีกคนเห็นแต่กดไม่ได้
    */
   let crossTeam: { ownTeam: string; assignedTeam: string; watchers: string[] } | null = null;
-  if (isCrossTeam(row)) {
+  // ใบ IT: หัวหน้าภาคของทีมที่รับไม่เห็นใบ (ใบ IT เป็นของหัวหน้าภาคที่ดูแลงาน IT คนเดียว) — ไม่มีใครเป็น "ผู้ดู" ให้บอก
+  if (isCrossTeam(row) && row.jobType !== IT_JOB) {
     const sent = cleanName(row.assignedTeam) ?? "";
     const watchers: string[] = [];
     for (const u of scoped) if (!coversWorkOrder(u.scope, row) && (await teamsForSupervisor(u.scope)).has(sent)) watchers.push(u.name);
     crossTeam = { ownTeam: ownTeamOf(row) ?? "", assignedTeam: row.assignedTeam ?? "", watchers };
   }
+  const lead = itLeadAmong(sups);
   return {
     row,
     logs,
     supervisors,
+    // หัวหน้าภาคที่ดูแลงาน IT (ใบ IT เท่านั้น) — หน้าใบงานบอกว่าขั้นของแอดมินในใบนี้คนนี้กดได้ด้วย · null = ยังไม่ได้เลือกคน
+    itLead: row.jobType === IT_JOB && lead ? { id: lead.id, name: lead.name } : null,
     crossTeam,
     claimUsers: new Map(claimUsers.map((u) => [u.id, { name: u.name, code: u.employeeCode }])),
     approvedModel: approved[0]?.model ?? null,
@@ -3861,7 +3906,7 @@ function stripPickForArea<
  * แอดมินที่เปิดคำขอนัดด่วนจากหน้าใบงานต้องโทรถามหัวหน้าภาค (<ชื่อ> <เบอร์>) ได้เหมือนเปิดจากงานของฉันวันนี้
  * ปุ่มเปลี่ยนขั้นที่คืนรายละเอียด (detailFor) ไม่รู้ว่าใครเรียก จึงไม่ส่งเบอร์เลย — หัวหน้าภาค/ช่าง/ทีม Area ไม่ได้เบอร์ของกันและกัน
  */
-function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedModel, cfg }: Detail, opts?: { phones?: boolean }) {
+function detailBody({ row, logs, supervisors, itLead, crossTeam, claimUsers, approvedModel, cfg }: Detail, opts?: { phones?: boolean }) {
   // รอบปัจจุบันเริ่มตั้งแต่ถูกจ่ายให้ทีมครั้งล่าสุด — อ่านจากประวัติที่ดึงมาแล้ว
   // ไม่ต้องยิงถามฐานข้อมูลซ้ำ (logs เรียงใหม่ก่อนเก่าอยู่แล้ว)
   const roundStart =
@@ -3956,6 +4001,9 @@ function detailBody({ row, logs, supervisors, crossTeam, claimUsers, approvedMod
     ),
     // ย้อนขั้นมา (ป้าย/กล่องบนหน้าใบงาน) และค่าเดิมก่อนย้อนให้ฟอร์มเติม — ดู utils/rollback.ts
     supervisors: supervisors.map(({ id, name, phone }) => (opts?.phones ? { id, name, phone } : { id, name })),
+    itLead,
+    // ปุ่ม "แก้จากระยะไกลแล้ว · ปิดงาน" ขึ้นได้ในขั้นไหน (ใบ IT เท่านั้น) — กฎเดียวกับที่ POST /remote-close ตัดสิน (ดู remoteCloseBlock)
+    remoteCloseStages: row.jobType === IT_JOB ? REMOTE_CLOSE_STAGES : [],
     crossTeam,
     rolledBack: activeRollback(row.status, logs),
     rollbackPrefill: rollbackPrefill(row.status, logs),
@@ -5353,6 +5401,15 @@ router.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
 // ทั้งที่ยังไม่มีใครเช็คว่ามีอะไหล่หรือเปล่า
 
 /**
+ * หัวหน้าภาคที่ดูแลงาน IT ทำขั้นของแอดมินในใบ IT ได้ ("ทำได้ทั้งหมด" — เจ้าของงานตัดสิน 6 พ.ย. 69)
+ * เฉพาะใบ IT และเฉพาะขั้นในรายการ (ไม่รวมตรวจเคลม) · ใบ CM ของคนเดียวกันยังเป็นของแอดมินตามเดิม
+ * scope = ขอบเขตของคนกด (null = ไม่ใช่หัวหน้าภาค)
+ */
+function itLeadActs(scope: SupervisorScope | null | undefined, wo: { jobType: string; status: string }) {
+  return !!scope?.itLead && wo.jobType === IT_JOB && IT_LEAD_ADMIN_STAGES.includes(wo.status);
+}
+
+/**
  * ตรวจว่าคนนี้ยุ่งกับใบงานนี้ได้ไหม ก่อนดูว่าขั้นถูกหรือเปล่า
  *
  * หัวหน้าภาคดูแลเฉพาะภาคตัวเอง ถ้าไม่กันไว้ หัวหน้าภาคใต้จะจ่ายงานภาคเหนือได้
@@ -5428,7 +5485,7 @@ async function guardStage(
     return null;
   }
 
-  if (!canActOnStage(role, wo.status)) {
+  if (!canActOnStage(role, wo.status) && !itLeadActs(scope, wo)) {
     res.status(403).json({
       error: `ขั้นนี้เป็นของ${actorLabelFor(wo.status) ?? WORK_ORDER_STAGE_ACTOR[wo.status]} ไม่ใช่ของคุณ`,
     });
@@ -7433,11 +7490,10 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   // Admin Spare Part กับ "ดูในฐานะผู้ใช้อื่น" ถูกกันที่ middleware แล้ว (เขียนไม่ได้)
-  if (req.auth!.role !== "ADMIN") {
-    return res.status(403).json({
-      error: "เลื่อนวันนัดได้เฉพาะแอดมิน (คนคุยกับร้าน) — ทีมไม่ว่างวันนัด ใช้ “ทีมไม่ว่าง — ส่งกลับแอดมิน” ตอนปล่อยงาน",
-    });
-  }
+  // หัวหน้าภาคที่ดูแลงาน IT เลื่อนวันนัดของใบ IT ได้เหมือนแอดมิน (เป็นคนคุยกับร้านเองในใบ IT) — ตรวจประเภทใบหลังอ่านใบ
+  const NOT_ADMIN = "เลื่อนวันนัดได้เฉพาะแอดมิน (คนคุยกับร้าน) — ทีมไม่ว่างวันนัด ใช้ “ทีมไม่ว่าง — ส่งกลับแอดมิน” ตอนปล่อยงาน";
+  const leadScope = req.auth!.role === "SUPERVISOR" ? await supervisorScope(req.auth!.userId) : null;
+  if (req.auth!.role !== "ADMIN" && !leadScope?.itLead) return res.status(403).json({ error: NOT_ADMIN });
   const parsed = rescheduleSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
 
@@ -7447,12 +7503,13 @@ router.post("/:id/reschedule", requireAuth, async (req: AuthRequest, res) => {
       where: { id },
       select: {
         code: true, status: true, scheduledAt: true, scheduledTime: true, appointmentStatus: true, assignedTeam: true, outageId: true,
-        updatedAt: true, isTest: true, urgentReleaseFor: true,
+        updatedAt: true, isTest: true, urgentReleaseFor: true, jobType: true, deletedAt: true,
       },
     }),
     readCutoff({ fresh: true }),
   ]);
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (leadScope && (wo.jobType !== IT_JOB || wo.deletedAt)) return res.status(403).json({ error: NOT_ADMIN });
   const recallTo = RESCHEDULE_RECALL_STAGES[wo.status] as string | undefined;
   if (!RESCHEDULE_STAY_STAGES.includes(wo.status) && !recallTo) {
     return res.status(409).json({
@@ -8545,6 +8602,7 @@ async function outOfScopeReason(
   scope: SupervisorScope,
   wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
 ) {
+  if (wo.jobType === IT_JOB) return outOfScopeText(scope, wo);
   return seesWorkOrder(scope, await teamsForSupervisor(scope), wo) ? VIEW_ONLY : OUT_OF_SCOPE;
 }
 
@@ -9021,7 +9079,9 @@ const partsEtaSchema = z.object({
 router.post("/:id/parts-eta", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
-  if (req.auth!.role !== "ADMIN") return res.status(403).json({ error: "เลื่อนวันคาดว่าของเข้าได้เฉพาะแอดมิน" });
+  // หัวหน้าภาคที่ดูแลงาน IT ทำขั้นเช็คอะไหล่ของใบ IT แทนแอดมินได้ — วันคาดว่าของเข้าเป็นส่วนหนึ่งของขั้นนั้น (ตรวจประเภทใบข้างล่าง)
+  const etaLead = req.auth!.role === "SUPERVISOR" ? await supervisorScope(req.auth!.userId) : null;
+  if (req.auth!.role !== "ADMIN" && !etaLead?.itLead) return res.status(403).json({ error: "เลื่อนวันคาดว่าของเข้าได้เฉพาะแอดมิน" });
   const parsed = partsEtaSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
 
@@ -9031,10 +9091,13 @@ router.post("/:id/parts-eta", requireAuth, async (req: AuthRequest, res) => {
       code: true,
       status: true,
       partsExpectedAt: true,
+      jobType: true,
+      deletedAt: true,
       parts: { where: { kind: "WAITING", inStock: false }, select: { id: true } },
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (etaLead && (wo.jobType !== IT_JOB || wo.deletedAt)) return res.status(403).json({ error: "เลื่อนวันคาดว่าของเข้าได้เฉพาะแอดมิน" });
   if (!PARTS_OUT_STAGES.has(wo.status) || wo.parts.length === 0) {
     return res.status(409).json({ error: `${wo.code} ไม่ได้รออะไหล่ที่หมดอยู่ — ไม่มีวันคาดว่าของเข้าให้แก้` });
   }
@@ -11349,6 +11412,111 @@ router.post("/:id/backfill-close", requireAuth, requireAdmin, async (req: AuthRe
 });
 
 /**
+ * "แก้จากระยะไกลแล้ว · ปิดงาน" — ใบ IT ที่แก้ได้โดยไม่ต้องส่งช่าง (เจ้าของงานตัดสิน 6 พ.ย. 69)
+ *
+ * งาน IT ส่วนใหญ่ (ระบบจ่ายเงิน · แอป · เครือข่าย) แก้จากออฟฟิศได้ เดิมต้องเดินใบไปถึงช่างทั้งที่ไม่มีใครต้องไป
+ * กดได้: แอดมิน และหัวหน้าภาคที่ดูแลงาน IT · ใบ IT เท่านั้น · ขั้นใน REMOTE_CLOSE_STAGES (เหตุผลอยู่ที่ utils/itLead.ts)
+ * บังคับ: บันทึกสิ่งที่ทำ + ภาพหน้าจอหลักฐานอย่างน้อย 1 รูป (แนบด้วยบทบาท REMOTE_FIX ก่อนกด) · ไม่ใช้กฎรูปก่อน/หลังซ่อม/ป้ายรุ่น
+ * ผล: DONE ทันที (ไม่ผ่านตรวจเคลม — ไม่มีอะไหล่ถูกใช้) · ช่องปิดงานเดียวกับปิดปกติ (closedAt/closedById/closeResult/closeNote)
+ * ประวัติแยกเป็น REMOTE_CLOSED — รายการ/รายงาน/ทามไลน์บอกได้ว่า "ปิดงาน (แก้จากระยะไกล)"
+ */
+const REMOTE_CLOSE_MIN_NOTE = 10;
+const remoteCloseSchema = z.object({ note: z.string().trim().max(1000).optional() });
+
+/** คนนี้ปิดใบนี้แบบแก้จากระยะไกลได้ไหม (ไม่ดูขั้น) — คืนข้อความเหตุผลเมื่อไม่ได้ · null = ได้ */
+async function remoteCloseDenied(req: AuthRequest, id: number): Promise<string | null> {
+  const role = req.auth!.role;
+  if (role !== "ADMIN" && role !== "SUPERVISOR") return `ปิดแบบแก้จากระยะไกลได้เฉพาะแอดมินกับ${IT_LEAD_TITLE}`;
+  // Admin Spare Part ถูกกันที่ middleware แล้ว (เขียนได้เฉพาะเคลม/อะไหล่)
+  const [wo, scope] = await Promise.all([
+    prisma.workOrder.findUnique({ where: { id }, select: { jobType: true } }),
+    role === "SUPERVISOR" ? supervisorScope(req.auth!.userId) : null,
+  ]);
+  if (!wo) return "ไม่พบใบงานนี้";
+  if (wo.jobType !== IT_JOB) return "ปิดแบบแก้จากระยะไกลได้เฉพาะใบงาน IT";
+  if (scope && !scope.itLead) return outOfScopeText(scope, wo);
+  return null;
+}
+
+/**
+ * ขั้นนี้ปิดแบบแก้จากระยะไกลได้ไหม — นอกจากขั้นในรายการ ต้องไม่มีของออกจากคลังแล้ว (ใบเบิก/ใบโอนมีเลข)
+ * ของที่เบิกออกมาแล้วต้องคืนคลังหรือใช้จริง — ปิดเงียบ ๆ ตรงนี้ = ของหายจากสต็อกโดยไม่มีใครบันทึก
+ */
+function remoteCloseBlock(wo: { code: string; status: string; parts: { requisitionNo: string | null; transferNo: string | null }[] }) {
+  if (wo.status === "DONE") return `${wo.code} ปิดไปแล้ว`;
+  if (wo.status === "CANCELLED") return `${wo.code} ถูกยกเลิกไปแล้ว`;
+  if (!REMOTE_CLOSE_STAGES.includes(wo.status)) {
+    return `${wo.code} อยู่ขั้น "${WORK_ORDER_STATUS_LABELS[wo.status] ?? wo.status}" — ปิดแบบแก้จากระยะไกลได้เฉพาะตอนที่ยังไม่มีช่างถือใบ และไม่มีของ/เงินกำลังเดิน`;
+  }
+  if (wo.parts.some((p) => p.requisitionNo || p.transferNo)) {
+    return `${wo.code} เบิกอะไหล่ออกจากคลังแล้ว — คืนคลังหรือย้อนขั้นก่อน จึงปิดแบบแก้จากระยะไกลได้`;
+  }
+  return null;
+}
+
+router.post("/:id/remote-close", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const denied = await remoteCloseDenied(req, id);
+  if (denied) return res.status(denied === "ไม่พบใบงานนี้" ? 404 : 403).json({ error: denied });
+  const parsed = remoteCloseSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const note = parsed.data.note?.trim() ?? "";
+  if (note.length < REMOTE_CLOSE_MIN_NOTE) {
+    return res.status(400).json({ error: `พิมพ์สิ่งที่แก้อย่างน้อย ${REMOTE_CLOSE_MIN_NOTE} ตัวอักษร — เช่น รีสตาร์ทระบบจ่ายเงิน · ตั้งค่า Wi-Fi ใหม่` });
+  }
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: {
+      code: true,
+      status: true,
+      deletedAt: true,
+      parts: { where: { kind: "WAITING" }, select: { requisitionNo: true, transferNo: true } },
+    },
+  });
+  if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (wo.deletedAt) return res.status(404).json({ error: TRASHED_TEXT, trashed: true });
+  const block = remoteCloseBlock(wo);
+  if (block) return res.status(409).json({ error: block, status: wo.status });
+  // หลักฐานของรอบนี้ — ใบที่ถูกเปิดใหม่ (REOPENED) ไม่เอาภาพของการปิดครั้งก่อนมานับ
+  const reopened = await prisma.workOrderLog.findFirst({
+    where: { workOrderId: id, action: "REOPENED" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  const shots = await prisma.workOrderAttachment.count({
+    where: { workOrderId: id, role: "REMOTE_FIX", ...(reopened ? { createdAt: { gte: reopened.createdAt } } : {}) },
+  });
+  if (shots === 0) return res.status(400).json({ error: `ต้องแนบ${ATTACHMENT_ROLE_LABELS.REMOTE_FIX}อย่างน้อย 1 รูป (ภาพหน้าจอ)` });
+
+  const text = `แก้จากระยะไกล — ${note}`;
+  try {
+    await prisma.$transaction(async (tx) => {
+      // เขียนแบบมีเงื่อนไขขั้น — อีกคนเพิ่งปล่อยงานให้ช่าง/เบิกของระหว่างกด ต้องไม่ปิดทับ
+      const done = await tx.workOrder.updateMany({
+        where: { id, status: wo.status, deletedAt: null },
+        data: {
+          status: "DONE",
+          closedAt: new Date(),
+          closedById: req.auth!.userId,
+          closeResult: "REMOTE_FIXED",
+          closeNote: text,
+          workStatus: workStatusForStage("DONE"),
+        },
+      });
+      if (done.count === 0) throw new Refusal(409, `${wo.code} เพิ่งถูกเปลี่ยนขั้นโดยคนอื่น — โหลดใบงานใหม่แล้วดูอีกครั้ง`);
+      // รายการอะไหล่ที่ช่างส่งค้างไว้จบไปกับใบ (แบบหัวหน้าภาคปิดใบงาน)
+      await voidOpenPick(tx, id, "ปิดงาน (แก้จากระยะไกล)");
+      await writeLog(tx, id, req.auth!.userId, "REMOTE_CLOSED", "DONE", text);
+    }, STAGE_TX);
+  } catch (e) {
+    if (e instanceof Refusal) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
+  res.json(await detailFor(id));
+});
+
+/**
  * หัวหน้าภาคปิดใบงานเอง ไม่ต้องส่งช่างเข้าหน้างาน (เจ้าของงานขอ ต.ค. 69 รอบสอง)
  *
  * ต่างจากยกเลิก: ยกเลิก = ไม่ทำงานนี้แล้ว · ปิดแบบนี้ = ปัญหาจบแล้ว นับเป็นงานที่ปิด
@@ -12286,6 +12454,13 @@ router.post("/:id/attachments", requireAuth, attachmentUpload, async (req: AuthR
   // ทำให้ช่างแนบวิดีโอซ้ำสองที่แล้วนับว่าครบ ทั้งที่ไม่มีรูปให้ซูมดูรหัสอะไหล่
   if (role === "INSPECT_VIDEO" && kind !== "VIDEO") {
     return res.status(400).json({ error: "วิดีโอการทำงานต้องเป็นไฟล์วิดีโอ" });
+  }
+  // หลักฐานแก้จากระยะไกล = ภาพหน้าจอ · แนบได้เฉพาะคนที่ปิดแบบนี้ได้ (แอดมิน / หัวหน้าภาคที่ดูแลงาน IT ในใบ IT)
+  // ไม่งั้นรูปที่คนอื่นแนบค้างไว้จะนับเป็นหลักฐานให้การปิดครั้งหน้าโดยที่คนปิดไม่ได้แนบเอง
+  if (role === "REMOTE_FIX") {
+    if (kind !== "IMAGE") return res.status(400).json({ error: `${ATTACHMENT_ROLE_LABELS.REMOTE_FIX}ต้องเป็นรูปภาพ (ภาพหน้าจอ)` });
+    const why = await remoteCloseDenied(req, id);
+    if (why) return res.status(403).json({ error: why });
   }
   if ((role === "INSPECT_SITE" || role === "INSPECT_PART") && kind !== "IMAGE") {
     return res.status(400).json({ error: `${ATTACHMENT_ROLE_LABELS[role].replace(" (ตรวจ)", "")}ต้องเป็นรูปภาพ` });

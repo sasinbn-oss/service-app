@@ -12,6 +12,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { cleanName } from "./names";
+import { IT_JOB, IT_LEAD_TITLE } from "./itLead";
 
 export interface SupervisorScope {
   /** ภาคที่ดูแลทั้งหมด (ผ่าน cleanName แล้ว) — ว่าง = ดูแลตามทีมอย่างเดียว */
@@ -25,9 +26,24 @@ export interface SupervisorScope {
    * ไม่ส่งมา (undefined) = ไม่ตัดอะไร เหมือนเดิม
    */
   claimed?: string[];
+  /**
+   * หัวหน้าภาคที่ดูแลงาน IT (User.itLead · เจ้าของงานตัดสิน 6 พ.ย. 69) — ใบงาน IT ทุกภาคเป็นของคนนี้
+   * ใบ IT ไม่ขึ้นกับภาค/ทีมเลย: คนนี้ได้ทุกใบ หัวหน้าภาคคนอื่นไม่ได้สักใบ (แม้ทีมตัวเองรับข้ามทีมไป)
+   * งานประเภทอื่นของคนนี้ตามภาค/ทีมเหมือนเดิม · ไม่ส่งมา = ไม่ได้ถือ
+   */
+  itLead?: boolean;
+  /** ชื่อคนที่ถือใบ IT อยู่ตอนนี้ (ใครก็ได้ ไม่ใช่แค่ตัวเอง) — ข้อความ "ใบ IT อยู่กับ…" ตอนคนอื่นกดใบ IT · null = ยังไม่มีคนถือ */
+  itLeadName?: string | null;
 }
 
-type SupervisorRow = { id: number; region: string | null; extraRegions?: string[] | null; supervisedTeams: string[] };
+type SupervisorRow = {
+  id: number;
+  name?: string;
+  region: string | null;
+  extraRegions?: string[] | null;
+  supervisedTeams: string[];
+  itLead?: boolean | null;
+};
 
 /**
  * ภาคทั้งหมดของผู้ใช้หนึ่งคน = region ตามด้วย extraRegions · ตัดค่าว่าง/ซ้ำ เรียงตามที่ตั้ง
@@ -54,11 +70,12 @@ export function scopesOf(sups: SupervisorRow[]): Map<number, SupervisorScope> {
       const c = cleanName(t);
       if (c) owners.set(c, (owners.get(c) ?? new Set()).add(u.id));
     }
+  const lead = sups.find((u) => u.itLead) ?? null;
   return new Map(
     sups.map((u) => {
       const mine = new Set((u.supervisedTeams ?? []).map(cleanName));
       const claimed = [...owners.entries()].filter(([t, ids]) => !mine.has(t) && [...ids].some((id) => id !== u.id)).map(([t]) => t);
-      return [u.id, { regions: regionsOf(u), teams: u.supervisedTeams ?? [], claimed }];
+      return [u.id, { regions: regionsOf(u), teams: u.supervisedTeams ?? [], claimed, itLead: !!u.itLead, itLeadName: lead?.name ?? null }];
     })
   );
 }
@@ -66,9 +83,11 @@ export function scopesOf(sups: SupervisorRow[]): Map<number, SupervisorScope> {
 export async function supervisorScope(userId: number): Promise<SupervisorScope> {
   const sups = await prisma.user.findMany({
     where: { OR: [{ id: userId }, { role: "SUPERVISOR", deletedAt: null }] },
-    select: { id: true, region: true, extraRegions: true, supervisedTeams: true },
+    // role/deletedAt: คนถามเองถูกดึงมาเสมอ (OR id) — ถือ itLead ได้ก็ต่อเมื่อยังเป็นหัวหน้าภาคที่ไม่ถูกลบ
+    select: { id: true, name: true, role: true, deletedAt: true, region: true, extraRegions: true, supervisedTeams: true, itLead: true },
   });
-  return scopesOf(sups).get(userId) ?? { regions: [], teams: [] };
+  const rows = sups.map((u) => ({ ...u, itLead: u.itLead && u.role === "SUPERVISOR" && !u.deletedAt }));
+  return scopesOf(rows).get(userId) ?? { regions: [], teams: [] };
 }
 
 type ScopedOrder = {
@@ -156,8 +175,12 @@ export function workOrderInScope(s: SupervisorScope): Prisma.WorkOrderWhereInput
     );
   }
   // ยังไม่ได้ตั้งภาคหรือทีม = ไม่เห็นอะไร (แบบเดิมที่ไม่มีภาค)
-  return or.length ? { OR: or } : { id: -1 };
+  const area: Prisma.WorkOrderWhereInput = or.length ? { OR: or } : { id: -1 };
+  // ใบ IT ไม่ตามภาค/ทีม — เป็นของหัวหน้าภาคที่ดูแลงาน IT ทุกใบ · คนอื่นไม่ได้สักใบ (ดู SupervisorScope.itLead)
+  return s.itLead ? { OR: [{ AND: [NOT_IT, area] }, { jobType: IT_JOB }] } : { AND: [NOT_IT, area] };
 }
+
+const NOT_IT: Prisma.WorkOrderWhereInput = { jobType: { not: IT_JOB } };
 
 /** ใบที่จ่ายข้ามทีมมาให้ทีมเหล่านี้ (ทีมที่รับไม่ใช่ทีมประจำสาขา) — เทียบทีละทีมเพราะ where เทียบสองคอลัมน์ไม่ได้ */
 function receivedWhere(teams: Iterable<string>): Prisma.WorkOrderWhereInput[] {
@@ -170,12 +193,14 @@ function receivedWhere(teams: Iterable<string>): Prisma.WorkOrderWhereInput[] {
  */
 export async function workOrderVisible(s: SupervisorScope): Promise<Prisma.WorkOrderWhereInput> {
   const own = workOrderInScope(s);
-  const received = receivedWhere(await teamsForSupervisor(s));
+  // ใบ IT ที่จ่ายข้ามทีมมาก็ไม่เห็น — ใบ IT เป็นของหัวหน้าภาคที่ดูแลงาน IT คนเดียว (ซึ่งเห็นทุกใบผ่าน own อยู่แล้ว)
+  const received = receivedWhere(await teamsForSupervisor(s)).map((w) => ({ AND: [NOT_IT, w] }));
   return received.length ? { OR: [own, ...received] } : own;
 }
 
 /** หัวหน้าภาคคนนี้เป็นเจ้าของใบไหม (ทำขั้นของหัวหน้าภาคได้) — กติกาเดียวกับ workOrderInScope */
 export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
+  if (wo.jobType === IT_JOB) return !!s.itLead;
   // เทียบหลังทำความสะอาดชื่อ — ข้อมูลที่ยังไม่ผ่าน migration ล้างชื่อ (หรือหลุดมาทางอื่น) ก็ยังจับคู่ได้ ดู utils/names.ts
   const teams = new Set(s.teams.map(cleanName).filter(Boolean));
   const mine = (t: string | null) => {
@@ -196,6 +221,7 @@ export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
  */
 export function seesWorkOrder(s: SupervisorScope, teams: Set<string>, wo: ScopedOrder) {
   if (coversWorkOrder(s, wo)) return true;
+  if (wo.jobType === IT_JOB) return false;
   const sent = cleanName(wo.assignedTeam);
   return isCrossTeam(wo) && sent !== null && teams.has(sent);
 }
@@ -237,5 +263,18 @@ export async function teamsForSupervisor(s: SupervisorScope): Promise<Set<string
 }
 
 export const OUT_OF_SCOPE = "ใบงานนี้ไม่อยู่ในภาคหรือทีมที่คุณดูแล";
+/**
+ * ใบ IT ที่หัวหน้าภาคคนอื่นเปิด/กด — บอกว่าอยู่กับใคร ไม่ใช่ "ไม่อยู่ในภาค" ทั้งที่สาขาอยู่ในภาคตัวเองจริง
+ * (เดิมใบ IT เป็นของหัวหน้าภาคเจ้าของพื้นที่ คนที่เคยทำจะงงว่าทำไมจู่ ๆ ใบหายไป)
+ */
+export function itOutOfScope(s: SupervisorScope) {
+  return s.itLeadName
+    ? `ใบงาน IT อยู่กับ ${s.itLeadName} (${IT_LEAD_TITLE}) — หัวหน้าภาคคนอื่นไม่ได้ดูแลใบงาน IT แล้ว`
+    : `ใบงาน IT ไม่ได้อยู่กับหัวหน้าภาคตามพื้นที่แล้ว — ยังไม่ได้เลือก${IT_LEAD_TITLE} แอดมินเป็นคนดูแลไปก่อน`;
+}
+/** ข้อความ 403 ของใบที่คนนี้ไม่เห็น — ใบ IT บอกว่าอยู่กับใคร ใบอื่นตามเดิม */
+export function outOfScopeText(s: SupervisorScope, wo: { jobType: string }) {
+  return wo.jobType === IT_JOB ? itOutOfScope(s) : OUT_OF_SCOPE;
+}
 /** เห็นใบได้แต่ไม่ใช่เจ้าของ (ทีมตัวเองรับงานข้ามทีมมา) — บอกให้รู้ว่าทำไมกดไม่ได้ ไม่ใช่ "ไม่อยู่ในภาค" ทั้งที่เปิดดูอยู่ */
 export const VIEW_ONLY = "ใบนี้จ่ายข้ามทีมมาให้ทีมที่คุณดูแลเข้าทำ — หัวหน้าภาคเจ้าของพื้นที่เป็นคนจัดการ คุณดูได้อย่างเดียว";
