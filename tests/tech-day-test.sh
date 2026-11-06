@@ -96,8 +96,9 @@ R2=$(POST $T work-orders/$W/arrive '{"latitude":13.75,"longitude":100.5}')
   && pass "อยู่ไกลสาขา: ไม่บล็อก แต่บันทึกว่านอกรัศมี" || fail "นอกรัศมี: $R2"
 R3=$(POST $T work-orders/$W/arrive '{}')
 [ "$(echo "$R3" | J 'd.note')" = "ถึงหน้างาน (ไม่มีพิกัดจากเครื่อง)" ] && pass "ไม่มีพิกัด (ปิด GPS): บันทึกได้ บอกว่าไม่มีพิกัด" || fail "ไม่มีพิกัด: $R3"
-[ "$(curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $A)" | J "d.rows.find(r=>r.id===$W).stageSince === d.rows.find(r=>r.id===$W).stageSince && new Date(d.rows.find(r=>r.id===$W).stageSince) < new Date($(DB "select extract(epoch from max(\"createdAt\"))*1000 from \"WorkOrderLog\" where \"workOrderId\"=$W and action='ARRIVED'"))")" = "true" ] \
-  && pass "ถึงหน้างานไม่นับเป็นการเดินขั้น (วันค้างไม่รีเซ็ต)" || fail "ARRIVED รีเซ็ตวันค้าง"
+[ "$(curl -s "localhost:4000/api/work-orders?status=ACTIVE" -H "$(H $A)" | J "Math.abs(new Date(d.rows.find(r=>r.id===$W).stageSince) - new Date($(DB "select extract(epoch from max(\"createdAt\"))*1000 from \"WorkOrderLog\" where \"workOrderId\"=$W and action='ARRIVED'"))) < 1000")" = "true" ] \
+  && [ "$(DB "select status from \"WorkOrder\" where id=$W")" = "IN_PROGRESS" ] \
+  && pass "ถึงหน้างาน: สถานะในฐานข้อมูลไม่เดินขั้น แต่วันค้างนับจากตอนถึง (ขั้นช่างแยกเข้างาน/ปิดงาน พ.ย. 69 — เวลาที่อยู่หน้างาน)" || fail "วันค้างหลังถึงหน้างาน"
 DB "update \"User\" set team='ทีมที่ไม่ใช่' where \"employeeCode\"='T001'" >/dev/null
 [ "$(PC $T work-orders/$W/arrive '{}')" = "403" ] && pass "ช่างทีมอื่นกดถึงหน้างานไม่ได้ (403)" || fail "ช่างทีมอื่นกดได้"
 [ "$(curl -s localhost:4000/api/work-orders/my-day -H "$(H $T)" | J "d.rows.some(r=>r.id===$W)")" = "false" ] && pass "ช่างทีมอื่นไม่เห็นในงานของฉัน" || fail "ทีมอื่นเห็น"
