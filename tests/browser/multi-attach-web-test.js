@@ -116,7 +116,9 @@ async function drop(page, label, files, { hoverOnly = false } = {}) {
     await vis("ถนนอุตรกิจ", false).last().click();
     await page.waitForTimeout(2000);
     await page.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").first().fill("W78");
-    await vis("Oasis").last().click();
+    await page.waitForTimeout(1200);
+    // ชิปยี่ห้อขึ้นเฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ — W78 ในฐานทดสอบถูกเทสต์นำเข้าอื่นใส่ยี่ห้อไปแล้วได้ (เคยค้างรอ Oasis 30 วิ)
+    if (await vis("Oasis").count()) await vis("Oasis").last().click();
     await page.getByLabel("อาการที่พบของเครื่องที่ 1").locator("visible=true").first().fill("ทดสอบลากไฟล์ (เทสต์)");
     await page.getByLabel("ชื่อผู้ติดต่อที่สาขา").locator("visible=true").first().fill("คุณทดสอบ");
     await page.getByLabel("เบอร์ติดต่อสาขา").locator("visible=true").first().fill("081-234-5678");

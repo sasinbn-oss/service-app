@@ -279,7 +279,8 @@ const { setup, visitDay } = require("./fixture");
     await open(K.code);
     const k2 = await readBar();
     console.log("  ใบเบิกคลังอื่น (เบิกแล้ว):", show(k2));
-    same(k2.items.map((x) => x.state), ["done", "done", "done", "done", "now", "future", "future"]) && k2.sub === null
+    // ขั้นช่างแยกเป็น เข้างาน + ปิดงาน (พ.ย. 69) — หลังคอนเฟิร์มลูกค้ามีสามขั้น: ปล่อยงาน · เข้างาน · ปิดงาน
+    same(k2.items.map((x) => x.state), ["done", "done", "done", "done", "now", "future", "future", "future"]) && k2.sub === null
       ? pass("เบิกคลังอื่นเสร็จ: เบิกอะไหล่แล้ว ✓ ไม่มีขั้นย่อย \"สั่งโอน\" ติ๊กทั้งที่ไม่ได้โอน")
       : fail(`ใบเบิกคลังอื่นหลังเบิก: ${show(k2)} · ขั้นย่อย ${k2.sub && k2.sub.join(" | ")}`);
 
