@@ -18,9 +18,8 @@ export function canViewUsage(user: ReturnType<typeof useAuth>["user"]) {
   return !!user && user.role === "ADMIN" && !user.partsAdmin && !user.viewAs;
 }
 
-export default function UsageButton({ compact }: { compact?: boolean }) {
-  const { user } = useAuth();
-  const allowed = canViewUsage(user);
+/** จำนวนคนออนไลน์ — ปุ่มบนแถบบน และแถวในเมนูโปรไฟล์ของแถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69) ใช้ตัวเดียวกัน */
+export function useOnlineCount(allowed: boolean) {
   const [online, setOnline] = useState<number | null>(null);
 
   useEffect(() => {
@@ -40,12 +39,20 @@ export default function UsageButton({ compact }: { compact?: boolean }) {
       clearInterval(t);
     };
   }, [allowed]);
+  return online;
+}
 
+export function openUsage() {
+  if (!navigationRef.isReady()) return;
+  (navigationRef.navigate as (tab: string, p: object) => void)("AdminTab", { screen: "AppUsage", initial: false });
+}
+
+export default function UsageButton({ compact }: { compact?: boolean }) {
+  const { user } = useAuth();
+  const allowed = canViewUsage(user);
+  const online = useOnlineCount(allowed);
   if (!allowed) return null;
-  const open = () => {
-    if (!navigationRef.isReady()) return;
-    (navigationRef.navigate as (tab: string, p: object) => void)("AdminTab", { screen: "AppUsage", initial: false });
-  };
+  const open = openUsage;
   return (
     <TouchableOpacity
       style={[styles.btn, compact && styles.compact]}

@@ -141,7 +141,12 @@ export function ViewAsButton({ compact }: { compact?: boolean }) {
   );
 }
 
-function ViewAsPicker({ onClose }: { onClose: () => void }) {
+/** เปิดจากเมนูโปรไฟล์บนแถบหัวแบบใหม่ได้ด้วย (ตัวอย่าง พ.ย. 69) — เมนูปิดไปแล้ว ตัวเลือกคนยังเปิดค้างได้ */
+export function canViewAs(user: ReturnType<typeof useAuth>["user"]) {
+  return !!user && (user.superAdmin || (user.role === "ADMIN" && !user.partsAdmin)) && !user.viewAs;
+}
+
+export function ViewAsPicker({ onClose }: { onClose: () => void }) {
   const { user, startViewAs } = useAuth();
   const [people, setPeople] = useState<Person[] | null>(null);
   const [tab, setTab] = useState<Role>("EMPLOYEE");

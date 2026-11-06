@@ -412,6 +412,34 @@ function currentKey(): string | null {
   return null;
 }
 
+/**
+ * แถบลัดบนหัว (ตัวอย่างหัวขวาบน พ.ย. 69) — หยิบจากรายการเดียวกับเมนูข้าง ชื่อ ไอคอน และสิทธิ์จึงตรงกันเสมอ
+ * คนที่ไม่เห็นเมนูไหนในเมนูข้าง ก็ไม่เห็นแท็บนั้นบนหัว
+ */
+export function menuItemsFor(user: ReturnType<typeof useAuth>["user"], keys: string[]) {
+  const all = GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").flatMap((g) => g.items);
+  return keys
+    .map((k) => all.find((it) => it.key === k))
+    .filter((it): it is Item => !!it && canSeeItem(user, it))
+    .map((it) => ({ key: it.key, label: it.label, icon: it.icon }));
+}
+export function openMenuKey(key: string) {
+  const it = GROUPS.flatMap((g) => g.items).find((x) => x.key === key);
+  if (it) navigateTo(it);
+}
+export { currentKey as activeMenuKey };
+
+function canSeeItem(user: ReturnType<typeof useAuth>["user"], it: Item) {
+  return (
+    (!it.roles || (!!user && it.roles.includes(user.role))) &&
+    !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)) &&
+    (!isAreaTeam(user) || AREA_TEAM_MENU.has(it.key)) &&
+    canOpenScreen(user, it.screen) &&
+    (!it.superAdmin || !!user?.superAdmin) &&
+    (!it.reviewer || canReviewClaims(user))
+  );
+}
+
 function navigateTo(it: Item) {
   if (!navigationRef.isReady()) return;
   // initial: false ให้ปุ่มย้อนกลับพากลับไปหน้าแรกของแท็บ ไม่ใช่หลุดออกจากแท็บ
@@ -606,13 +634,7 @@ function MenuContent({
           {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN")
             .map((g) => ({
               g,
-              items: g.items
-                .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
-                .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
-                .filter((it) => !isAreaTeam(user) || AREA_TEAM_MENU.has(it.key))
-                .filter((it) => canOpenScreen(user, it.screen))
-                .filter((it) => !it.superAdmin || user?.superAdmin)
-                .filter((it) => !it.reviewer || canReviewClaims(user)),
+              items: g.items.filter((it) => canSeeItem(user, it)),
             }))
             .filter(({ items }) => items.length > 0)
             .map(({ g, items }, i, shown) => {

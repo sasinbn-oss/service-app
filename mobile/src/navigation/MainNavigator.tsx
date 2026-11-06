@@ -73,6 +73,7 @@ import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/S
 import { pageEnterLayout } from "../components/PageEnter";
 import AreaOnlyGate from "../components/AreaOnlyGate";
 import HowToButton from "../components/HowToButton";
+import { CreateOrderButton, ProfileMenu, QueueSwitch, TopTabs } from "../components/TopNav";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -290,7 +291,7 @@ function AppTopBar() {
     );
   }
   const bars = (
-    <View>
+    <View style={{ zIndex: 20 }}>
     {viewing ? (
       <View style={{ paddingTop: insets.top, backgroundColor: "#B45309" }}>
         <ViewAsBanner />
@@ -298,22 +299,20 @@ function AppTopBar() {
     ) : null}
     <View style={[styles.topBar, { paddingTop: (viewing ? 0 : insets.top) + 10 }]}>
       <Brand subtitle="ระบบงานช่างซ่อม" compact={width < 480} />
+      {/*
+        แถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา — components/TopNav.tsx)
+        จอกว้างพอค่อยขึ้นแท็บลัด/สลับงานของฉัน ไม่งั้นชื่อผู้ใช้ถูกบีบหาย
+      */}
+      {width >= 1280 ? <TopTabs /> : null}
       <View style={{ flex: 1 }} />
       <UpdateButton compact={!wide} />
-      <ViewAsButton compact={!wide} />
-      {/* ข้างชื่อ (เจ้าของงานขอ ต.ค. 69) — Super Admin/แอดมินเท่านั้น ซ่อนเองสำหรับคนอื่น */}
-      <UsageButton compact={!wide} />
-      {wide && user ? (
-        <View style={styles.who}>
-          <Text style={styles.whoName} numberOfLines={1}>
-            {user.name}
-          </Text>
-          <Text style={styles.whoRole}>
-            {sessionRoleLabel(user)}
-          </Text>
-        </View>
-      ) : null}
-      <LogoutButton />
+      {width >= 1100 ? <QueueSwitch /> : null}
+      <CreateOrderButton />
+      <View style={styles.headerRight}>
+        <HowToButton compact />
+        <RefreshButton iconOnly />
+      </View>
+      <ProfileMenu showName={width >= 1000} />
     </View>
     {overlay ? (
       <View style={styles.pageHeadNarrow}>
@@ -795,6 +794,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    // เมนูใต้ชื่อผู้ใช้กางลงมาทับเนื้อหา — แถบต้องอยู่ชั้นบนกว่าหน้าที่วาดตามมา
+    zIndex: 20,
   },
   who: { alignItems: "flex-end", maxWidth: 200 },
   whoName: { fontSize: 15, lineHeight: 20, fontWeight: "700", color: colors.text },
