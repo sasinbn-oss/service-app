@@ -17,11 +17,11 @@ import { Linking, RefreshControl, ScrollView, StyleSheet, Text, View } from "rea
 import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import * as Location from "expo-location";
 import TouchableOpacity from "../components/Tap";
 import Spinner from "../components/Spinner";
 import EmptyState from "../components/EmptyState";
 import { useRefreshHandler } from "../components/RefreshButton";
+import { currentPosition } from "../utils/position";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
 import { dayLabel } from "../utils/customerMessage";
@@ -132,23 +132,6 @@ function addDay(ymd: string, n: number) {
   return d.toISOString().slice(0, 10);
 }
 
-/**
- * พิกัดตอนกดถึงหน้างาน — ไม่ได้ก็ไม่เป็นไร (ปิด GPS · ไม่อนุญาต · คอมไม่มี GPS) เซิร์ฟเวอร์บันทึกว่าไม่มีพิกัด
- * ไม่บล็อกช่าง: GPS ในร้าน/ห้างคลาดบ่อย ระบบแค่บันทึกตามจริงให้ตรวจย้อนหลังได้
- */
-async function currentPosition(): Promise<{ latitude: number; longitude: number } | null> {
-  try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") return null;
-    const p = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
-      new Promise<null>((r) => setTimeout(() => r(null), 12_000)),
-    ]);
-    return p ? { latitude: p.coords.latitude, longitude: p.coords.longitude } : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * ทุกตำแหน่งเปิดแอปมาที่หน้านี้ (ต.ค. 69) แต่ "งานของฉัน" ของแต่ละตำแหน่งไม่เหมือนกัน (เจ้าของงานกำหนด):

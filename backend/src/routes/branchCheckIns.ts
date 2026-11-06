@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../prisma";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { distanceMeters } from "../utils/geo";
+import { arriveByCheckIn } from "./workOrders";
 
 const router = Router();
 
@@ -60,8 +61,14 @@ router.post("/", requireAuth, async (req: AuthRequest, res) => {
     },
     include: { branch: true },
   });
+  // ใบที่ช่างถืออยู่ที่สาขานี้ขึ้น "ถึงหน้างาน" ไปด้วย ไม่ต้องกดสองที่ (ตัวอย่าง พ.ย. 69)
+  const arrived = await arriveByCheckIn(
+    req.auth!.userId,
+    branch.id,
+    `ถึงหน้างาน (รายงานตัวเข้าสาขา) · ห่างสาขา ${Math.round(distance)} ม. · ${withinRadius ? "ในรัศมี" : "นอกรัศมี"}`
+  );
 
-  res.status(201).json(checkIn);
+  res.status(201).json({ ...checkIn, arrived });
 });
 
 export default router;

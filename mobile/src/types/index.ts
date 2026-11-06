@@ -114,6 +114,8 @@ export interface BranchCheckIn {
   note?: string | null;
   checkedInAt: string;
   branch: Branch;
+  /** ใบที่บันทึก "ถึงหน้างาน" ไปพร้อมการรายงานตัว (ใบในมือช่างที่สาขานี้ — ตัวอย่าง พ.ย. 69) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่งมา */
+  arrived?: string[];
 }
 
 export interface WorkLog {

@@ -82,6 +82,14 @@ export const colors = {
   roleMaidInk: "#9D174D",
   roleMaidSoft: "#FCE7F3",
   roleMaidLine: "#F9A8D4",
+  /**
+   * จุดประวัติใบงาน (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา) — สีตาม "เรื่องอะไร" ไม่ใช่ "ใครทำ"
+   * ฟ้าคราม = ส่งต่อ/สั่งงาน · ครามม่วง = เรื่องกับลูกค้า — สองสีนี้ไม่มีในชุดบทบาท จึงแยกไว้ตรงนี้
+   */
+  histBlue: "#2563EB",
+  histBlueSoft: "#EAF1FE",
+  histIndigo: "#4F46E5",
+  histIndigoSoft: "#EEEDFD",
   // เขียวเสจ (เจ้าของงานเลือก ต.ค. 69) — เขียวมะกอกเดิมอมเหลือง ดูสดเกินสำหรับงานที่จบแล้ว
   // ตั้งใจให้หม่นและต่างจากเขียวมรกตของ "รอช่าง" ชัด ๆ
   doneInk: "#2F5A46",
@@ -172,6 +180,10 @@ const DARK: Partial<typeof colors> = {
   roleMaidInk: "#F9A8D4",
   roleMaidSoft: "#3A1428",
   roleMaidLine: "#831843",
+  histBlue: "#60A5FA",
+  histBlueSoft: "#13243F",
+  histIndigo: "#818CF8",
+  histIndigoSoft: "#1D1C3D",
   doneInk: "#A3CDB7",
   doneBand: "#4A7D65",
   doneSoft: "#13231C",

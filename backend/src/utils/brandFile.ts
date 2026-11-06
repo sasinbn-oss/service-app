@@ -20,7 +20,7 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../prisma";
-import { PARTS_PICK_RETURNED_LABEL, PARTS_PICK_STAGE_LABEL, WORK_ORDER_STATUS_LABELS, machineMake } from "./constants";
+import { ON_SITE_LABEL, PARTS_PICK_RETURNED_LABEL, PARTS_PICK_STAGE_LABEL, TO_SITE_LABEL, WORK_ORDER_STATUS_LABELS, machineMake } from "./constants";
 
 /** ไฟล์ที่มีจริงทั้งหมด (เจ้าของงานยืนยันว่าไม่มีไฟล์อื่น) — ลำดับนี้คือลำดับที่แสดงบนหน้าจอ */
 export const BRAND_FILES = ["Haier", "Huebsch", "Maytag", "Oasis", "Spinz", "Other"] as const;
@@ -538,7 +538,11 @@ export async function voidOpenPick(tx: Prisma.TransactionClient, workOrderId: nu
  * ไม่มีสถานะใหม่ (ข้อ 2) เปลี่ยนแค่คำที่คนเห็น · ทุกที่ที่โชว์ป้ายของใบที่อาจอยู่ NEW/INSPECTING เรียกตัวนี้
  * ที่ที่ไม่เรียก (บอร์ดแผน · ใบที่ผูกกับเคสเครื่องดับ · รายงานที่เก็บป้ายไว้) อยู่ในแผนข้อ 7 "known differences"
  */
-export function statusLabelOf(status: string, open: { status: string } | null = null): string {
+/**
+ * onSite = ช่างถึงหน้างานในรอบนี้แล้วไหม (null = ที่เรียกไม่ได้โหลดประวัติมา ใช้ป้ายรวมเดิม "เข้างาน/ปิดงาน")
+ */
+export function statusLabelOf(status: string, open: { status: string } | null = null, onSite: boolean | null = null): string {
+  if (status === "IN_PROGRESS" && onSite !== null) return onSite ? ON_SITE_LABEL : TO_SITE_LABEL;
   if (open?.status === "PENDING" && status === "NEW") return PARTS_PICK_STAGE_LABEL;
   if (open?.status === "RETURNED" && status === "INSPECTING") return PARTS_PICK_RETURNED_LABEL;
   return WORK_ORDER_STATUS_LABELS[status] ?? status;

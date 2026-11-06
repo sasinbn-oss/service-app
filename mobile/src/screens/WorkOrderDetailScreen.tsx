@@ -36,6 +36,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
+import { currentPosition } from "../utils/position";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, {
@@ -212,6 +213,8 @@ interface WorkOrder {
   detail: string | null;
   status: string;
   statusLabel: string;
+  /** ช่างถึงหน้างานในรอบนี้แล้ว — ขั้นช่างแยก "เข้างาน" / "ปิดงาน" ตามค่านี้ (ตัวอย่าง พ.ย. 69) · ขั้นอื่นเป็น null */
+  onSite?: boolean | null;
   /** URGENT | NORMAL | LOW — URGENT ขึ้นออร่าแดงและป้ายด่วนบนหัวใบงาน */
   priority: string;
   priorityLabel: string;
@@ -1745,12 +1748,37 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
    * key เป็นขั้นบนแถบ ("ISSUE" รวมขั้นเบิก/โอน) หรือขั้นของเซิร์ฟเวอร์ (รอบตรวจหน้างาน · ขั้นย่อยโอน)
    * ขั้นปัจจุบันเปิดฟอร์มของสถานะจริงของใบเสมอ — ขั้น 1 ระหว่างตรวจหน้างาน (loop) เปิดฟอร์มขั้นตรวจที่ค้างอยู่
    */
+  /**
+   * ช่างกดถึงหน้างานจากหน้าใบงาน (ตัวอย่าง พ.ย. 69) — เดิมกดได้ที่ "งานของฉัน" ที่เดียว ช่างที่เปิดใบจากกล่องงาน/ลิงก์
+   * ไม่เห็นปุ่ม ขั้นจึงค้าง "เข้างาน" ทั้งที่ยืนอยู่ในร้าน · ไม่มีพิกัดก็บันทึก (เซิร์ฟเวอร์บอกในประวัติว่าไม่มีพิกัด)
+   */
+  async function arriveNow() {
+    if (!order || busy) return;
+    setBusy(true);
+    try {
+      const pos = await currentPosition();
+      const res = await api.post<{ note: string; withinRadius: boolean | null }>(`/work-orders/${order.id}/arrive`, pos ?? {});
+      if (res.data.withinRadius === false) showAlert("บันทึกแล้ว — อยู่นอกรัศมีสาขา", res.data.note);
+      await reload();
+    } catch (e) {
+      showAlert("บันทึกไม่ได้", apiErrorMessage(e));
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function pressStep(key: string, state: StepState) {
     if (state === "done") {
       setStepInfo(key);
       return;
     }
     if ((state !== "now" && state !== "loop") || !order || !myTurn(order) || busy) return;
+    // ขั้นเข้างาน: กดวงขั้น = กดถึงหน้างาน (ไม่มีฟอร์ม)
+    if (key === "ARRIVE") {
+      void arriveNow();
+      return;
+    }
     // ตรวจเคลมทำที่การ์ดใบเคลมด้านล่าง ไม่มีฟอร์มขั้นตอนให้เปิด
     if (order.status === "CLAIM_REVIEW") return;
     if (order.status === "IN_PROGRESS") setClosing(true);
@@ -2556,7 +2584,18 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                       ) : null}
                       {showLabel && row.note ? <Text style={styles.stageActor}>{row.note}</Text> : null}
                       {/* ขั้นที่ทำแล้ว: ใครทำ วันไหน (ตัวอย่าง พ.ย. 69) — กดวงยังเปิดรายละเอียดเต็มเหมือนเดิม */}
-                      {state === "done" ? (() => {
+                      {state === "done" && row.key === "ARRIVE" ? (() => {
+                        // เข้างานแล้ว: ใครถึง กี่โมง ห่างร้านเท่าไร — จากประวัติ "ช่างถึงหน้างาน" ล่าสุด
+                        const a = [...order.logs].filter((l) => l.action === "ARRIVED").sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id)[0];
+                        if (!a) return null;
+                        const where = (a.note ?? "").replace(/^ถึงหน้างาน\s*(·\s*)?/, "").replace(/^\((.*?)\)/, "$1");
+                        return (
+                          <>
+                            <Text style={styles.stageActor}>{`${a.byName ?? "ช่าง"} · ${whenShort(a.createdAt)}`}</Text>
+                            {where ? <Text style={styles.stageActor}>{where}</Text> : null}
+                          </>
+                        );
+                      })() : state === "done" ? (() => {
                         const by = stepDoneBy(row.stages, order.logs);
                         return by ? <Text style={styles.stageActor}>{by}</Text> : null;
                       })() : null}
@@ -3235,7 +3274,20 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     <Text style={styles.actionProblemText}>แจ้งปัญหาหน้างาน</Text>
                   </TouchableOpacity>
                 ) : null}
-                {order.status === "IN_PROGRESS" ? (
+                {order.status === "IN_PROGRESS" && !order.onSite && !order.assignedOutsource ? (
+                  // ขั้นเข้างาน: ปุ่มเดียวคือ "ถึงหน้างาน" — ถึงแล้วปุ่มเปลี่ยนเป็นปิดงาน (ปุ่มเดียวต่อขั้นเหมือนขั้นอื่น)
+                  // ใบ SUB ไม่มีปุ่มนี้: ทีม outsource ไม่มีบัญชี หัวหน้าภาคบันทึกผลงานแทนได้เลย
+                  <TouchableOpacity
+                    style={[styles.action, styles.actionPrimary]}
+                    onPress={() => void arriveNow()}
+                    disabled={busy}
+                    activeOpacity={0.8}
+                    accessibilityLabel="ถึงหน้างาน"
+                  >
+                    <Ionicons name="location" size={18} color="#fff" />
+                    <Text style={styles.actionPrimaryText}>ถึงหน้างาน</Text>
+                  </TouchableOpacity>
+                ) : order.status === "IN_PROGRESS" ? (
                   <TouchableOpacity
                     style={[styles.action, styles.actionPrimary]}
                     onPress={() => setClosing(true)}
@@ -4096,6 +4148,8 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
   ASSIGNED: ["DISPATCHED", "ASSIGNED"],
+  // ขั้น "เข้างาน" (ตัวอย่าง พ.ย. 69) — นับเป็นการเข้าขั้นด้วย เวลาค้างขั้นจึงเริ่มนับใหม่ตอนถึงหน้างาน = เวลาที่อยู่หน้างาน
+  ARRIVE: ["ARRIVED"],
   IN_PROGRESS: ["CLOSED"],
 };
 
@@ -4184,7 +4238,7 @@ function StepInfo({
   return (
     <AppModal
       visible={stageValue !== null}
-      title={`${stageValue === "ISSUE" ? "เบิกอะไหล่" : stage?.label ?? ""} — ทำแล้ว`}
+      title={`${stageValue === "ISSUE" ? "เบิกอะไหล่" : stageValue === "ARRIVE" ? "เข้างาน" : stage?.label ?? ""} — ทำแล้ว`}
       onClose={onClose}
       width={560}
     >
@@ -8427,22 +8481,54 @@ const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
   SENIOR_TECH: { fg: colors.roleTech, bg: colors.roleTechSoft, label: "Senior ช่าง" },
 };
 
+/**
+ * สีของแต่ละบรรทัดในประวัติ — บอกว่า "เป็นเรื่องอะไร" (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา)
+ * แบบเดิมใช้สีตามคนทำ หัวหน้าภาคระบุอะไหล่กับหัวหน้าภาคส่งทีมตรวจเลยเป็นสีเดียวกัน ทั้งที่คนอ่านอยากหาว่า
+ * "อะไหล่ไปถึงไหน" หรือ "ลูกค้าว่ายังไง" — ไล่ตาตามสีได้เลย · ป้ายบทบาทยังบอกว่าใครทำ
+ * ม่วง = เปิด/เริ่ม · ฟ้า = ส่งต่อ/สั่งงาน · คราม = ลูกค้า · เหลือง = อะไหล่ · เขียว = หน้างาน/ปิดงาน · แดง = ถอย/ติดปัญหา · เทา = อื่น ๆ
+ */
+type HistTone = "start" | "send" | "customer" | "parts" | "site" | "problem" | "other";
+const HIST_TONE: Record<string, HistTone> = {
+  CREATED: "start", SPLIT_FROM: "start", REOPENED: "start", SPLIT: "start", TEST_COPY: "start",
+  INSPECT_REQUESTED: "send", ASSIGNED: "send", SCHEDULED: "send", PICKUP_REQUESTED: "send", QUOTED: "send",
+  ADMIN_REVIEW_REQUESTED: "send", ADMIN_REVIEW_ANSWERED: "send", URGENT_REQUESTED: "send", URGENT_RELEASE: "send",
+  URGENT_REQUEST_ANSWERED: "send", APPOINTMENT_MOVED: "send", EDITED: "send",
+  CONFIRMED: "customer", RESCHEDULED: "customer", PAID: "customer", PAYMENT_FOLLOWUP: "customer", PREPAID: "customer",
+  PARTS_REQUESTED: "parts", NO_PARTS: "parts", PARTS_CHECKED: "parts", PARTS_SOURCED: "parts", PARTS_PICK_CONFIRMED: "parts",
+  TRANSFER_REQUESTED: "parts", PICKED_UP: "parts", TRANSFER_ARRIVED: "parts", PARTS_ARRIVED: "parts", PARTS_ETA_CHANGED: "parts",
+  MACHINE_BRAND_SET: "parts", CROSS_BRAND_PARTS: "parts",
+  ARRIVED: "site", INSPECTED: "site", PARTS_PICKED: "site", PARTS_PICKED_ON_BEHALF: "site", CLOSED: "site",
+  BACKFILLED: "site", RECOVERED_CLOSED: "site", SUPERVISOR_CLOSED: "site", REMOTE_CLOSED: "site", CLAIM_SUBMITTED: "site",
+  CLAIM_APPROVED: "site", CLAIM_DECLINED: "site",
+  ROLLED_BACK: "problem", PARTS_ROLLBACK: "problem", PARTS_BACKORDERED: "problem", PARTS_SHORT: "problem",
+  CANCELLED: "problem", TRANSFER_RETURNED: "problem", PICKUP_RETURNED: "problem", NEW_DATE_DECLINED: "problem",
+  CLAIM_REJECTED: "problem", PARTS_PICK_RETURNED: "problem", APPOINTMENT_RECALLED: "problem", TRASHED: "problem",
+};
+const TONE_INK: Record<HistTone, { fg: string; bg: string }> = {
+  start: { fg: colors.roleAdmin, bg: colors.roleAdminSoft },
+  send: { fg: colors.histBlue, bg: colors.histBlueSoft },
+  customer: { fg: colors.histIndigo, bg: colors.histIndigoSoft },
+  parts: { fg: colors.warning, bg: colors.warningTint },
+  site: { fg: colors.roleTech, bg: colors.roleTechSoft },
+  problem: { fg: colors.danger, bg: colors.dangerSoft },
+  other: { fg: colors.textFaint, bg: colors.background },
+};
+/** ตามแบบ: หัวเรื่องเป็นสีเฉพาะจุดเริ่ม ผลหน้างาน และเรื่องที่ถอย — ที่เหลือสีตัวหนังสือปกติ ไม่งั้นทั้งการ์ดเป็นสีรุ้ง */
+const TONE_TITLE: HistTone[] = ["start", "site", "problem"];
+
 function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed: boolean; onTimeline?: () => void }) {
   const [all, setAll] = useState(false);
-  /**
-   * ตัวอย่าง พ.ย. 69 ตามแบบ "ประวัติความเคลื่อนไหวล่าสุด": ตั้งต้นขึ้น 3 รายการล่าสุด ใหม่สุดก่อน
-   * กด "ดูประวัติทั้งหมด" แล้วเป็นแบบเดิม (เก่าไปใหม่ เต็มรายการ) — ใบเก่ามีประวัติยาวจนการ์ดดันของอื่นลงไปพ้นจอ
-   */
-  const [full, setFull] = useState(false);
+  // เก่าไปใหม่ทั้งรายการ (แบบที่เจ้าของงานส่งมา พ.ย. 69) — อ่านไล่เป็นเรื่องเดียวกันได้ · แนบไฟล์ยังซ่อนไว้เหมือนเดิม
   const ordered = [...logs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
   const minor = ordered.filter((l) => MINOR_ACTIONS.has(l.action)).length;
-  const major = ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
-  const shown = !full ? major.slice(-3).reverse() : all ? ordered : major;
+  const shown = all ? ordered : ordered.filter((l) => !MINOR_ACTIONS.has(l.action));
   return (
     <View style={[styles.card, closed && styles.cardDone]} {...howtoTarget("order.history")}>
       <View style={styles.hHead}>
-        <Ionicons name="time-outline" size={19} color={colors.primaryInk} />
-        <Text style={[styles.infoTitle, headingFont]}>{full ? "ประวัติ" : "ประวัติความเคลื่อนไหวล่าสุด"}</Text>
+        <View style={styles.hIcon}>
+          <Ionicons name="time-outline" size={20} color={colors.warning} />
+        </View>
+        <Text style={[styles.hTitle, headingFont]}>ประวัติ</Text>
         <View style={{ flex: 1 }} />
         {onTimeline ? (
           <TouchableOpacity onPress={onTimeline} accessibilityLabel="ดูไทม์ไลน์เต็ม">
@@ -8452,44 +8538,48 @@ function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed
       </View>
       {shown.map((log, i) => {
         const role = log.byRole ? ROLE_DOT[log.byRole] : undefined;
-        const fg = role?.fg ?? colors.textFaint;
         const small = MINOR_ACTIONS.has(log.action);
+        const tone: HistTone = small ? "other" : HIST_TONE[log.action] ?? "other";
+        const ink = TONE_INK[tone];
         const at = new Date(log.createdAt);
         const day = at.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" });
         const time = at.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
+        // บันทึกแบบกล่อง = ข้อความสั่งงานถึงคนถัดไป · แดง = สิ่งที่พบ/ปัญหา · ที่เหลือเป็นบรรทัดเทาเบา ๆ (ตามแบบ)
+        const noteKind = tone === "send" || log.action === "CLOSED" ? "box" : tone === "problem" || log.action === "INSPECTED" ? "bad" : "plain";
+        const last = i === shown.length - 1;
         return (
           <View key={log.id} style={styles.hRow}>
-            <View style={styles.hWhen}>
-              <Text style={styles.hDay}>{day}</Text>
-              <Text style={styles.hTime}>{time}</Text>
-            </View>
             <View style={styles.hRail}>
-              {i < shown.length - 1 ? <View style={styles.hLine} /> : null}
-              <View style={[styles.hDot, small ? styles.hDotSmall : { backgroundColor: fg, borderColor: fg }]} />
-            </View>
-            <View style={styles.logBody}>
-              <Text style={[styles.logAction, small && styles.hMinor]}>{log.actionLabel}</Text>
-              <View style={styles.hWho}>
-                <Text style={styles.logMeta}>{log.byName ?? "—"}</Text>
-                {role && !small ? (
-                  <View style={[styles.hRole, { backgroundColor: role.bg }]}>
-                    <Text style={[styles.hRoleText, { color: role.fg }]}>{role.label}</Text>
-                  </View>
-                ) : null}
+              {!last ? <View style={styles.hLine} /> : null}
+              <View style={[styles.hHalo, { backgroundColor: ink.bg }]}>
+                <View style={[styles.hDot, { backgroundColor: ink.fg }]} />
               </View>
+            </View>
+            <View style={[styles.hBody, !last && styles.hBodyGap]}>
+              <View style={styles.hTop}>
+                <Text style={[styles.hAction, TONE_TITLE.includes(tone) && { color: ink.fg }, small && styles.hMinor]}>{log.actionLabel}</Text>
+                <Text style={styles.hWhenText}>
+                  {day} {time}
+                </Text>
+              </View>
+              {log.byName ? (
+                <View style={styles.hWho}>
+                  <Text style={styles.hName}>{log.byName}</Text>
+                  {role && !small ? (
+                    <View style={[styles.hRole, { backgroundColor: ink.bg, borderColor: `${ink.fg}55` }]}>
+                      <Text style={[styles.hRoleText, { color: tone === "other" ? colors.textMuted : ink.fg }]}>{role.label}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
               {log.note ? (
-                <Text style={[styles.hNote, log.action === "CLOSED" && styles.hNoteBig]}>{log.note}</Text>
+                <Text style={noteKind === "box" ? styles.hNoteBox : noteKind === "bad" ? styles.hNoteBad : styles.hNote}>{log.note}</Text>
               ) : null}
             </View>
           </View>
         );
       })}
-      {!full && major.length > 3 ? (
-        <TouchableOpacity onPress={() => setFull(true)} activeOpacity={0.7} style={styles.hMore} accessibilityLabel="ดูประวัติทั้งหมด">
-          <Text style={styles.hMoreText}>ดูประวัติทั้งหมด ({ordered.length} รายการ)</Text>
-        </TouchableOpacity>
-      ) : null}
-      {full && minor > 0 ? (
+      {minor > 0 ? (
         <TouchableOpacity onPress={() => setAll((v) => !v)} activeOpacity={0.7} style={styles.hMore}>
           <Text style={styles.hMoreText}>
             {all ? "ซ่อนรายการแนบไฟล์" : `แสดงทั้งหมด (รวมแนบไฟล์ ${minor} รายการ)`}
@@ -11668,31 +11758,36 @@ const styles = StyleSheet.create({
   },
   summaryLabel: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.primaryInk },
   summaryText: { fontSize: 17, lineHeight: 27, fontWeight: "800", color: colors.text },
-  hRow: { flexDirection: "row", gap: spacing.sm },
-  hWhen: { width: 62, alignItems: "flex-end", paddingTop: 1 },
-  hDay: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.text },
-  hTime: { fontSize: 11, lineHeight: 16, color: colors.textMuted },
-  hRail: { width: 16, alignItems: "center" },
-  hLine: { position: "absolute", top: 16, bottom: 0, width: 2, backgroundColor: colors.border },
-  hDot: { width: 12, height: 12, borderRadius: 6, marginTop: 4, borderWidth: 2 },
-  hDotSmall: { width: 8, height: 8, borderRadius: 4, marginTop: 6, backgroundColor: colors.textFaint, borderColor: colors.textFaint },
+  // ประวัติแบบเรียบ (ตัวอย่าง พ.ย. 69 ตามแบบ) — จุดมีวงจางรอบ เส้นเทาบางต่อกันทุกจุด วันเวลาชิดขวา
+  hRow: { flexDirection: "row", gap: 12 },
+  hRail: { width: 22, alignItems: "center" },
+  hLine: { position: "absolute", top: 11, bottom: -11, width: 2, backgroundColor: colors.border },
+  hHalo: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center", marginTop: 0 },
+  hDot: { width: 10, height: 10, borderRadius: 5 },
+  hBody: { flex: 1, minWidth: 0, gap: 3 },
+  hBodyGap: { paddingBottom: 20 },
+  hTop: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  hAction: { flex: 1, minWidth: 0, fontSize: 14.5, lineHeight: 22, fontWeight: "700", color: colors.text },
+  hWhenText: { fontSize: 13, lineHeight: 22, fontWeight: "600", color: colors.textMuted, fontVariant: ["tabular-nums"] },
   hMinor: { fontWeight: "500", color: colors.textMuted },
   hWho: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
-  hRole: { borderRadius: 5, paddingHorizontal: 6 },
-  hRoleText: { fontSize: 10, lineHeight: 16, fontWeight: "800" },
-  hNote: {
-    alignSelf: "flex-start",
-    marginTop: 3,
-    marginBottom: spacing.sm,
+  hName: { fontSize: 13.5, lineHeight: 21, color: colors.text },
+  hRole: { borderRadius: 6, paddingHorizontal: 7, borderWidth: 1 },
+  hRoleText: { fontSize: 11.5, lineHeight: 18, fontWeight: "700" },
+  hNote: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  hNoteBad: { fontSize: 13.5, lineHeight: 21, fontWeight: "600", color: colors.dangerInk },
+  hNoteBox: {
+    marginTop: 4,
     fontSize: 13,
     lineHeight: 20,
     color: colors.text,
-    backgroundColor: colors.tile,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
   },
-  hNoteBig: { fontSize: 14, fontWeight: "800", backgroundColor: colors.primarySoft },
   hMore: { marginTop: spacing.sm, alignSelf: "flex-start" },
   hMoreText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   quoteRoute: {
@@ -12032,8 +12127,27 @@ const styles = StyleSheet.create({
   toolItem: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10 },
   toolItemText: { fontSize: 15, lineHeight: 22, color: colors.text },
   dangerZone: { gap: 4, marginTop: spacing.sm, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, alignItems: "flex-start" },
-  hHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: spacing.sm },
-  hTimeline: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  hHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingBottom: spacing.md,
+    marginBottom: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  hIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.warningTint,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+  },
+  hTitle: { fontSize: 18, lineHeight: 26, fontWeight: "800", color: colors.text },
+  hTimeline: { fontSize: 13.5, lineHeight: 20, fontWeight: "700", color: colors.histBlue },
   infoGridWide: { flexDirection: "row", alignItems: "stretch" },
   infoCard: { flex: 1, minWidth: 0 },
   infoHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.sm },

@@ -2466,6 +2466,15 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       : [];
   // ใบรอลูกค้าจ่ายเงิน — การตามลูกค้าของแต่ละใบ (การ์ดในกล่องงาน/รายการบอก "ตามล่าสุด" หรือ "ยังไม่เคยตาม")
   const payIds = [...new Set([...rows.filter((r) => r.status === "AWAITING_PAYMENT").map((r) => r.id), ...payScope.map((p) => p.id)])];
+  // ช่างถึงหน้างานแล้ว — ป้าย "ช่าง · ปิดงาน" แทน "ช่าง · เข้างาน" (เทียบกับ stageSince ข้างล่าง)
+  const onSiteIds = rows.filter((r) => r.status === "IN_PROGRESS").map((r) => r.id);
+  const arrivals = onSiteIds.length
+    ? await prisma.workOrderLog.groupBy({
+        by: ["workOrderId"],
+        where: { workOrderId: { in: onSiteIds }, action: "ARRIVED" },
+        _max: { createdAt: true },
+      })
+    : [];
   const [lastMoves, confirms, rollbacks, settles, asks, payLogs] = await Promise.all([
     moveIds.length
       ? prisma.workOrderLog.groupBy({
@@ -2542,6 +2551,11 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   }
   const stageSince = new Map<number, Date>();
   for (const m of lastMoves) if (m._max.createdAt) stageSince.set(m.workOrderId, m._max.createdAt);
+  const arrivedAt = new Map<number, boolean>();
+  for (const a of arrivals) {
+    const since = stageSince.get(a.workOrderId);
+    if (a._max.createdAt && (!since || a._max.createdAt > since)) arrivedAt.set(a.workOrderId, true);
+  }
 
   const byStatus = Object.fromEntries(counts.map((c) => [c.status, c._count])) as Record<
     string,
@@ -2557,6 +2571,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
     cutoff: { time: cfg.time, since: cfg.since },
     rows: rows.map((w) => ({
       ...listShape(w, { supervisors: supScopes, stageSince, cutoff }),
+      ...(w.status === "IN_PROGRESS" ? { statusLabel: statusLabelOf(w.status, null, arrivedAt.get(w.id) ?? false) } : {}),
       appointmentByName: confirmedBy.get(w.id) ?? null,
       // วันเข้าถูกเลื่อน (ลูกค้าขอ · แอดมินเลื่อน) รอหัวหน้าภาคคอนเฟิร์มวันใหม่ — กล่องงานติดป้าย "คอนเฟิร์มวันใหม่"
       rescheduled: isRescheduled(w.status, lastSettle.get(w.id)),
@@ -4026,7 +4041,9 @@ function detailBody({ row, logs, supervisors, itLead, crossTeam, claimUsers, app
     ...base,
     payWait: row.status === "AWAITING_PAYMENT" ? payWaitDetail(row, logs, now) : null,
     // ป้ายคิดซ้ำพร้อมประวัติ (ด่านที่สองของรอบที่เปิด) — shape() คิดจากแถวรอบอย่างเดียว
-    statusLabel: statusLabelOf(row.status, partsPick),
+    statusLabel: statusLabelOf(row.status, partsPick, onSiteOf(logs)),
+    // แถบขั้นแยก "เข้างาน" กับ "ปิดงาน" จากค่านี้ — กฎเดียวกับป้ายข้างบน (ตัวอย่าง พ.ย. 69)
+    onSite: row.status === "IN_PROGRESS" || row.status === "INSPECTING" ? onSiteOf(logs) : null,
     partsPick,
     partsPickConfirmed: partsPickConfirmedShape(row, logs),
     // นาฬิกาเซิร์ฟเวอร์ — ฟอร์มนัดวันขีดฆ่าวันที่ปิดและนับถอยหลังด้วยเวลานี้ ไม่ใช่นาฬิกามือถือ (ข้อ 12)
@@ -4105,6 +4122,18 @@ function payWaitDetail(row: Detail["row"], logs: Detail["logs"], now: Date) {
         ref: p.inStock === true && p.requisitionNo ? `ใบเบิก ${p.requisitionNo}` : `เบิกเพื่อโอน ${p.transferReqNo}`,
       })),
   };
+}
+
+/**
+ * ช่างถึงหน้างานในรอบนี้แล้วไหม — ARRIVED ที่เกิดหลังการเดินขั้นล่าสุด (logs ใหม่ก่อนเก่า)
+ * ARRIVED ไม่ใช่การเดินขั้น (NON_STAGE_ACTIONS) จึงเจอก่อนแถวปล่อยงาน · ถูกดึงงานคืนแล้วปล่อยใหม่ = เริ่มนับใหม่
+ */
+function onSiteOf(logs: { action: string }[]): boolean {
+  for (const l of logs) {
+    if (l.action === "ARRIVED") return true;
+    if (!NON_STAGE_ACTIONS.includes(l.action)) return false;
+  }
+  return false;
 }
 
 async function detailFor(id: number) {
@@ -8176,6 +8205,40 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
   }
   res.json({ ok: true, note, distance: distance != null ? Math.round(distance) : null, withinRadius: within });
 });
+
+/**
+ * รายงานตัวเข้าสาขา = ถึงหน้างานของใบที่ช่างถืออยู่ที่สาขานั้น (ตัวอย่าง พ.ย. 69 — เจ้าของงานขอ "เช็คอินร้านหรือกดถึงร้าน
+ * แล้วให้สถานะเปลี่ยนตามจริง") · เดิมสองปุ่มแยกกัน ช่างที่รายงานตัวแล้วไม่ได้กด "ถึงหน้างาน" ใบค้างว่ายังไม่ถึงทั้งที่ยืนอยู่ในร้าน
+ * นับเฉพาะใบที่อยู่ในมือช่าง (ปิดงาน/ตรวจหน้างาน) ของทีมที่ช่างดูแล และยังไม่ถึงในรอบนี้ — กดซ้ำไม่เขียนซ้ำ
+ */
+export async function arriveByCheckIn(userId: number, branchId: number, note: string): Promise<string[]> {
+  const coverage = await coverageOfUserId(userId);
+  const open = await prisma.workOrder.findMany({
+    where: { branchId, status: { in: ["IN_PROGRESS", "INSPECTING"] }, deletedAt: null },
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      jobType: true,
+      assignedTeam: true,
+      assignedToId: true,
+      branch: { select: { zone: true, pmTeam: true } },
+      logs: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30, select: { action: true } },
+    },
+  });
+  const mine = open.filter((w) => canTouch(w, { coverage, id: userId }) && !onSiteOf(w.logs));
+  const done: string[] = [];
+  for (const w of mine) {
+    const ok = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.workOrder.updateMany({ where: { id: w.id, status: w.status }, data: { updatedAt: new Date() } });
+      if (count === 0) return false;
+      await writeLog(tx, w.id, userId, "ARRIVED", w.status, note);
+      return true;
+    }, STAGE_TX);
+    if (ok) done.push(w.code);
+  }
+  return done;
+}
 
 /**
  * ลูกค้าขอเปลี่ยนวัน แต่ทีมไม่ว่างวันใหม่ — หัวหน้าภาคส่งกลับให้แอดมินนัดลูกค้าใหม่ (เจ้าของงานเลือก ต.ค. 69)
