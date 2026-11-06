@@ -79,6 +79,8 @@ export const AREA_TEAM_ALLOWED: RegExp[] = [
   // ใบงานซ่อม · กล่องงานของฉัน · รายละเอียดใบงาน
   /^GET \/api\/work-orders\/?$/,
   /^GET \/api\/work-orders\/(version|inbox-count|options|locate)$/,
+  // ช่องค้นหาทั้งระบบบนแถบหัว (พ.ย. 69) — ใบงานตามขอบเขต Area เดียวกับรายการ · ไม่เห็นผลค้นคนในระบบ
+  /^GET \/api\/work-orders\/search-all$/,
   /^GET \/api\/work-orders\/\d+(\/(version|attachments|attachments\/links|attachments\/\d+\/(link|file)))?$/,
   // ลิงก์หน้าเว็บของใบงาน (/#/wo/WO-00045) ถามเลขใบจากรหัสก่อนเปิด — ไม่อยู่ในรายการ = ทีม Area เปิดลิงก์ใบของสาขาตัวเอง
   // แล้วเจอหน้ากุญแจ · route เช็คขอบเขตสาขาด้วยกฎเดียวกับเปิดใบ (blockedForViewer) ใบนอกสาขาจึงยัง 403
