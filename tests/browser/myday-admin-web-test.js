@@ -180,8 +180,12 @@ const APP = "http://localhost:8081";
     await lbl(`บันทึกการตามลูกค้า ${O.PAY.code}`).first().click();
     await page.waitForTimeout(3000);
     const fu = sql(`select count(*)||'|'||max(note) from "WorkOrderLog" where "workOrderId"=${O.PAY.id} and action='PAYMENT_FOLLOWUP'`);
-    fu === "1|ร้านขอดูใบเสนอราคาอีกรอบ" && (await lbl(`แถวรอจ่าย ${O.PAY.code}`).first().innerText()).includes("วันนี้ · ร้านขอดูใบเสนอราคาอีกรอบ")
-      ? pass("ตามลูกค้าแล้วในแถว (งานของฉันวันนี้) → ฐานข้อมูล PAYMENT_FOLLOWUP · แถวขึ้น \"วันนี้ · …\"") : fail(`ตามในงานของฉัน: ${fu}`);
+    // แถวตัวเดียวกับแท็บรอเงิน (6 พ.ย. 69): "ตามล่าสุด วันนี้ HH:MM · ชื่อ" แล้วหมายเหตุบรรทัดถัดไป
+    const payAfter = await lbl(`แถวรอจ่าย ${O.PAY.code}`).first().innerText();
+    fu === "1|ร้านขอดูใบเสนอราคาอีกรอบ" && payAfter.includes("ตามล่าสุด วันนี้") && payAfter.includes("ร้านขอดูใบเสนอราคาอีกรอบ")
+      ? pass("ตามลูกค้าแล้วในแถว (งานของฉันวันนี้) → ฐานข้อมูล PAYMENT_FOLLOWUP · แถวขึ้น \"ตามล่าสุด วันนี้ …\" + หมายเหตุ") : fail(`ตามในงานของฉัน: ${fu} · ${payAfter}`);
+    (await lbl(`ลูกค้าไม่ซ่อม ${O.PAY.code}`).count()) > 0
+      ? pass("แถวรอเงินในงานของฉันวันนี้มีปุ่ม \"ลูกค้าไม่ซ่อม\" (แถวตัวเดียวกับแท็บ)") : fail("ไม่มีปุ่มลูกค้าไม่ซ่อมในแถวงานของฉันวันนี้");
     await lbl(`ลูกค้าจ่ายแล้ว · แนบบิล ${O.PAY.code}`).first().click();
     await page.waitForTimeout(5000);
     (await hash()) === `#/wo/${O.PAY.code}` && (await page.getByText(`แนบบิลรับเงิน · ${O.PAY.code}`, { exact: false }).locator("visible=true").count()) > 0

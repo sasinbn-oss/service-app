@@ -1,8 +1,9 @@
 #!/bin/bash
 # ทดสอบ: แท็บ "รอลูกค้าจ่ายเงิน" ของหน้าใบงานซ่อม (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง paytab — ตอบ "ทำตามที่แนะนำ")
 #   · payTab ในคำตอบรายการ (เฉพาะแอดมินทั่วไป/Super Admin) = ใบขั้นรอเงินทุกใบในขอบเขต — ไม่ตามแท็บที่เปิด คำค้น หรือ "มอบหมายให้ฉัน"
-#     total ตรงฐานข้อมูล · over / never / followed ตรงกับ payWait ของแถวในแท็บ (นับทีละใบ) · never + followed = total
-#   · ใบทดสอบสามใบ: ถอยเวลา 5 วัน (เกิน · การตามของรอบก่อนไม่นับ = ยังไม่เคยตาม) · 2 วัน (ไม่เกิน · ตามแล้ว) · วันนี้ (ยังไม่เคยตาม)
+#     total ตรงฐานข้อมูล · over / never / followed / late ตรงกับ payWait ของแถวในแท็บ (นับทีละใบ) · never + followed = total
+#   · ใบทดสอบสามใบ: ถอยเวลา 5 วัน (เกิน · การตามของรอบก่อนไม่นับ = ยังไม่เคยตาม) · 2 วัน (ไม่เกิน · ตามแล้ว · ลูกค้านัดจ่ายเมื่อวาน = เลยวันนัด)
+#     · วันนี้ (ยังไม่เคยตาม)
 #   · ตามลูกค้าแล้ว (แถวในฐานข้อมูล) → never ลด followed เพิ่มทันที · ลายนิ้วมือของแท็บเปลี่ยน (ปุ่มมีอัปเดต)
 #   · แถวมี payWait.quoted = ส่งใบเสนอราคาครั้งล่าสุด (เวลาตรงประวัติ QUOTED · ชื่อคนส่ง) — คอลัมน์ "ส่งใบเสนอราคา" ของแท็บ
 #   · หัวหน้าภาค · ช่าง · Admin Spare Part · แอดมินที่ดูในฐานะหัวหน้าภาค = payTab null (ไม่มีแท็บ)
@@ -19,9 +20,10 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 LIST() { curl -s "localhost:4000/api/work-orders?$2" -H "$(H $1)"; }
 # สรุปของแท็บแบบเรียงคงที่ — เทียบระหว่างคำตอบได้ตรง ๆ
-SUM() { LIST $1 "$2" | J 'd.payTab===null?"null":d.payTab===undefined?"undefined":[d.payTab.total,d.payTab.over,d.payTab.never,d.payTab.followed,d.payTab.alertDays].join("|")'; }
+SUM() { LIST $1 "$2" | J 'd.payTab===null?"null":d.payTab===undefined?"undefined":[d.payTab.total,d.payTab.over,d.payTab.never,d.payTab.followed,d.payTab.alertDays,d.payTab.late].join("|")'; }
 # นับจากแถวในแท็บเอง (ทีละใบ) — ตัวเลขแท็บต้องเท่ากับสิ่งที่เห็นเมื่อกดเข้าไป
-ROWSUM() { LIST $1 "status=AWAITING_PAYMENT" | J 'const p=d.rows.map(r=>r.payWait); [p.length,p.filter(x=>x.over).length,p.filter(x=>x.follows===0).length,p.filter(x=>x.follows>0).length,p[0]?p[0].alertDays:3].join("|")'; }
+# late = เลยวันที่ลูกค้านัดจ่าย (ชิป "เลยวันนัดจ่าย" · 6 พ.ย. 69) — รายละเอียดกติกาอยู่ใน payment-promise-test.sh
+ROWSUM() { LIST $1 "status=AWAITING_PAYMENT" | J 'const p=d.rows.map(r=>r.payWait); [p.length,p.filter(x=>x.over).length,p.filter(x=>x.follows===0).length,p.filter(x=>x.follows>0).length,p[0]?p[0].alertDays:3,p.filter(x=>x.promise&&x.promise.late).length].join("|")'; }
 ROW() { LIST $1 "status=AWAITING_PAYMENT" | node -pe "const d=JSON.parse(require('fs').readFileSync(0)); const r=d.rows.find(x=>x.id===$2); r===undefined?'ไม่อยู่':eval(process.argv[1])" "$3"; }
 TAB() { curl -s "localhost:4000/api/work-orders/locate?status=ACTIVE&ids=$2" -H "$(H $1)" | node -pe "const d=JSON.parse(require('fs').readFileSync(0)); (d.rows.find(x=>x.id===$3)||{tab:'ไม่อยู่'}).tab"; }
 A=$(login A001); T=$(login T001)
@@ -76,6 +78,9 @@ DB "update \"WorkOrderLog\" set \"createdAt\"=\"createdAt\"-interval '5 days' wh
     update \"WorkOrderLog\" set \"createdAt\"=\"createdAt\"-interval '2 days' where \"workOrderId\"=$W2;
     update \"WorkOrder\" set \"createdAt\"=\"createdAt\"-interval '2 days' where id=$W2" >/dev/null
 POST $A "work-orders/$W2/payment-followup" '{"note":"ลูกค้าบอกโอนพรุ่งนี้"}' >/dev/null
+# W2 ลูกค้านัดจ่ายเมื่อวานแล้วยังไม่จ่าย = เลยวันนัด (late) — เซิร์ฟเวอร์ไม่รับวันนัดย้อนหลังทาง API จึงใส่ทาง SQL
+DB "update \"WorkOrderLog\" set meta=jsonb_build_object('payBy', to_char(now() AT TIME ZONE 'Asia/Bangkok' - interval '1 day','YYYY-MM-DD'))
+    where \"workOrderId\"=$W2 and action='PAYMENT_FOLLOWUP'" >/dev/null
 echo "  ใบทดสอบ: $(DB "select string_agg(code||'='||status, ' ' order by id) from \"WorkOrder\" where id in ($W1,$W2,$W3,$WQ)")"
 
 echo "═══ แถวในแท็บ (status=AWAITING_PAYMENT)"
@@ -89,8 +94,8 @@ echo "═══ แถวในแท็บ (status=AWAITING_PAYMENT)"
 QAT=$(DB "select to_char(\"createdAt\",'YYYY-MM-DD\"T\"HH24:MI:SS.MS') from \"WorkOrderLog\" where \"workOrderId\"=$W1 and action='QUOTED' order by id desc limit 1")
 [ "$(ROW $A $W1 'r.payWait.quoted.at.slice(0,23)+"|"+r.payWait.quoted.byName')" = "$QAT|$ANAME" ] \
   && pass "คอลัมน์ส่งใบเสนอราคา: เวลา · ใคร ตรงประวัติ QUOTED ในฐานข้อมูล ($QAT · $ANAME)" || fail "quoted: $(ROW $A $W1 'JSON.stringify(r.payWait.quoted)') vs $QAT"
-[ "$(ROW $A $W1 'Object.keys(r.payWait).join(",")')" = "since,days,over,alertDays,follows,last,quoted" ] \
-  && pass "ช่องของ payWait ในรายการ: since,days,over,alertDays,follows,last,quoted (แอปจดการตามแทนที่ช่องเดิม — ลำดับต้องตรงไม่งั้นขึ้นมีอัปเดตปลอม)" \
+[ "$(ROW $A $W1 'Object.keys(r.payWait).join(",")')" = "since,days,over,alertDays,follows,last,quoted,promise,followUps" ] \
+  && pass "ช่องของ payWait ในรายการ: since,days,over,alertDays,follows,last,quoted,promise,followUps (แอปจดการตามแทนที่ช่องเดิม — ลำดับต้องตรงไม่งั้นขึ้นมีอัปเดตปลอม)" \
   || fail "ช่อง payWait: $(ROW $A $W1 'Object.keys(r.payWait).join(",")')"
 [ "$(LIST $A "status=ACTIVE" | J "String(d.rows.find(x=>x.id===$WQ).payWait)")" = "null" ] && pass "ขั้นอื่นยังไม่มี payWait" || fail "ขั้นเสนอราคามี payWait"
 
@@ -99,9 +104,9 @@ echo "═══ ตัวเลขแท็บ (payTab)"
 TOT_DB=$(DB "select count(*) from \"WorkOrder\" where status='AWAITING_PAYMENT' and \"deletedAt\" is null")
 S0=$(SUM $A "status=ACTIVE")
 [ "$(echo "$S0" | cut -d'|' -f1)" = "$TOT_DB" ] && pass "จำนวนใบในแท็บ = ใบขั้นรอเงินทั้งหมดในฐานข้อมูล ($TOT_DB)" || fail "payTab $S0 · ฐานข้อมูล $TOT_DB"
-[ "$S0" = "$(ROWSUM $A)" ] && pass "เกิน/ยังไม่เคยตาม/ตามแล้ว เท่ากับนับจากแถวในแท็บทีละใบ ($S0)" || fail "payTab $S0 · นับจากแถว $(ROWSUM $A)"
-echo "$S0" | node -e 'const [t,o,n,f,a]=require("fs").readFileSync(0,"utf8").trim().split("|").map(Number); process.exit(n+f===t&&o>=1&&n>=2&&f>=1&&a===3?0:1)' \
-  && pass "ยังไม่เคยตาม + ตามแล้ว = ทั้งหมด · ใบทดสอบนับเข้าครบ (เกิน ≥1 · ยังไม่เคยตาม ≥2 · ตามแล้ว ≥1) · เส้น 3 วันจากเซิร์ฟเวอร์" || fail "สรุป $S0"
+[ "$S0" = "$(ROWSUM $A)" ] && pass "เกิน/ยังไม่เคยตาม/ตามแล้ว/เลยวันนัด เท่ากับนับจากแถวในแท็บทีละใบ ($S0)" || fail "payTab $S0 · นับจากแถว $(ROWSUM $A)"
+echo "$S0" | node -e 'const [t,o,n,f,a,l]=require("fs").readFileSync(0,"utf8").trim().split("|").map(Number); process.exit(n+f===t&&o>=1&&n>=2&&f>=1&&a===3&&l>=1&&l<=f?0:1)' \
+  && pass "ยังไม่เคยตาม + ตามแล้ว = ทั้งหมด · ใบทดสอบนับเข้าครบ (เกิน ≥1 · ยังไม่เคยตาม ≥2 · ตามแล้ว ≥1 · เลยวันนัด ≥1) · เส้น 3 วันจากเซิร์ฟเวอร์" || fail "สรุป $S0"
 OK=1
 for q in "status=INBOX" "status=AWAITING_PAYMENT" "status=DONE" "status=ALL&search=zzznomatch999" "status=ACTIVE&assignedTo=me" "status=AWAITING_CONFIRM"; do
   [ "$(SUM $A "$q")" = "$S0" ] || { OK=0; fail "payTab ตาม $q: $(SUM $A "$q") ≠ $S0"; }
@@ -115,7 +120,7 @@ POST $A "work-orders/$W3/payment-followup" '{"note":"ลูกค้าว่า
 [ "$(DB "select count(*)||'|'||max(note) from \"WorkOrderLog\" where \"workOrderId\"=$W3 and action='PAYMENT_FOLLOWUP'")" = "$((N0 + 1))|ลูกค้าว่าจะโอนวันศุกร์" ] \
   && pass "ฐานข้อมูล: ตามลูกค้าแล้วได้แถว PAYMENT_FOLLOWUP ของใบวันนี้" || fail "แถวการตาม: $(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$W3 and action='PAYMENT_FOLLOWUP'")"
 S1=$(SUM $A "status=INBOX")
-WANT=$(echo "$S0" | node -pe 'const [t,o,n,f,a]=require("fs").readFileSync(0,"utf8").trim().split("|").map(Number); [t,o,n-1,f+1,a].join("|")')
+WANT=$(echo "$S0" | node -pe 'const [t,o,n,f,a,l]=require("fs").readFileSync(0,"utf8").trim().split("|").map(Number); [t,o,n-1,f+1,a,l].join("|")')
 [ "$S1" = "$WANT" ] && [ "$S1" = "$(ROWSUM $A)" ] && pass "หลังตาม: ยังไม่เคยตาม −1 · ตามแล้ว +1 ทันที ($S0 → $S1)" || fail "หลังตาม $S1 ต้องเป็น $WANT"
 [ "$(ROW $A $W3 'r.payWait.follows+"|"+r.payWait.last.note+"|"+r.payWait.last.byName')" = "1|ลูกค้าว่าจะโอนวันศุกร์|$ANAME" ] \
   && pass "แถวขึ้นตามล่าสุด (หมายเหตุ · ชื่อ)" || fail "แถว W3: $(ROW $A $W3 'JSON.stringify(r.payWait)')"

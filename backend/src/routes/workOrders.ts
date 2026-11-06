@@ -243,6 +243,7 @@ import {
   TECH_ROLES,
   STAGE_ACTOR_LINE,
   paymentWait,
+  bangkokDaysBetween,
   PAYMENT_WAIT_ALERT_DAYS,
   QUOTE_DECLINE_REASONS,
   CANCEL_REASON_LABELS,
@@ -2313,9 +2314,36 @@ const OVERDUE_SUPERVISOR_STAGES = ["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_
  * แถวรอลูกค้าจ่ายเงินในรายการ — นับการตามเฉพาะรอบรอเงินนี้ (หลังเข้าขั้นครั้งล่าสุด) ใบที่ย้อนไปเสนอราคาใหม่แล้วกลับมา
  * ไม่เอาการตามของรอบก่อนมาบอกว่า "ตามแล้ว" · follows = การตามของใบนี้ เรียงใหม่ก่อนเก่า
  */
-type FollowRow = { createdAt: Date; note: string | null; user: { name: string } | null };
+type FollowRow = { id: number; createdAt: Date; note: string | null; meta: Prisma.JsonValue | null; user: { name: string } | null };
 function payFollowUps<T extends FollowRow>(since: Date, follows: T[]) {
   return follows.filter((f) => f.createdAt >= since);
+}
+
+/**
+ * วันที่ลูกค้านัดจ่าย (เจ้าของงานเลือก 6 พ.ย. 69 — ช่อง "ลูกค้านัดจ่ายวันที่" ในฟอร์มตามลูกค้า) เก็บใน meta ของแถว PAYMENT_FOLLOWUP
+ * ไม่เพิ่มคอลัมน์: วันนัดเป็นคำพูดของลูกค้าตอนตามครั้งนั้น ไม่ใช่ค่าของใบ — ตามครั้งหลังลูกค้าเลื่อนได้ และต้องเห็นย้อนหลังว่าเคยนัดวันไหน
+ * อ่านแบบระวัง: meta เป็น JSON อะไรก็ได้ (แถวเก่าไม่มี) — รูปแบบผิดถือว่าไม่ได้นัด ไม่ให้แถวเดียวทำรายการพัง
+ */
+function payByOf(meta: Prisma.JsonValue | null): string | null {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return null;
+  const v = (meta as Record<string, unknown>).payBy;
+  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+/** การตามหนึ่งครั้ง — รูปเดียวทั้งรายการและหน้าใบงาน แอปเอาคำตอบของหน้าใบงานมาแทนในแถวได้ตรง ๆ (ลำดับช่องเดียวกัน) */
+function followView(f: FollowRow) {
+  return { id: f.id, at: f.createdAt, note: f.note, byName: f.user?.name ?? null, payBy: payByOf(f.meta) };
+}
+/**
+ * นัดจ่ายที่ยังใช้อยู่ของรอบรอเงินนี้ = วันนัดของการตามครั้งล่าสุดที่ใส่วันมา (follows เรียงใหม่ก่อนเก่า · เฉพาะรอบนี้)
+ * ตามครั้งหลังที่ไม่ได้ใส่วัน ไม่ล้างนัดเดิม (โทรไปลูกค้าไม่รับ ไม่ได้แปลว่ายกเลิกนัด) · ใส่วันใหม่ = แทนนัดเดิม
+ * late = วันนัดผ่านไปแล้วตามเวลาไทย (วันนัดคือวันนี้ยังไม่เลย) — ผู้เรียกส่งเฉพาะใบที่ยังรอเงิน จ่ายแล้วจึงไม่มีป้ายค้าง
+ */
+function payPromise(follows: FollowRow[], today: string) {
+  for (const f of follows) {
+    const date = payByOf(f.meta);
+    if (date) return { date, late: date < today };
+  }
+  return null;
 }
 function payWaitRow(since: Date, follows: FollowRow[], now: Date, quoted: FollowRow | undefined) {
   const mine = payFollowUps(since, follows);
@@ -2323,9 +2351,16 @@ function payWaitRow(since: Date, follows: FollowRow[], now: Date, quoted: Follow
   return {
     ...paymentWait(since, now),
     follows: mine.length,
-    last: last ? { at: last.createdAt, note: last.note, byName: last.user?.name ?? null } : null,
+    last: last ? { at: last.createdAt, note: last.note, byName: last.user?.name ?? null, payBy: payByOf(last.meta) } : null,
     // แท็บ "รอลูกค้าจ่ายเงิน" มีคอลัมน์ "ส่งใบเสนอราคา" วันที่ · ใคร (ตัวอย่าง paytab) — ครั้งล่าสุด แบบเดียวกับการ์ดในหน้าใบงาน
     quoted: quoted ? { at: quoted.createdAt, byName: quoted.user?.name ?? null } : null,
+    promise: payPromise(mine, bangkokDay(now)),
+    /**
+     * การตามทุกครั้งของรอบนี้ (ใหม่ก่อนเก่า) — แถวกด "ตาม n ครั้ง · ดูทั้งหมด" กางได้ทันทีโดยไม่ต้องถามเซิร์ฟเวอร์อีก
+     * ส่งมาทั้งชุดเพราะคำถามประวัติข้างบนดึงการตามทุกแถวของใบรอเงินมาอยู่แล้ว (คำนวณ follows/นัดจ่าย) — ไม่เพิ่มรอบไปกลับฐานข้อมูล
+     * ส่วนที่เพิ่มคือขนาดคำตอบ: ใบรอเงินไม่กี่สิบใบ × การตามไม่กี่ครั้ง (หมายเหตุ ≤ 300 ตัว) — ถูกกว่าถามทีละใบตอนกาง (~0.23 วิ/รอบ)
+     */
+    followUps: mine.map(followView),
   };
 }
 
@@ -2344,12 +2379,14 @@ function seesPayTab(auth: AuthRequest["auth"]) {
  * ป้ายแดง "เกิน 3 วัน n" บนแท็บต้องขึ้นตั้งแต่ยังเปิดแท็บอื่นอยู่ · แถบบรรทัดเดียวในกล่องงานก็ใช้ชุดนี้ สองที่จึงบอกเลขเดียวกัน
  * never = ยังไม่เคยตามในรอบรอเงินนี้ · followed = ตามแล้วอย่างน้อยครั้ง (สองตัวรวมกันเท่า total เสมอ)
  */
-function payTabSummary(waits: { over: boolean; follows: number; alertDays: number }[]) {
+function payTabSummary(waits: { over: boolean; follows: number; alertDays: number; promise: { late: boolean } | null }[]) {
   return {
     total: waits.length,
     over: waits.filter((p) => p.over).length,
     never: waits.filter((p) => p.follows === 0).length,
     followed: waits.filter((p) => p.follows > 0).length,
+    // เลยวันที่ลูกค้านัดจ่ายแล้ว (ชิป "เลยวันนัดจ่าย" · เจ้าของงานเลือก 6 พ.ย. 69) — ลูกค้าผิดนัดคือใบที่ต้องโทรก่อนใบที่ยังไม่ถึงวันนัด
+    late: waits.filter((p) => p.promise?.late).length,
     alertDays: PAYMENT_WAIT_ALERT_DAYS,
   };
 }
@@ -2458,7 +2495,8 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
       ? prisma.workOrderLog.findMany({
           where: { workOrderId: { in: payIds }, action: { in: ["PAYMENT_FOLLOWUP", "QUOTED"] } },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          select: { workOrderId: true, action: true, createdAt: true, note: true, user: { select: { name: true } } },
+          // meta = วันที่ลูกค้านัดจ่าย (payBy) ของการตามแต่ละครั้ง · id = กุญแจของแถวในรายการการตามที่กางใต้แถว
+          select: { id: true, workOrderId: true, action: true, createdAt: true, note: true, meta: true, user: { select: { name: true } } },
         })
       : Promise.resolve([]),
   ]);
@@ -4041,7 +4079,9 @@ function payWaitDetail(row: Detail["row"], logs: Detail["logs"], now: Date) {
   return {
     ...paymentWait(since, now),
     quoted: quoted ? { at: quoted.createdAt, byName: quoted.user?.name ?? null } : null,
-    followUps: follows.map((f) => ({ id: f.id, at: f.createdAt, note: f.note, byName: f.user?.name ?? null })),
+    followUps: follows.map(followView),
+    // "ลูกค้านัดจ่าย …" บนการ์ด — กติกาเดียวกับป้ายในรายการ (payPromise) สองที่จึงบอกวันนัดเดียวกัน
+    promise: payPromise(follows, bangkokDay(now)),
     issued: row.parts
       .filter((p) => p.kind === "WAITING" && openIssued(p))
       .map((p) => ({
@@ -11974,22 +12014,51 @@ router.post("/:id/cancel", requireAuth, async (req: AuthRequest, res) => {
 
 /**
  * ตามลูกค้าเรื่องจ่ายเงินแล้ว (เจ้าของงานเลือก 5 พ.ย. 69) — จดว่าใคร เมื่อไร หมายเหตุ (ไม่บังคับ) ลงประวัติใบงาน
+ * + วันที่ลูกค้านัดจ่าย (ไม่บังคับ · 6 พ.ย. 69) — ป้าย "นัดจ่าย …" ในแถว และชิป "เลยวันนัดจ่าย" เมื่อวันนั้นผ่านไปแล้วลูกค้ายังไม่จ่าย
  * ไม่เดินขั้น (NON_STAGE_ACTIONS) · แอดมินที่ทำขั้นนี้ได้เท่านั้น (guardStage — คนอื่น 403 · ขั้นอื่น 409)
  * เขียนแบบมีเงื่อนไขในคำสั่งเดียว: แอดมินอีกคนแนบบิล/ยกเลิกไประหว่างนั้น ไม่มีแถว "ตามลูกค้า" ค้างในใบที่ไม่ได้รอเงินแล้ว
  */
 const payFollowUpSchema = z.object({
   note: z.string({ invalid_type_error: "หมายเหตุต้องเป็นข้อความ" }).trim().max(300, "หมายเหตุยาวได้ไม่เกิน 300 ตัวอักษร").optional().nullable(),
+  // ลูกค้านัดจ่ายวันที่ (ไม่บังคับ · เจ้าของงานเลือก 6 พ.ย. 69) — "YYYY-MM-DD" ปี ค.ศ. ตามปฏิทินของแอป (DateField)
+  // ช่องว่าง = ไม่ได้นัด (แบบช่องวันที่อื่นของแอป) ไม่ใช่วันที่ผิด
+  payBy: z.preprocess(
+    (v) => (v === "" ? null : v),
+    z
+      .string({ invalid_type_error: "วันที่ลูกค้านัดจ่ายไม่ถูกต้อง" })
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "วันที่ลูกค้านัดจ่ายไม่ถูกต้อง — ใช้รูปแบบ ปปปป-ดด-วว")
+      .optional()
+      .nullable()
+  ),
 });
+/** วันนัดจ่ายไกลสุดที่รับ — กันปี พ.ศ. หลุดมาเป็น ค.ศ. (2569 → อีก 543 ปี) ป้ายนัดจ่ายไม่มีวันเลยนัดและใบหายจากชิป "เลยวันนัดจ่าย" */
+const PAY_BY_MAX_DAYS = 365;
+/** ตรวจวันนัดจ่าย — คืนข้อความ 400 หรือ null ถ้าใช้ได้ · วันในอดีต (เวลาไทย) ไม่รับ: นัดที่เลยไปแล้วตั้งแต่ตอนจดคือจดผิด */
+function payByProblem(payBy: string, now: Date): string | null {
+  const d = new Date(`${payBy}T00:00:00Z`);
+  // 2026-02-30 ผ่าน regex แต่ไม่มีวันจริง (Date เลื่อนไปเดือนถัดไปเงียบ ๆ) — เทียบกลับให้ตรงตัว
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== payBy) return "วันที่ลูกค้านัดจ่ายไม่ถูกต้อง — ไม่มีวันนี้ในปฏิทิน";
+  const today = bangkokDay(now);
+  if (payBy < today) return "วันที่ลูกค้านัดจ่ายต้องไม่ใช่วันที่ผ่านมาแล้ว";
+  if (bangkokDaysBetween(new Date(`${today}T00:00:00Z`), d) > PAY_BY_MAX_DAYS) return `วันที่ลูกค้านัดจ่ายไกลเกิน ${PAY_BY_MAX_DAYS} วัน — ตรวจปีอีกครั้ง`;
+  return null;
+}
 router.post("/:id/payment-followup", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = payFollowUpSchema.safeParse(req.body ?? {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const payBy = parsed.data.payBy || null;
+  const now = new Date();
+  const bad = payBy ? payByProblem(payBy, now) : null;
+  if (bad) return res.status(400).json({ error: bad });
   if (!(await guardStage(req, res, id, "AWAITING_PAYMENT"))) return;
-  const at = new Date().toISOString();
+  const at = now.toISOString();
+  // วันนัดอยู่ใน meta ของแถวการตาม (ดู payByOf) — ไม่ใส่วัน = meta ว่าง แบบแถวก่อนมีช่องนี้
+  const meta = payBy ? JSON.stringify({ payBy }) : null;
   const wrote = await prisma.$executeRaw`
-    INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "createdAt")
-    SELECT "id", ${req.auth!.userId}, 'PAYMENT_FOLLOWUP', 'AWAITING_PAYMENT', CAST(${parsed.data.note || null} AS text), CAST(${at} AS timestamp(3))
+    INSERT INTO "WorkOrderLog" ("workOrderId", "userId", "action", "status", "note", "meta", "createdAt")
+    SELECT "id", ${req.auth!.userId}, 'PAYMENT_FOLLOWUP', 'AWAITING_PAYMENT', CAST(${parsed.data.note || null} AS text), CAST(${meta} AS jsonb), CAST(${at} AS timestamp(3))
     FROM "WorkOrder" WHERE "id" = ${id} AND "status" = 'AWAITING_PAYMENT' AND "deletedAt" IS NULL`;
   if (wrote === 0) return stageMoved(res);
   res.json(await detailFor(id));

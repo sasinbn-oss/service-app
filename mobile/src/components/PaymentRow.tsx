@@ -1,36 +1,62 @@
 /**
- * แถวใบรอลูกค้าจ่ายเงิน + "ตามลูกค้าแล้ว" ในแถว (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง paytab และ myday — "ทำตามที่แนะนำ")
+ * แถวใบรอลูกค้าจ่ายเงิน + "ตามลูกค้าแล้ว" / "ลูกค้าไม่ซ่อม" ในแถว (เจ้าของงานเลือก 5–6 พ.ย. 69 · ตัวอย่าง paytab และ myday — "ทำตามที่แนะนำ")
  *
  * ตัวเดียวใช้สองที่: แท็บ "รอลูกค้าจ่ายเงิน" ในหน้าใบงานซ่อม (variant "tab") และหัวข้อเดียวกันในงานของฉันวันนี้ของแอดมิน
  * (variant "queue") — การจดการตามต้องทำงานเหมือนกันทุกที่ ถ้ามีสองชุด วันหนึ่งจะแก้ชุดเดียวแล้วสองหน้าจดไม่เหมือนกัน
- * · กด "ตามลูกค้าแล้ว" = ช่องสั้น ๆ "ลูกค้าว่ายังไง" กางใต้แถว (ไม่บังคับ) → POST /payment-followup → แถวขึ้น "วันนี้ · …" ทันที
+ * · คอลัมน์ "ตามลูกค้าล่าสุด" (6 พ.ย. 69): เมื่อไร · ใคร (วันนี้เขียว) / หมายเหตุ / ป้ายนัดจ่าย + "ตาม n ครั้ง · ดูทั้งหมด" กางทุกครั้งใต้แถว
+ *   ไม่เคยตามแดง "ยังไม่เคยตาม" · ข้อมูลมากับแถว (payWait.followUps) กางได้ทันที
+ * · กด "ตามลูกค้าแล้ว" = ฟอร์มตัวเดียวกับหน้าใบงาน (FollowUpForm: ข้อความลัด · ลูกค้านัดจ่ายวันที่) กางใต้แถว → แถวขึ้นการตามใหม่ทันที
  *   ไม่ต้องเปิดใบทีละใบ และไม่โหลดรายการใหม่ (แถวไม่กระโดดใต้นิ้ว)
+ * · กด "ลูกค้าไม่ซ่อม" = ฟอร์มตัวเดียวกับหน้าใบงาน (DeclineInline → DeclineForm) กางใต้แถว → ใบยกเลิก ผู้เรียกเอาแถวออก
  * · กดแถว / › = เปิดใบงาน · จอแคบเป็นการ์ด (ตารางหกคอลัมน์ไม่พอที่)
  */
 import React, { useState } from "react";
-import { StyleSheet, Text, TextInput, View, type TextStyle } from "react-native";
-import axios from "axios";
+import { StyleSheet, Text, View, type TextStyle } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
-import Spinner from "./Spinner";
-import { api, apiErrorMessage } from "../api/client";
-import { showAlert } from "../utils/alert";
 import { machineTag } from "../utils/machine";
-import { PAY_GO_LABEL, followDay, followText, payDaysText, type PayWaitRow } from "./PaymentWait";
+import {
+  DeclineInline,
+  FollowHistory,
+  FollowUpForm,
+  NO_NOTE,
+  PAY_GO_LABEL,
+  PromiseBadge,
+  followDay,
+  followWhen,
+  followedToday,
+  payDaysText,
+  type PayWaitDetail,
+  type PayWaitRow,
+} from "./PaymentWait";
 import { colors, headingFont, radius, spacing } from "../theme";
 import type { WorkOrderRow } from "../screens/WorkOrderListScreen";
 
-/** ตัวเลขของแท็บ (payTab ในคำตอบรายการ) — never + followed = total เสมอ · alertDays = เส้น "เกิน N วัน" ของเซิร์ฟเวอร์ */
+/**
+ * ตัวเลขของแท็บ (payTab ในคำตอบรายการ) — never + followed = total เสมอ · alertDays = เส้น "เกิน N วัน" ของเซิร์ฟเวอร์
+ * late = เลยวันที่ลูกค้านัดจ่าย (6 พ.ย. 69 — เซิร์ฟเวอร์รุ่นก่อนไม่มี)
+ */
 export interface PayTabSummary {
   total: number;
   over: number;
   never: number;
   followed: number;
+  late?: number;
   alertDays: number;
 }
 
 /** แถวในรายการที่มี payWait (ขั้นรอลูกค้าจ่ายเงิน) — quoted มาจากเซิร์ฟเวอร์รุ่นที่มีแท็บนี้ */
 export type PayRow = WorkOrderRow & { payWait: PayWaitRow & { quoted?: { at: string; byName: string | null } | null } };
+
+/**
+ * payWait ของแถวหลังจดการตาม — เอาการตาม/นัดจ่ายจากคำตอบของหน้าใบงาน (รูปเดียวกับของรายการ — followView ของเซิร์ฟเวอร์)
+ * แทนเฉพาะช่องของการตาม ลำดับช่องเดิม (spread ของเดิมก่อน) — ตัวเช็คของใหม่เบื้องหลังเทียบแถวด้วย JSON ถ้าลำดับเปลี่ยนจะขึ้น "มีอัปเดต" ปลอม
+ */
+export function payWaitAfterFollow(p: PayRow["payWait"], d: PayWaitDetail): PayRow["payWait"] {
+  const fu = d.followUps;
+  const last = fu[0] ? { at: fu[0].at, note: fu[0].note, byName: fu[0].byName, payBy: fu[0].payBy ?? null } : null;
+  return { ...p, follows: fu.length, last, promise: d.promise ?? null, followUps: fu };
+}
 
 /**
  * คอลัมน์ตารางจอคอมของงานของฉันวันนี้ (ตัวอย่าง myday: ใบงาน · สาขา · งาน/เครื่อง · ข้อมูลของหัวข้อ · ปุ่ม) — แถวของหัวข้ออื่นและหัวตาราง
@@ -44,14 +70,17 @@ export const QUEUE_COL = StyleSheet.create({
   // กว้างคงที่ — ปุ่มของแถว (รายละเอียด · ปุ่มขั้น · เลื่อนวันนัด) ยืดเต็มช่องนี้ ไม่ใช่บีบตามความยาวข้อความ
   actions: { width: 290 },
 });
-/** คอลัมน์ตารางของแท็บ (ตัวอย่าง paytab: ใบงาน · สาขา·งาน · ส่งใบเสนอราคา · รอมาแล้ว · ตามลูกค้าล่าสุด · ปุ่ม) */
+/**
+ * คอลัมน์ตารางของแท็บ (ตัวอย่าง paytab: ใบงาน · สาขา·งาน · ส่งใบเสนอราคา · รอมาแล้ว · ตามลูกค้าล่าสุด · ปุ่ม)
+ * ช่องปุ่มกว้างพอสามปุ่ม (ลูกค้าไม่ซ่อม · ตามลูกค้าแล้ว · ›) แถวเดียว — ช่องตามล่าสุดได้ส่วนกว้างสุด (สามบรรทัด + ป้าย)
+ */
 export const TAB_COL = StyleSheet.create({
   code: { width: 116 },
-  branch: { flex: 2.3, minWidth: 0 },
-  quoted: { flex: 1.6, minWidth: 0 },
-  days: { width: 110 },
-  last: { flex: 2.4, minWidth: 0 },
-  actions: { width: 190, flexDirection: "row", justifyContent: "flex-end", gap: 6 },
+  branch: { flex: 1.9, minWidth: 0 },
+  quoted: { flex: 1.2, minWidth: 0 },
+  days: { width: 96 },
+  last: { flex: 2.9, minWidth: 0 },
+  actions: { width: 252, flexDirection: "row", justifyContent: "flex-end", gap: 6 },
 });
 
 type Render = (text: string, style: TextStyle | TextStyle[], lines?: number) => React.ReactNode;
@@ -61,20 +90,66 @@ const plain: Render = (text, style, lines) => (
   </Text>
 );
 
-/** ตามแล้ววันนี้ — สีเขียว (ตัวอย่าง: "วันนี้ · ลูกค้าบอกจะโอนวันศุกร์") · ตามวันก่อนสีปกติ · ไม่เคยตามแดง */
-function lastTone(p: PayWaitRow) {
-  if (!p.last) return styles.never;
-  return followDay(p.last.at) === "วันนี้" ? styles.today : styles.lastText;
+/**
+ * ช่อง "ตามลูกค้าล่าสุด" (ตัวอย่างที่ตกลง 6 พ.ย. 69) — บรรทัด 1 เมื่อไร · ใคร (วันนี้เขียว) · บรรทัด 2 หมายเหตุ (ไม่เกินสองบรรทัด)
+ * · บรรทัด 3 ป้ายนัดจ่าย + "ตาม n ครั้ง · ดูทั้งหมด ⌄" (ตามมากกว่าครั้งเดียวในรอบนี้) · ไม่เคยตาม = "ยังไม่เคยตาม" แดง
+ * prefix = "ตามล่าสุด " ในงานของฉันวันนี้/การ์ด (ช่องนั้นไม่มีหัวคอลัมน์บอก)
+ */
+function FollowCell({
+  p,
+  code,
+  open,
+  onToggle,
+  prefix = "",
+}: {
+  p: PayWaitRow;
+  code: string;
+  open: boolean;
+  onToggle: () => void;
+  prefix?: string;
+}) {
+  if (!p.last) return <Text style={[styles.cell, styles.never]}>ยังไม่เคยตาม</Text>;
+  const many = p.follows > 1 && (p.followUps?.length ?? 0) > 1;
+  const today = followedToday(p.last.at);
+  return (
+    <View style={styles.followCell}>
+      <Text style={[styles.when, today ? styles.today : null]} numberOfLines={1}>
+        {prefix}
+        {followWhen(p.last.at)}
+        {p.last.byName ? ` · ${p.last.byName}` : ""}
+      </Text>
+      <Text style={[styles.cell, styles.lastText, !p.last.note && styles.noNote]} numberOfLines={2}>
+        {p.last.note ?? NO_NOTE}
+      </Text>
+      {p.promise || many ? (
+        <View style={styles.line3}>
+          {p.promise ? <PromiseBadge p={p.promise} /> : null}
+          {many ? (
+            <TouchableOpacity
+              style={styles.more}
+              onPress={onToggle}
+              accessibilityLabel={`${open ? "ซ่อนการตาม" : `ดูการตามทั้งหมด ${p.follows} ครั้ง`} ${code}`}
+              // ปุ่มกาง/พับ — เว็บไม่แปลง accessibilityState (CLAUDE.md) เทสต์อ่านสถานะจาก aria-expanded
+              aria-expanded={open}
+            >
+              <Text style={styles.moreText}>{open ? "ซ่อน ⌃" : `ตาม ${p.follows} ครั้ง · ดูทั้งหมด ⌄`}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 export function PaymentRow({
   row,
   variant,
   wide,
-  canFollow,
+  canAct,
   onOpen,
   onAttach,
   onFollowed,
+  onDeclined,
   onStale,
   render = plain,
   actionsTarget,
@@ -83,13 +158,18 @@ export function PaymentRow({
   variant: "tab" | "queue";
   /** จอกว้าง = แถวตาราง · จอแคบ = การ์ด */
   wide: boolean;
-  /** แอดมินที่ทำขั้นนี้ได้ (เซิร์ฟเวอร์กันอีกชั้น) — ไม่ได้ = ไม่มีปุ่มตาม */
-  canFollow: boolean;
+  /**
+   * กด "ตามลูกค้าแล้ว" / "ลูกค้าไม่ซ่อม" ได้ — กติกาเดียวกับหน้าใบงาน (แอดมินที่ทำขั้นนี้ได้ ไม่ใช่ Admin Spare Part/ดูในฐานะ)
+   * ผู้เรียกคิดให้ · แถวไม่เปิดสิทธิ์เพิ่ม (เซิร์ฟเวอร์กันอีกชั้น) · ไม่ได้ = ไม่มีปุ่มทั้งสอง
+   */
+  canAct: boolean;
   onOpen: () => void;
   /** งานของฉันวันนี้: ปุ่มหลัก "ลูกค้าจ่ายแล้ว · แนบบิล" — เปิดใบพร้อมฟอร์มแนบบิล */
   onAttach?: () => void;
   /** จดการตามแล้ว — payWait ชุดใหม่ (ช่องลำดับเดิม) ให้ผู้เรียกแทนในแถวของตัวเอง */
   onFollowed: (p: PayRow["payWait"]) => void;
+  /** ลูกค้าไม่ซ่อม — ใบยกเลิกแล้ว ผู้เรียกเอาแถวออกและปรับตัวเลข (ไม่โหลดรายการใหม่) */
+  onDeclined: () => void;
   /** ใบเพิ่งเดินขั้นไปแล้ว (409) — ผู้เรียกโหลดรายการใหม่ */
   onStale?: () => void;
   /** วาดข้อความ (งานของฉันวันนี้ไฮไลต์คำค้น) */
@@ -98,47 +178,40 @@ export function PaymentRow({
   actionsTarget?: object | null;
 }) {
   const p = row.payWait;
-  const [editing, setEditing] = useState(false);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function save() {
-    setBusy(true);
-    try {
-      const { data } = await api.post<{ payWait: { followUps: { at: string; note: string | null; byName: string | null }[] } | null }>(
-        `/work-orders/${row.id}/payment-followup`,
-        { note: note.trim() || undefined }
-      );
-      const fu = data.payWait?.followUps ?? [];
-      // แทนเฉพาะสองช่องของการตาม ลำดับช่องเดิม — ตัวเช็คของใหม่เบื้องหลังเทียบแถวด้วย JSON ถ้าลำดับเปลี่ยนจะขึ้น "มีอัปเดต" ปลอม
-      onFollowed({ ...p, follows: fu.length, last: fu[0] ? { at: fu[0].at, note: fu[0].note, byName: fu[0].byName } : null });
-      setEditing(false);
-      setNote("");
-    } catch (e) {
-      showAlert("บันทึกการตามลูกค้าไม่สำเร็จ", apiErrorMessage(e));
-      if (axios.isAxiosError(e) && e.response?.status === 409) onStale?.();
-    } finally {
-      setBusy(false);
-    }
-  }
+  const [panel, setPanel] = useState<"follow" | "decline" | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const toggle = (k: "follow" | "decline") => setPanel((v) => (v === k ? null : k));
 
   const code = row.code;
   const what = [row.symptom || row.title, row.machineCode ? `เครื่อง ${machineTag(row.machineCode, row.machineCapacityKg)}` : null]
     .filter(Boolean)
     .join(" · ");
   const quoted = p.quoted ? `${followDay(p.quoted.at)}${p.quoted.byName ? ` · ${p.quoted.byName}` : ""}` : "—";
-  const lastLine = p.last ? followText(p.last) : "ยังไม่เคยตาม";
   const urgent = row.priority === "URGENT";
+  const cell = (prefix?: string) => <FollowCell p={p} code={code} open={showAll} onToggle={() => setShowAll((v) => !v)} prefix={prefix} />;
 
-  const followBtn = canFollow ? (
+  const followBtn = canAct ? (
     <TouchableOpacity
-      style={[styles.btn, styles.btnGhost, editing && styles.btnGhostOn]}
-      onPress={() => setEditing((v) => !v)}
+      style={[styles.btn, styles.btnGhost, panel === "follow" && styles.btnGhostOn]}
+      onPress={() => toggle("follow")}
       accessibilityLabel={`ตามลูกค้าแล้ว ${code}`}
-      aria-expanded={editing}
+      aria-expanded={panel === "follow"}
     >
       <Text style={styles.btnGhostText} numberOfLines={1}>
         ตามลูกค้าแล้ว
+      </Text>
+    </TouchableOpacity>
+  ) : null;
+  // ปุ่มรองสีแดงแบบหน้าใบงาน (PayWaitButtons) — เป็นทางจบของใบ จึงไม่ใช่ปุ่มทึบ กดผิดยังมีฟอร์มให้เลือกเหตุผลก่อน
+  const declineBtn = canAct ? (
+    <TouchableOpacity
+      style={[styles.btn, styles.btnDecline, panel === "decline" && styles.btnDeclineOn]}
+      onPress={() => toggle("decline")}
+      accessibilityLabel={`ลูกค้าไม่ซ่อม ${code}`}
+      aria-expanded={panel === "decline"}
+    >
+      <Text style={styles.btnDeclineText} numberOfLines={1}>
+        ลูกค้าไม่ซ่อม
       </Text>
     </TouchableOpacity>
   ) : null;
@@ -168,34 +241,31 @@ export function PaymentRow({
   );
   const daysText = p.days < 1 ? "วันนี้" : `${p.days} วัน`;
 
-  const form = editing ? (
-    // จอคอม: ช่องเริ่มตรงคอลัมน์สาขา (ตัวอย่าง) · การ์ด: ชิดขอบการ์ด
-    <View
-      style={[styles.form, wide ? variant === "tab" && { paddingLeft: 116 + spacing.md * 2 } : styles.formCard]}
-      accessibilityLabel={`ฟอร์มตามลูกค้า ${code}`}
-    >
-      <Text style={styles.formLabel}>ลูกค้าว่ายังไง</Text>
-      <TextInput
-        style={styles.input}
-        value={note}
-        onChangeText={setNote}
-        maxLength={300}
-        autoFocus
-        placeholder="เช่น จะโอนวันศุกร์ (ไม่บังคับ)"
-        placeholderTextColor={colors.textFaint}
-        accessibilityLabel={`ลูกค้าว่ายังไง ${code}`}
-        onSubmitEditing={() => void save()}
-      />
-      <View style={styles.formBtns}>
-        <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={() => setEditing(false)} disabled={busy} accessibilityLabel={`ยกเลิกการตาม ${code}`}>
-          <Text style={styles.btnGhostText}>ยกเลิก</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.btnNavy, { minWidth: 84 }]} onPress={() => void save()} disabled={busy} accessibilityLabel={`บันทึกการตามลูกค้า ${code}`}>
-          {busy ? <Spinner color="#fff" size="small" /> : <Text style={styles.btnNavyText}>บันทึก</Text>}
-        </TouchableOpacity>
-      </View>
-    </View>
-  ) : null;
+  // ใต้แถว: ฟอร์มที่กาง + การตามทั้งหมด · จอคอม (แท็บ) เริ่มตรงคอลัมน์สาขา (ตัวอย่าง) · การ์ดชิดขอบการ์ด
+  const under = wide ? (variant === "tab" ? styles.underTab : styles.underWide) : styles.underCard;
+  const below = (
+    <>
+      {panel === "follow" ? (
+        <FollowUpForm
+          orderId={row.id}
+          code={code}
+          autoFocus
+          style={under}
+          onCancel={() => setPanel(null)}
+          onStale={onStale}
+          onSaved={(d) => {
+            setPanel(null);
+            if (d) onFollowed(payWaitAfterFollow(p, d));
+            else onStale?.();
+          }}
+        />
+      ) : null}
+      {panel === "decline" ? (
+        <DeclineInline orderId={row.id} code={code} style={under} onCancel={() => setPanel(null)} onStale={onStale} onDone={onDeclined} />
+      ) : null}
+      {showAll && p.followUps && p.followUps.length > 1 ? <FollowHistory items={p.followUps} code={code} style={under} /> : null}
+    </>
+  );
 
   if (wide && variant === "tab") {
     return (
@@ -216,17 +286,14 @@ export function PaymentRow({
               <Text style={[styles.daysText, p.over && styles.daysTextOver]}>{daysText}</Text>
             </View>
           </View>
-          <View style={TAB_COL.last}>
-            <Text style={[styles.cell, lastTone(p)]} numberOfLines={2}>
-              {lastLine}
-            </Text>
-          </View>
+          <View style={TAB_COL.last}>{cell()}</View>
           <View style={TAB_COL.actions}>
+            {declineBtn}
             {followBtn}
             {tail}
           </View>
         </TouchableOpacity>
-        {form}
+        {below}
       </View>
     );
   }
@@ -237,18 +304,18 @@ export function PaymentRow({
           <View style={QUEUE_COL.code}>{codeCell}</View>
           <View style={QUEUE_COL.branch}>{render(`${row.branchCode} ${row.branchName}`, styles.branch, 2)}</View>
           <View style={QUEUE_COL.work}>{render(what, styles.cell, 2)}</View>
-          <View style={QUEUE_COL.info}>
+          <View style={[QUEUE_COL.info, { gap: 2 }]}>
             <Text style={[styles.info, p.over && styles.infoOver]}>{payDaysText(p)}</Text>
-            <Text style={[styles.sub, lastTone(p)]} numberOfLines={2}>
-              {p.last ? `ตามล่าสุด ${lastLine}` : lastLine}
-            </Text>
+            {cell("ตามล่าสุด ")}
           </View>
+          {/* ปุ่มหลักสองปุ่มบรรทัดแรก · "ลูกค้าไม่ซ่อม" ขึ้นบรรทัดถัดไปเมื่อช่องไม่พอ (ช่องปุ่มกว้างเท่าหัวข้ออื่น) */}
           <View style={[QUEUE_COL.actions, styles.btnRow]} {...actionsTarget}>
             {followBtn}
             {tail}
+            {declineBtn}
           </View>
         </TouchableOpacity>
-        {form}
+        {below}
       </View>
     );
   }
@@ -266,15 +333,25 @@ export function PaymentRow({
         {render(`${row.branchCode} ${row.branchName}`, styles.branch, 2)}
         {render(what, styles.muted, 2)}
         {variant === "tab" ? <Text style={styles.muted}>ส่งใบเสนอราคา {quoted}</Text> : null}
-        <Text style={[styles.sub, lastTone(p)]} numberOfLines={2}>
-          {p.last ? `ตามล่าสุด ${lastLine}` : lastLine}
-        </Text>
+        {cell("ตามล่าสุด ")}
       </TouchableOpacity>
-      <View style={styles.cardBtns} {...actionsTarget}>
-        {followBtn ? <View style={{ flex: 1 }}>{followBtn}</View> : null}
-        {variant === "queue" ? (tail ? <View style={{ flex: 1.4 }}>{tail}</View> : null) : tail}
-      </View>
-      {form}
+      {variant === "queue" ? (
+        // งานของฉันวันนี้: ปุ่มหลัก (ตาม · แนบบิล) แถวบน ลูกค้าไม่ซ่อมแถวล่าง — สามปุ่มแถวเดียวบนจอ 390 ตัวหนังสือถูกตัด
+        <View style={{ gap: spacing.sm }} {...actionsTarget}>
+          <View style={styles.cardBtns}>
+            {followBtn ? <View style={{ flex: 1 }}>{followBtn}</View> : null}
+            {tail ? <View style={{ flex: 1.4 }}>{tail}</View> : null}
+          </View>
+          {declineBtn ? <View style={styles.cardBtns}>{declineBtn}</View> : null}
+        </View>
+      ) : (
+        <View style={styles.cardBtns} {...actionsTarget}>
+          {declineBtn ? <View style={{ flex: 1 }}>{declineBtn}</View> : null}
+          {followBtn ? <View style={{ flex: 1 }}>{followBtn}</View> : null}
+          {tail}
+        </View>
+      )}
+      {below}
     </View>
   );
 }
@@ -292,11 +369,16 @@ const styles = StyleSheet.create({
   muted: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
   cell: { fontSize: 13, lineHeight: 19, color: colors.body },
   lastText: { color: colors.text },
+  noNote: { color: colors.textMuted },
   today: { color: colors.successInk, fontWeight: "700" },
   never: { color: colors.dangerInk, fontWeight: "700" },
+  followCell: { gap: 2, minWidth: 0 },
+  when: { fontSize: 12.5, lineHeight: 18, color: colors.body, fontVariant: ["tabular-nums"] },
+  line3: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 2 },
+  more: { minHeight: 24, justifyContent: "center", paddingHorizontal: 2 },
+  moreText: { fontSize: 12.5, lineHeight: 18, fontWeight: "700", color: colors.navy, textDecorationLine: "underline" },
   info: { fontSize: 13, lineHeight: 19, fontWeight: "700", color: colors.text },
   infoOver: { color: colors.dangerInk },
-  sub: { fontSize: 12.5, lineHeight: 18, color: colors.textMuted },
   days: {
     alignSelf: "flex-start",
     borderRadius: 999,
@@ -316,30 +398,13 @@ const styles = StyleSheet.create({
   btnNavy: { backgroundColor: colors.navyFill },
   btnNavyText: { fontSize: 13, fontWeight: "700", color: "#fff" },
   btnOpen: { width: 38, paddingHorizontal: 0, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
-  form: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingBottom: 12,
-    paddingTop: 2,
-  },
-  formCard: { paddingHorizontal: 0, paddingBottom: 0 },
-  formLabel: { fontSize: 13, fontWeight: "700", color: colors.body },
-  input: {
-    flex: 1,
-    minWidth: 180,
-    minHeight: 40,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 13.5,
-    color: colors.text,
-    backgroundColor: colors.card,
-  },
-  formBtns: { flexDirection: "row", gap: spacing.sm },
+  btnDecline: { borderWidth: 1, borderColor: colors.dangerLine, backgroundColor: colors.card },
+  btnDeclineOn: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerInk },
+  btnDeclineText: { fontSize: 13, fontWeight: "700", color: colors.dangerInk },
+  // เริ่มตรงคอลัมน์สาขา: ขอบแถว + ช่องใบงาน 116 + ช่องว่างระหว่างคอลัมน์ (styles.tr)
+  underTab: { marginLeft: 116 + spacing.md * 2, marginRight: spacing.md, marginBottom: 12 },
+  underWide: { marginLeft: spacing.md, marginRight: spacing.md, marginBottom: 12 },
+  underCard: {},
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.lg,

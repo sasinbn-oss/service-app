@@ -41,7 +41,7 @@ import { CutoffBanners, ScheduleChip, UrgentAnswerModal, UrgentReleaseModal } fr
 import { dayTime } from "../components/claims/ClaimTrail";
 import { takeFlash, type QueueFlash } from "../utils/flash";
 import { howtoTarget, useHowToAction, useHowToContext } from "../utils/howto";
-import { PAY_GO_LABEL, PayFollowLine, payDaysText } from "../components/PaymentWait";
+import { PAY_GO_LABEL, PayFollowLine, canActOnPayment, payDaysText } from "../components/PaymentWait";
 import { PaymentRow, QUEUE_COL, type PayRow } from "../components/PaymentRow";
 import { TOPIC_STAGES, apptRel, buildTopics, type ChipTone, type RowKind, type Topic, type TopicId } from "../utils/adminTopics";
 import {
@@ -838,6 +838,7 @@ type AdminTopicsProps = {
  */
 function AdminTopics(p: AdminTopicsProps) {
   const { rows, cut, now, query } = p;
+  const { user } = useAuth();
   const { docked } = useDocked();
   const names = useStageNames();
   const [view, setView] = useState<TopicId | "home">("home");
@@ -884,6 +885,11 @@ function AdminTopics(p: AdminTopicsProps) {
   /** จดการตามลูกค้าในแถวแล้ว — แทนแถวในมือ (ไม่โหลดกล่องใหม่) ตัวเลข/ชิปของหัวข้อคิดใหม่จากแถวชุดนี้เอง */
   const onFollowed = (id: number, pw: WorkOrderRow["payWait"]) =>
     p.setRows((rs) => (rs ? rs.map((r) => (r.id === id ? { ...r, payWait: pw } : r)) : rs));
+  /**
+   * ลูกค้าไม่ซ่อมจากแถว — ใบยกเลิกแล้ว ไม่รอแอดมินอีก: เอาออกจากกล่องในมือ (ไม่โหลดใหม่) ตัวเลขทุกหัวข้อ/ชิป/ภาพรวมคิดใหม่จากแถวชุดนี้เอง
+   * ตัวเช็คเบื้องหลังได้รายการที่ไม่มีใบนี้เหมือนกัน จึงไม่ขึ้น "มีอัปเดต" ปลอม
+   */
+  const onDeclined = (id: number) => p.setRows((rs) => (rs ? rs.filter((r) => r.id !== id) : rs));
 
   // ใบ IT ที่รอลูกค้าจ่ายเงินในหัวข้องาน IT ได้แถวรอเงินแบบเดียวกัน (ปุ่มตามลูกค้า/แนบบิล)
   const rowOf = (t: Topic, r: WorkOrderRow, wide: boolean) =>
@@ -893,11 +899,13 @@ function AdminTopics(p: AdminTopicsProps) {
         row={r as PayRow}
         variant="queue"
         wide={wide}
-        canFollow
+        // กติกาเดียวกับหน้าใบงาน (canActOnPayment) — หน้านี้ขึ้นเฉพาะแอดมินทั่วไป/Super Admin อยู่แล้ว เหลือกันดูในฐานะ
+        canAct={canActOnPayment(user, r)}
         onOpen={() => p.onOpen(r.id)}
         // ปุ่มหลักของขั้นนี้: เปิดใบพร้อมฟอร์มแนบบิล (open: "stage") — ชื่อเดียวกับปุ่มในหน้าใบงาน
         onAttach={() => p.onOpen(r.id, "stage")}
         onFollowed={(pw) => onFollowed(r.id, pw)}
+        onDeclined={() => onDeclined(r.id)}
         onStale={() => void p.reload()}
         render={(text, style, lines) => <Hi text={text} q={q} style={style as object} numberOfLines={lines} />}
         actionsTarget={howtoTarget("queue.actions")}

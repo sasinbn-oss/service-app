@@ -73,7 +73,7 @@ import {
 } from "../utils/dispatchCutoff";
 import { CutoffBanners, LiveScheduleChip } from "../components/DispatchCutoff";
 import { howtoTarget, useHowToAction } from "../utils/howto";
-import { PayFollowLine, payDaysText, type PayWaitRow } from "../components/PaymentWait";
+import { PayFollowLine, canActOnPayment, payDaysText, type PayWaitRow } from "../components/PaymentWait";
 import { PaymentRow, TAB_COL, type PayRow, type PayTabSummary } from "../components/PaymentRow";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
@@ -316,10 +316,15 @@ const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow
  * ชิปของแท็บรอลูกค้าจ่ายเงิน (ตัวอย่าง paytab: ทั้งหมด · เกิน 3 วัน · ยังไม่เคยตาม · ตามแล้ว พร้อมตัวเลข) — เลือกได้ทีละอัน
  * ตัวเลขนับจากรายการของแท็บหลังตัวกรองอื่น (ทีม · สาขา) = จำนวนที่จะเห็นเมื่อกด · เส้นวันมาจากเซิร์ฟเวอร์ (label ตั้งตอนวาด)
  */
-type PayChip = "all" | "over" | "never" | "followed";
+type PayChip = "all" | "over" | "late" | "never" | "followed";
 const PAY_CHIPS: { key: PayChip; label: string; test: (r: PayRow) => boolean }[] = [
   { key: "all", label: "ทั้งหมด", test: () => true },
   { key: "over", label: "เกินกำหนด", test: (r) => r.payWait.over },
+  /**
+   * เลยวันที่ลูกค้านัดจ่าย (เจ้าของงานเลือก 6 พ.ย. 69) — ลูกค้าผิดนัดคือใบที่ต้องโทรก่อน · เซิร์ฟเวอร์ตัดสินเลยไม่เลย (promise.late)
+   * ถัดจาก "เกิน 3 วัน" — สองชิปแดงที่บอกว่าต้องรีบอยู่ติดกัน · ตัวเลขนับจากแถวแบบชิปอื่น (= payTab.late เมื่อไม่ได้กรองทีม/สาขา)
+   */
+  { key: "late", label: "เลยวันนัดจ่าย", test: (r) => !!r.payWait.promise?.late },
   { key: "never", label: "ยังไม่เคยตาม", test: (r) => r.payWait.follows === 0 },
   { key: "followed", label: "ตามแล้ว", test: (r) => r.payWait.follows > 0 },
 ];
@@ -1192,8 +1197,47 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    */
   function onPayFollowed(id: number, p: PayRow["payWait"]) {
     const before = rowsRef.current.find((r) => r.id === id)?.payWait;
-    if (before && before.follows === 0 && p.follows > 0) setPayTab((t) => (t ? { ...t, never: t.never - 1, followed: t.followed + 1 } : t));
+    if (before) {
+      // เลยวันนัดจ่าย: ลูกค้านัดวันใหม่ = หลุดจากเลยนัด (ตามโดยไม่ใส่วันไม่เปลี่ยน — เซิร์ฟเวอร์คิดนัดให้ใน p.promise แล้ว)
+      const lateMove = (p.promise?.late ? 1 : 0) - (before.promise?.late ? 1 : 0);
+      const firstFollow = before.follows === 0 && p.follows > 0 ? 1 : 0;
+      if (lateMove || firstFollow)
+        setPayTab((t) =>
+          t ? { ...t, never: t.never - firstFollow, followed: t.followed + firstFollow, ...(t.late !== undefined ? { late: t.late + lateMove } : {}) } : t
+        );
+    }
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, payWait: p } : r)));
+  }
+  /**
+   * ลูกค้าไม่ซ่อมจากแถวของแท็บ (เจ้าของงานขอ 6 พ.ย. 69) — ใบยกเลิกแล้ว: เอาแถวออก ไม่โหลดรายการใหม่ (แบบ onPayFollowed)
+   * ตัวเลขแท็บ/ชิปลดตามใบที่ออกไป (ชิปนับจากแถวในมือ · ป้ายบนแท็บจาก payTab) · ตัวเลขแท็บอื่นที่ใบนี้เคยนับอยู่ (ที่ยังค้าง
+   * กล่องงาน — ใบขั้นของแอดมินอยู่ในกล่องแอดมินเสมอ) ลดด้วย ยกเลิกเพิ่ม · ตัวเช็คเบื้องหลังรอบถัดไปเอาเลขจริงของเซิร์ฟเวอร์มาแทน
+   * (รายการของเซิร์ฟเวอร์ก็ไม่มีใบนี้แล้ว จึงไม่ขึ้น "มีอัปเดต" ปลอม)
+   */
+  function onPayDeclined(id: number) {
+    const before = rowsRef.current.find((r) => r.id === id)?.payWait;
+    if (before) {
+      setPayTab((t) =>
+        t
+          ? {
+              ...t,
+              total: t.total - 1,
+              over: t.over - (before.over ? 1 : 0),
+              never: t.never - (before.follows === 0 ? 1 : 0),
+              followed: t.followed - (before.follows > 0 ? 1 : 0),
+              ...(t.late !== undefined ? { late: t.late - (before.promise?.late ? 1 : 0) } : {}),
+            }
+          : t
+      );
+      setCounts((c) => {
+        const n = { ...c };
+        for (const k of ["AWAITING_PAYMENT", "ACTIVE", "INBOX"]) if (n[k]) n[k] -= 1;
+        n.CANCELLED = (n.CANCELLED ?? 0) + 1;
+        return n;
+      });
+    }
+    unmark(id);
+    setRows((rs) => rs.filter((r) => r.id !== id));
   }
 
   // โหลดใหม่ทุกครั้งที่กลับมาหน้านี้ เพราะเพิ่งไปปิดงานมาแล้วตัวเลขต้องเปลี่ยน
@@ -1815,12 +1859,14 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                   row={item as PayRow}
                   variant="tab"
                   wide={table}
-                  canFollow={payTabOn}
+                  // กติกาเดียวกับหน้าใบงาน (canActOnPayment) — ไม่ใช่แค่ "มีแท็บ": ดูในฐานะเห็นแท็บแต่กดไม่ได้ · หัวหน้า IT เฉพาะใบ IT
+                  canAct={canActOnPayment(me, item)}
                   onOpen={() => {
                     unmark(item.id);
                     navigation.navigate("WorkOrderDetail", { id: item.id });
                   }}
                   onFollowed={(p) => onPayFollowed(item.id, p)}
+                  onDeclined={() => onPayDeclined(item.id)}
                   onStale={() => void load()}
                 />
                 {marked.has(item.id) ? (
@@ -2742,7 +2788,7 @@ function PayTableHead() {
 
 /**
  * ชิปของแท็บรอลูกค้าจ่ายเงิน — เลือกได้ทีละอัน (ตัวอย่าง) · ตัวเลข = จำนวนที่จะเห็นเมื่อกด · ได้ 0 ใบจาง กดไม่ได้ (กติกาเดียวกับตัวกรองอื่น)
- * "เกิน N วัน" แดงตลอด — เป็นชิปเดียวที่บอกว่าต้องรีบ
+ * "เกิน N วัน" กับ "เลยวันนัดจ่าย" แดงตลอด — สองชิปที่บอกว่าต้องรีบ (ที่เหลือแค่แบ่งกอง)
  */
 function PayChips({
   items,
@@ -2761,7 +2807,7 @@ function PayChips({
         <Text style={styles.payHint}>ใบที่ส่งใบเสนอราคาแล้ว รอลูกค้าโอน · แอดมินแนบบิลเมื่อลูกค้าจ่าย ·</Text>
         {items.map((c) => {
           const sel = on === c.key;
-          const red = c.key === "over";
+          const red = c.key === "over" || c.key === "late";
           const off = !c.n && !sel && c.key !== "all";
           return (
             <TouchableOpacity
