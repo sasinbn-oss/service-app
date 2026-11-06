@@ -55,7 +55,9 @@ function cleanup() {
     await vis("ถนนอุตรกิจ", false).last().click();
     await page.waitForTimeout(2000);
     await page.getByLabel("หมายเลขเครื่องที่ 1").locator("visible=true").first().fill("W81");
-    await vis("Oasis").last().click();
+    await page.waitForTimeout(1200);
+    // ชิปยี่ห้อขึ้นเฉพาะเครื่องที่ยังไม่รู้ยี่ห้อ — W81 ในฐานทดสอบถูกเทสต์ปิดงานอื่นใส่ยี่ห้อไปแล้วได้ (เคยค้างรอ Oasis 30 วิ)
+    if (await vis("Oasis").count()) await vis("Oasis").last().click();
     await page.getByLabel("อาการที่พบของเครื่องที่ 1").locator("visible=true").first().fill(SYMPTOM);
     await page.waitForTimeout(800);
     return { page, vis, seen: (t, exact = false) => vis(t, exact).count() };
