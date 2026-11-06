@@ -10,6 +10,8 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimen
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import { api } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { isAreaTeam } from "../utils/areaTeam";
 import { navigationRef } from "../navigation/navigationRef";
 import { colors, headingFont } from "../theme";
 
@@ -32,7 +34,14 @@ function agoText(iso: string) {
   return `${Math.floor(h / 24)} วันที่แล้ว`;
 }
 
+/** ทีม Area ไม่มีกล่องงาน — กระดิ่งว่างตลอดและเซิร์ฟเวอร์ไม่เปิดเส้นนี้ให้ (ไม่ยิงคำขอที่ได้ 403 ทุก 30 วิ) */
 export default function NotificationBell() {
+  const { user } = useAuth();
+  if (!user || isAreaTeam(user)) return null;
+  return <Bell />;
+}
+
+function Bell() {
   const [open, setOpen] = useState(false);
   // มือถือ: แผ่นรายการเต็มความกว้างจอใต้แถบหัว (กว้าง 420 ล้นจอ 390)
   const narrow = useWindowDimensions().width < 640;
