@@ -139,7 +139,9 @@ function cleanup() {
     // หาเป็นปุ่ม (ชื่อปุ่มในแถบขั้นตอนเป็นข้อความเฉย ๆ ไม่ใช่ปุ่ม)
     const actions = ["แก้ไขรายละเอียด", "ระงับการปฏิบัติงานชั่วคราว", "บันทึกอะไหล่", "จ่ายงาน", "ปิดงาน", "ยกเลิกใบงาน", "คัดลอกเป็นใบทดสอบ", "เลือกรูป"];
     const shown = [];
-    for (const a of actions) if ((await vis(a, true).count()) > 0) shown.push(a);
+    // ไม่นับชื่อขั้นบนการ์ดขั้นตอน (ขั้น 6 ชื่อ "ปิดงาน" ตรงกับชื่อปุ่ม) — กล่องชื่อขั้นมีป้าย "ขั้น n …"
+    const asAction = (a) => vis(a, true).evaluateAll((els) => els.filter((e) => !e.closest('[aria-label^="ขั้น "]')).length);
+    for (const a of actions) if ((await asAction(a)) > 0) shown.push(a);
     shown.length ? fail(`หน้าใบงานมีปุ่มทำขั้นตอน: ${shown}`) : pass("หน้าใบงานไม่มีปุ่มทำขั้นตอน");
 
     // ════ หน้าอื่น ๆ ที่ยังมี ════
