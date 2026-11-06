@@ -21,7 +21,7 @@
 //     บันทึกไม่ได้จนกว่าจะติ๊ก → ฐานข้อมูล URGENT_RELEASE via schedule · ใบทดสอบ: ไม่มีกฎในแอปเลย นัดวันนี้ได้ (ฐานข้อมูลไม่มีงานด่วน)
 //   ส่วน 7 ปล่อยงานไม่มีล็อก: ใบวันนี้/พรุ่งนี้หลังเวลาปิด (ไม่มีงานด่วน) ไม่มีกล่องแดง/กล่องเส้นตาย ปล่อยได้ → IN_PROGRESS
 //     · ใบเลื่อนวันยังมี "ทีมไม่ว่าง — ส่งกลับแอดมินนัดใหม่" → toast ใหม่ (ไม่บอกหัวข้อที่ไม่มีแล้ว) + AWAITING_CONFIRM
-//   ส่วน 9 แอดมิน "ขอนัดด่วน": หัวข้อปักในงานของฉันวันนี้ (คำอธิบาย · แถวใครขอ+เบอร์+เวลา · วันที่ขอ · ข้อความ · ปุ่ม) · กล่องงาน
+//   ส่วน 9 แอดมิน "ขอนัดด่วน": หัวข้อ "ต้องทำก่อนวันนี้" ในงานของฉันวันนี้ (แบบแยกหัวข้อ 5 พ.ย. 69 — เดิมหัวข้อปัก) (คำอธิบาย · แถวใครขอ+เบอร์+เวลา · วันที่ขอ · ข้อความ · ปุ่ม) · กล่องงาน
 //     "ขอนัดด่วน n" (n ตามเซิร์ฟเวอร์) ไม่มีหัวข้อรุ่นเดิม · การ์ดเรียงวันที่ขอ (วันนี้ก่อน) แล้วเวลาที่ขอ ไม่ใช่ลำดับของรายการ
 //     · แก้เป็นงานด่วนจากการ์ด → toast + ฐานข้อมูล via direct + การ์ดออก
 //     · แข่งกัน: แอดมินอีกคนแก้ก่อน → 409 URGENT_ASK_STATE ขึ้นในหน้าต่าง ปุ่มปิด ไม่ปิดเอง → ยกเลิกแล้วโหลดใหม่ การ์ดออก
@@ -399,6 +399,16 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       await sess.page.goto(APP, { waitUntil: "networkidle", timeout: 180000 });
       await sess.page.locator('[aria-label="ตัวเลขสรุปงานที่รอ"]').locator("visible=true").first().waitFor({ timeout: 30000 });
       await sess.page.waitForTimeout(1500);
+    };
+    /**
+     * แอดมิน: งานของฉันวันนี้แบบแยกหัวข้อ (5 พ.ย. 69) เปิดมาที่ภาพรวม — แถวของใบอยู่ในรายการของหัวข้อ เปิดหัวข้อจากเมนูซ้ายก่อน
+     * ("ต้องทำก่อนวันนี้" = ขอนัดด่วน + เลยนัด · "คอนเฟิร์มลูกค้า" ฯลฯ ชื่อจากป้ายขั้น)
+     */
+    const toTopic = async (sess, name) => {
+      const nav = sess.page.locator(`[aria-label^="เมนูหัวข้อ ${name} "]`).locator("visible=true").first();
+      await nav.waitFor({ timeout: 15000 }).catch(() => {});
+      if (await nav.count()) await nav.click();
+      await sess.page.waitForTimeout(900);
     };
     /** เปิดใบงานจากหน้ารายการ (ค้นรหัส) — ใบที่ไม่อยู่ในกล่องของคนเปิด (แอดมินดูใบรอหัวหน้าภาค · ใบทดสอบ) */
     const openOrder = async (sess, code) => {
@@ -969,18 +979,21 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       `หัวหน้าภาคขอนัดวันที่ปิดนัดแล้ว (วันนี้ / พรุ่งนี้หลัง ${C9} น.) — ร้านต้องการวันนั้นจริง: “แก้เป็นงานด่วน” (เฉพาะใบนี้ วันนั้น) · ไม่ได้: “ตอบกลับ” ให้หัวหน้าภาคนัดวันอื่น`;
     const a9 = await openAs("A001", 1280);
     await toQueue(a9);
+    await toTopic(a9, "ต้องทำก่อนวันนี้");
     const n9 = await askCount();
-    const groupText = (await lbl(a9.page, "กลุ่ม ขอนัดด่วน").count()) ? await lbl(a9.page, "กลุ่ม ขอนัดด่วน").first().innerText() : "";
-    groupText.includes(askHint) && [P9, P10, P11, P12, P13].every((o) => groupText.includes(o.code))
-      ? pass(`งานของฉันวันนี้ (แอดมิน): หัวข้อปัก "ขอนัดด่วน" มีทั้ง 5 ใบ + คำอธิบายตามตัวอย่าง`)
-      : fail(`หัวข้อขอนัดด่วน: "${groupText.slice(0, 300)}"`);
+    const FIRST = "รายการหัวข้อ ต้องทำก่อนวันนี้";
+    const groupText = (await lbl(a9.page, FIRST).count()) ? await lbl(a9.page, FIRST).first().innerText() : "";
+    groupText.includes(askHint) && [P9, P10, P11, P12, P13].every((o) => groupText.includes(o.code)) &&
+    (await lbl(a9.page, `ชิปหัวข้อ ขอนัดด่วน ${n9}`).count()) > 0
+      ? pass(`งานของฉันวันนี้ (แอดมิน): หัวข้อ "ต้องทำก่อนวันนี้" มีคำขอทั้ง 5 ใบ + คำอธิบายขอนัดด่วนตามตัวอย่าง · ชิป "ขอนัดด่วน ${n9}"`)
+      : fail(`หัวข้อต้องทำก่อนวันนี้: "${groupText.slice(0, 300)}"`);
     /**
      * ลำดับการ์ดในหัวข้อ = วันที่ขอ (วันนี้ก่อน) แล้วเวลาที่ขอ — แบบเดียวกับแถบ "ขอนัดด่วน n" ในกล่องงาน
      * ใบสร้างเรียง P9→P13 (ลำดับที่รายการส่งมา = ด่วน → เปิดก่อน) แต่ P9/P11 ขอพรุ่งนี้ จึงต้องไปอยู่หลังใบที่ขอวันนี้ —
      * ถ้าหน้านี้ใช้ลำดับของรายการ ข้อนี้ล้ม
      */
     const order9 = await a9.page.evaluate((codes) => {
-      const g = [...document.querySelectorAll('[aria-label="กลุ่ม ขอนัดด่วน"]')].find((n) => n.getClientRects().length);
+      const g = [...document.querySelectorAll('[aria-label="รายการหัวข้อ ต้องทำก่อนวันนี้"]')].find((n) => n.getClientRects().length);
       if (!g) return [];
       return [...g.querySelectorAll('[aria-label^="รายละเอียด "]')]
         .map((n) => n.getAttribute("aria-label").slice("รายละเอียด ".length))
@@ -1015,6 +1028,7 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
 
     // แก้เป็นงานด่วนจากการ์ด
     await toQueue(a9);
+    await toTopic(a9, "ต้องทำก่อนวันนี้");
     await lbl(a9.page, `แก้เป็นงานด่วน ${P9.code}`).first().click();
     await a9.page.waitForTimeout(800);
     const win9 = [
@@ -1106,6 +1120,7 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
 
     // แข่งกัน: เปิดหน้าต่างตอบค้างไว้ หัวหน้าภาคยกเลิกคำขอ (API) → กดส่ง → 409 URGENT_ASK_STATE ในหน้าต่าง
     await toQueue(a9);
+    await toTopic(a9, "ต้องทำก่อนวันนี้");
     await lbl(a9.page, `ตอบกลับคำขอนัดด่วน ${P12.code}`).first().click();
     await a9.page.waitForTimeout(800);
     await lbl(a9.page, "ข้อความถึงหัวหน้าภาค (ต้องใส่)").last().fill("ทีมพรุ่งนี้เต็ม (เทสต์)");
@@ -1152,6 +1167,7 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       : fail(`เตรียมใบคอนเฟิร์ม: ${rowOf(K1.id)} · ${rowOf(K2.id)}`);
     const a11 = await openAs("A001", 1280);
     await toQueue(a11);
+    await toTopic(a11, "คอนเฟิร์มลูกค้า");
     await openFromQueue(a11, K1.code, "คอนเฟิร์มลูกค้า");
     const okLabel = (await lbl(a11.page, "ลูกค้าคอนเฟิร์มวันเดิม").count()) > 0 && (await lbl(a11.page, "ลูกค้าคอนเฟิร์มวันนี้").count()) === 0;
     await lbl(a11.page, "ลูกค้าคอนเฟิร์มวันเดิม").last().click();
@@ -1168,6 +1184,7 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
       : fail(`คอนเฟิร์มวันเดิม ${K1.code}: ${rowOf(K1.id)} · URGENT_RELEASE ${logCount(K1.id, "URGENT_RELEASE")} · ${urfOf(K1.id)}`);
 
     await toQueue(a11);
+    await toTopic(a11, "คอนเฟิร์มลูกค้า");
     await openFromQueue(a11, K2.code, "คอนเฟิร์มลูกค้า");
     await lbl(a11.page, "ลูกค้าขอเลื่อน / เปลี่ยนวัน").last().click();
     await a11.page.waitForTimeout(500);
@@ -1224,6 +1241,7 @@ const dLong = (s) => `${dShort(s)} ${Number(s.slice(0, 4)) + 543}`;
     const K3 = await confirmOrderAt(d2);
     await setCut(cutIn(45));
     await toQueue(a11);
+    await toTopic(a11, "คอนเฟิร์มลูกค้า");
     await openFromQueue(a11, K3.code, "คอนเฟิร์มลูกค้า");
     await lbl(a11.page, "ลูกค้าขอเลื่อน / เปลี่ยนวัน").last().click();
     await a11.page.waitForTimeout(500);

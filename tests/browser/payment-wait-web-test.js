@@ -4,9 +4,11 @@
 //     "เริ่มรอวันนี้" · "ยังไม่เคยตาม" · ปุ่ม ลูกค้าไม่ซ่อม / ตามลูกค้าแล้ว / ลูกค้าจ่ายแล้ว · แนบบิล
 //   · ตามลูกค้าแล้ว: ฟอร์มกางชิดแถวปุ่ม → บันทึก → ฐานข้อมูลมีประวัติ PAYMENT_FOLLOWUP (ใคร หมายเหตุ) · การ์ดขึ้น "(1 ครั้ง)"
 //   · ถอยเวลา 5 วันทาง SQL: ป้าย "รอลูกค้าจ่ายเงิน · 5 วัน" พื้นแดง · "รอมาแล้ว 5 วัน" · "เกิน 3 วัน — ควรตามลูกค้า" · ขอบการ์ดแดง
-//   · งานของฉันวันนี้ (แอดมิน): กลุ่ม "รอลูกค้าจ่ายเงิน" เรียงรอนานสุดก่อน · ตามล่าสุด / "ยังไม่เคยตาม" · ปุ่ม "เกิน 3 วัน 1 ใบ"
-//     (aria-selected) กดแล้วเหลือใบเดียว · กล่องงาน: หัวข้อ "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1" เรียงรอนานสุดก่อน ·
-//     ชิป "รอจ่ายเกิน 3 วัน" กรองหัวข้อและรายการเหลือใบที่เกิน แถวบอกรอมาแล้ว/ตามล่าสุด
+//   · งานของฉันวันนี้ (แอดมิน · แบบแยกหัวข้อ 5 พ.ย. 69): หัวข้อ "รอลูกค้าจ่ายเงิน" เรียงรอนานสุดก่อน · ตามล่าสุด / "ยังไม่เคยตาม" ·
+//     ชิป "เกิน 3 วัน 1" (aria-selected) กดแล้วเหลือใบเดียว · กล่องงาน: แถบบรรทัดเดียว "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1 ·
+//     ยังไม่เคยตาม 1" (ไม่มีแถวรายใบ ไม่มีปุ่มย่อ/ขยาย — รายการเต็มอยู่แท็บรอลูกค้าจ่ายเงิน) · หัวข้อ "เลยนัด" (ใบนัดเมื่อวานที่เทสต์ตั้ง)
+//     ยังย่อ/ขยายตามเดิม: เปิดมาย่อ · ขยายแล้วไปหน้าอื่นด้วยเมนูข้างกลับมายังขยาย · รีเฟรชแล้วย่อ · แถบรอเงินอยู่ข้างกันไม่ถูกย่อตาม ·
+//     ชิป "รอจ่ายเกิน 3 วัน" พาไปแท็บรอลูกค้าจ่ายเงินที่ชิปเกิน 3 วัน (เหลือใบที่เกิน)
 //   · ลูกค้าไม่ซ่อม: ไม่เลือกเหตุผลกดแล้วไม่ส่ง · ชิป "อื่น ๆ" ติด (aria-selected) แต่ไม่พิมพ์ = ไม่ส่ง · พิมพ์แล้วยืนยัน →
 //     ฐานข้อมูล CANCELLED + meta รหัสเหตุผล · หน้าใบงานบอก "ยกเลิกแล้ว — เสนอราคาแล้วลูกค้าไม่ซ่อม · อื่น ๆ — …"
 //   · รายงานตามผู้เปิดใบงาน: คอลัมน์ "ลูกค้าไม่ซ่อม" + บรรทัด "เสนอราคาแล้วลูกค้าไม่ซ่อม n ใบ: อื่น ๆ n"
@@ -44,6 +46,9 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
     };
     const a = await quoted();
     const b = await quoted();
+    // ใบเลยนัด (นัดเมื่อวาน ค้างคอนเฟิร์มลูกค้า) — ให้กล่องงานมีหัวข้อ "เลยนัด" ที่ยังย่อ/ขยายได้ วางข้างแถบรอเงินบรรทัดเดียว
+    const late = await fx.workOrder("C0006", null);
+    fx.sql(`update "WorkOrder" set status='AWAITING_CONFIRM', "scheduledAt"=(now() at time zone 'Asia/Bangkok')::date - 1 where id=${late.id}`);
     const st = (id) => fx.sql(`select status from "WorkOrder" where id=${id}`);
     st(a.id) === "AWAITING_PAYMENT" && st(b.id) === "AWAITING_PAYMENT"
       ? pass(`เตรียมใบ ${a.code} · ${b.code} ขั้นรอลูกค้าจ่ายเงิน (ฐานข้อมูล)`)
@@ -129,80 +134,78 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
     cardBorder === "rgb(254, 202, 202)" ? pass("ขอบการ์ดขั้นปัจจุบันแดง") : fail(`ขอบการ์ด: ${cardBorder}`);
     await page.screenshot({ path: path.join(DIR, "payment-wait-day5.png") });
 
-    // ── งานของฉันวันนี้ ──
+    // ── งานของฉันวันนี้ (แอดมิน แบบแยกหัวข้อ) ──
     await page.goto("http://localhost:8081/#/my-jobs");
     await page.waitForTimeout(4500);
-    const group = page.locator('[aria-label="กลุ่ม รอลูกค้าจ่ายเงิน"]').locator("visible=true").first();
-    if ((await group.count()) === 0) fail("ไม่มีกลุ่ม \"รอลูกค้าจ่ายเงิน\" ในงานของฉันวันนี้");
+    const navPay = page.locator('[aria-label^="เมนูหัวข้อ รอลูกค้าจ่ายเงิน "]').locator("visible=true").first();
+    if ((await navPay.count()) === 0) fail("ไม่มีหัวข้อ \"รอลูกค้าจ่ายเงิน\" ในงานของฉันวันนี้");
     else {
-      await group.scrollIntoViewIfNeeded();
+      (await navPay.getAttribute("aria-label")) === "เมนูหัวข้อ รอลูกค้าจ่ายเงิน 2" ? pass("เมนูหัวข้อ \"รอลูกค้าจ่ายเงิน 2\"") : fail(`เมนู: ${await navPay.getAttribute("aria-label")}`);
+      await navPay.click();
+      await page.waitForTimeout(900);
+      const group = page.locator('[aria-label="รายการหัวข้อ รอลูกค้าจ่ายเงิน"]').locator("visible=true").first();
       const g = await group.innerText();
       const ia = g.indexOf(a.code), ib = g.indexOf(b.code);
-      ia >= 0 && ib > ia ? pass("กลุ่มรอลูกค้าจ่ายเงิน: ใบที่รอนานกว่า (5 วัน) ขึ้นก่อน") : fail(`ลำดับในกลุ่ม: ${g}`);
+      ia >= 0 && ib > ia ? pass("หัวข้อรอลูกค้าจ่ายเงิน: ใบที่รอนานกว่า (5 วัน) ขึ้นก่อน") : fail(`ลำดับในหัวข้อ: ${g}`);
       // การตามถูกถอยไป 1 วัน — วันที่ขึ้นเป็นวันจริง (เช่น "4 พ.ย.") ไม่ใช่ "วันนี้"
       g.includes("รอมาแล้ว 5 วัน") && /ตามล่าสุด \d+ \S+ · ลูกค้าบอกโอนวันศุกร์/.test(g) && g.includes("ยังไม่เคยตาม")
-        ? pass("การ์ด: รอมาแล้ว 5 วัน · ตามล่าสุด … ลูกค้าบอกโอนวันศุกร์ · อีกใบ \"ยังไม่เคยตาม\"") : fail(`การ์ดในกลุ่ม: ${g}`);
-      (await group.getByText("ลูกค้าจ่ายแล้ว · แนบบิล", { exact: true }).count()) >= 2 ? pass("ปุ่มบนการ์ด \"ลูกค้าจ่ายแล้ว · แนบบิล\"") : fail("ปุ่มบนการ์ดไม่ใช่ลูกค้าจ่ายแล้ว");
-      const late = group.locator('[aria-label="ดูเฉพาะรอจ่ายเกิน 3 วัน 1 ใบ"]');
-      (await late.getAttribute("aria-selected")) === "false" ? pass("ปุ่ม \"เกิน 3 วัน 1 ใบ\" ยังไม่ติด") : fail(`aria-selected ก่อนกด: ${await late.getAttribute("aria-selected")}`);
-      await late.click();
+        ? pass("แถว: รอมาแล้ว 5 วัน · ตามล่าสุด … ลูกค้าบอกโอนวันศุกร์ · อีกใบ \"ยังไม่เคยตาม\"") : fail(`แถวในหัวข้อ: ${g}`);
+      (await group.locator('[aria-label^="ลูกค้าจ่ายแล้ว · แนบบิล "]').count()) >= 2 ? pass("ปุ่มบนแถว \"ลูกค้าจ่ายแล้ว · แนบบิล\"") : fail("ปุ่มบนแถวไม่ใช่ลูกค้าจ่ายแล้ว");
+      const lateChip = group.locator('[aria-label="ชิปหัวข้อ เกิน 3 วัน 1"]');
+      (await lateChip.getAttribute("aria-selected")) === "false" ? pass("ชิป \"เกิน 3 วัน 1\" ยังไม่ติด") : fail(`aria-selected ก่อนกด: ${await lateChip.getAttribute("aria-selected")}`);
+      await lateChip.click();
       await page.waitForTimeout(800);
-      const g2 = await page.locator('[aria-label="กลุ่ม รอลูกค้าจ่ายเงิน"]').locator("visible=true").first().innerText();
-      (await page.locator('[aria-label="ดูเฉพาะรอจ่ายเกิน 3 วัน 1 ใบ"]').getAttribute("aria-selected")) === "true" && g2.includes(a.code) && !g2.includes(b.code) && g2.includes("จาก 2")
-        ? pass("กดแล้วเหลือเฉพาะใบที่รอเกิน 3 วัน (1 จาก 2) · ปุ่มติด") : fail(`กรองเกิน 3 วัน: ${g2}`);
+      const g2 = await page.locator('[aria-label="รายการหัวข้อ รอลูกค้าจ่ายเงิน"]').locator("visible=true").first().innerText();
+      (await lateChip.getAttribute("aria-selected")) === "true" && g2.includes(a.code) && !g2.includes(b.code) && g2.includes("แสดง 1 จาก 2 ใบ")
+        ? pass("กดแล้วเหลือเฉพาะใบที่รอเกิน 3 วัน (แสดง 1 จาก 2) · ชิปติด") : fail(`กรองเกิน 3 วัน: ${g2}`);
     }
 
-    // ── กล่องงาน: หัวข้อรอลูกค้าจ่ายเงิน (แบบเดียวกับไม่มีคนรับ/เลยนัด) · ชิปรอจ่ายเกิน 3 วัน ──
+    // ── กล่องงาน: แถบรอเงินบรรทัดเดียว · หัวข้อเลยนัดย่อ/ขยายตามเดิม · ชิปรอจ่ายเกิน 3 วัน ──
     await page.goto("http://localhost:8081/#/inbox");
     await page.waitForTimeout(4500);
-    // ปุ่มย่อ/ขยายหัวข้อ (เจ้าของงานขอ 5 พ.ย. 69 — หัวข้อยาวเต็มจอ): เปิด/รีเฟรชมาแล้วย่อไว้ก่อนเสมอ · กดขยายแล้วไปหน้าอื่นกลับมายังขยาย ·
-    // รีเฟรชแล้วกลับมาย่อ · ย่อแล้วเหลือชื่อหัวข้อกับจำนวน
-    const PAYT = "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1";
-    const head = page.locator(`[aria-label="หัวข้อ ${PAYT}"]`).locator("visible=true").first();
-    const toggle = (verb) => page.locator(`[aria-label="${verb}หัวข้อ ${PAYT}"]`).locator("visible=true").first();
-    if ((await head.count()) === 0) fail(`กล่องงานไม่มีหัวข้อ "${PAYT}"`);
+    const PAYT = "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1 · ยังไม่เคยตาม 1";
+    const payBar = page.locator(`[aria-label="หัวข้อ ${PAYT}"]`).locator("visible=true").first();
+    if ((await payBar.count()) === 0) fail(`กล่องงานไม่มีแถบ "${PAYT}"`);
     else {
-      const shut0 = await head.innerText();
-      !shut0.includes(a.code) && !shut0.includes(b.code) && shut0.includes("ขยาย") && (await toggle("ขยาย").count()) > 0 &&
-      (await toggle("ขยาย").getAttribute("aria-expanded")) === "false"
-        ? pass("เปิดกล่องงานมา หัวข้อย่อไว้ก่อน: เหลือชื่อกับจำนวน ปุ่ม \"ขยาย\" (aria-expanded=false)") : fail(`หัวข้อไม่ได้ย่อตั้งต้น: ${shut0}`);
-      await toggle("ขยาย").click();
+      const t = await payBar.innerText();
+      !t.includes(a.code) && !t.includes(b.code) && t.includes("ดูในแท็บ รอลูกค้าจ่ายเงิน") &&
+      (await page.locator('[aria-label^="ขยายหัวข้อ รอลูกค้าจ่ายเงิน"], [aria-label^="ย่อหัวข้อ รอลูกค้าจ่ายเงิน"]').count()) === 0
+        ? pass(`กล่องงาน: แถบบรรทัดเดียว "${PAYT}" + ปุ่มดูในแท็บ · ไม่มีแถวรายใบ ไม่มีปุ่มย่อ/ขยาย`) : fail(`แถบรอเงิน: ${t}`);
+    }
+    // หัวข้อที่ยังย่อ/ขยายได้ (เจ้าของงานขอ 5 พ.ย. 69 — หัวข้อยาวเต็มจอ): เปิด/รีเฟรชมาแล้วย่อไว้ก่อน · ขยายแล้วไปหน้าอื่นกลับมายังขยาย
+    const lateHead = page.locator('[aria-label^="หัวข้อ เลยนัด "]').locator("visible=true").first();
+    const lateToggle = (verb) => page.locator(`[aria-label^="${verb}หัวข้อ เลยนัด "]`).locator("visible=true").first();
+    if ((await lateHead.count()) === 0) fail("กล่องงานไม่มีหัวข้อ \"เลยนัด\" (ใบนัดเมื่อวานที่เทสต์ตั้ง)");
+    else {
+      const shut0 = await lateHead.innerText();
+      !shut0.includes(late.code) && (await lateToggle("ขยาย").getAttribute("aria-expanded")) === "false"
+        ? pass("หัวข้อ \"เลยนัด\" ย่อไว้ก่อน (aria-expanded=false)") : fail(`เลยนัดไม่ได้ย่อตั้งต้น: ${shut0}`);
+      await lateToggle("ขยาย").click();
       await page.waitForTimeout(600);
-      const h = await head.innerText();
-      h.indexOf(a.code) >= 0 && h.indexOf(b.code) > h.indexOf(a.code) && h.includes("รอมาแล้ว 5 วัน") && h.includes("ยังไม่เคยตาม") && /ตามล่าสุด .+ลูกค้าบอกโอนวันศุกร์/.test(h) &&
-      (await toggle("ย่อ").count()) > 0
-        ? pass(`กดขยาย: หัวข้อ "${PAYT}" เรียงรอนานสุดก่อน · รอมาแล้ว · ตามล่าสุด/ยังไม่เคยตาม · ปุ่มเป็น "ย่อ"`) : fail(`หัวข้อกล่องงาน: ${h}`);
+      (await lateHead.innerText()).includes(late.code) && (await payBar.count()) > 0 && !(await payBar.innerText()).includes(a.code)
+        ? pass("กดขยายเลยนัด: แถวขึ้น · แถบรอเงินยังบรรทัดเดียวเหมือนเดิม (ปุ่มย่อ/ขยายไม่ไปโดนแถบรอเงิน)") : fail(`ขยายเลยนัด: ${await lateHead.innerText()}`);
       // ไปหน้าอื่นด้วยเมนูข้างในแอป — page.goto เปลี่ยน # แล้วหน้ารีโหลดทั้งหน้า (เท่ากับรีเฟรช) ซึ่งตั้งใจให้ย่อกลับ
       await page.locator('[aria-label="งานของฉันวันนี้"]').locator("visible=true").first().click();
       await page.waitForTimeout(2000);
       await page.locator('[aria-label="กล่องงานของฉัน"]').locator("visible=true").first().click();
       await page.waitForTimeout(3000);
-      const t2 = (await head.count()) ? await head.innerText() : "";
-      t2.includes(a.code) && (await toggle("ย่อ").count()) > 0
-        ? pass("ไปหน้าอื่นแล้วกลับมา (ไม่รีเฟรช) หัวข้อยังขยายอยู่") : fail(`กลับมาแล้วหัวข้อไม่ขยาย: ${t2}`);
+      (await lateHead.innerText().catch(() => "")).includes(late.code) && (await lateToggle("ย่อ").count()) > 0
+        ? pass("ไปหน้าอื่นแล้วกลับมา (ไม่รีเฟรช) หัวข้อเลยนัดยังขยายอยู่") : fail("กลับมาแล้วเลยนัดไม่ขยาย");
       await page.reload({ waitUntil: "networkidle" });
       await page.waitForTimeout(5000);
-      const t3 = (await head.count()) ? await head.innerText() : "";
-      t3.includes(PAYT) && !t3.includes(a.code) && (await toggle("ขยาย").count()) > 0
-        ? pass("รีเฟรชแล้วกลับมาย่อ") : fail(`รีเฟรชแล้วไม่ย่อ: ${t3}`);
-      await toggle("ขยาย").click();
-      await page.waitForTimeout(600);
-      await toggle("ย่อ").click();
-      await page.waitForTimeout(600);
-      const t4 = await head.innerText();
-      !t4.includes(a.code) && t4.includes(PAYT) && (await toggle("ขยาย").count()) > 0
-        ? pass("กดย่อ: แถวหาย เหลือชื่อหัวข้อกับจำนวน") : fail(`ย่อหัวข้อ: ${t4}`);
+      !(await lateHead.innerText().catch(() => late.code)).includes(late.code) && (await lateToggle("ขยาย").count()) > 0 && (await payBar.count()) > 0
+        ? pass("รีเฟรชแล้วเลยนัดกลับมาย่อ · แถบรอเงินยังอยู่") : fail("รีเฟรชแล้วเลยนัดไม่ย่อ");
     }
     const qchip = page.locator('[aria-label="ต้องรีบดู รอจ่ายเกิน 3 วัน 1"]').locator("visible=true").first();
     if ((await qchip.count()) === 0) fail("ไม่มีชิป \"รอจ่ายเกิน 3 วัน 1\" ในกล่องงาน");
     else {
-      await qchip.click();
-      await page.waitForTimeout(1500);
-      const h1 = page.locator('[aria-label="หัวข้อ รอลูกค้าจ่ายเงิน 1 · เกิน 3 วัน 1"]').locator("visible=true").first();
-      const listText = await page.locator("body").innerText();
-      (await h1.count()) > 0 && listText.includes(a.code) && !listText.includes(b.code) && listText.includes("รอมาแล้ว 5 วัน · เกิน 3 วัน")
-        ? pass("ชิปรอจ่ายเกิน 3 วัน: หัวข้อกับรายการเหลือใบที่เกิน · แถวบอก \"รอมาแล้ว 5 วัน · เกิน 3 วัน\" + ตามล่าสุด") : fail("ชิปรอจ่ายเกินกรองไม่ถูก");
       await page.screenshot({ path: path.join(DIR, "payment-wait-inbox.png") });
+      await qchip.click();
+      await page.waitForTimeout(3000);
+      const rows = await page.locator('[aria-label^="แถวรอจ่าย "]').locator("visible=true").evaluateAll((ns) => ns.map((n) => n.innerText));
+      const sel = await page.locator('[aria-label^="ชิปรอจ่าย เกิน 3 วัน "]').locator("visible=true").first().getAttribute("aria-selected").catch(() => null);
+      (await page.evaluate(() => window.location.hash)) === "#/awaiting-payment" && sel === "true" && rows.length === 1 && rows[0].includes(a.code) && rows[0].includes("5 วัน")
+        ? pass("ชิปรอจ่ายเกิน 3 วัน: ไปแท็บรอลูกค้าจ่ายเงินที่ชิปเกิน 3 วัน · เหลือใบที่เกิน (5 วัน)") : fail(`ชิปรอจ่ายเกิน: ${await page.evaluate(() => window.location.hash)} · ${sel} · ${rows.join(" / ")}`);
     }
 
     // ── ลูกค้าไม่ซ่อม (ใบ b) ──

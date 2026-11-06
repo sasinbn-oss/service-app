@@ -96,6 +96,15 @@ const PAGES: Page[] = [
   // กล่องงานกับใบงานซ่อมเป็นหน้าเดียวกัน (WorkOrderList) ต่างกันที่ inbox — แยกที่อยู่ให้ก๊อบไปแล้วเปิดถูกแท็บ
   // แท็บย่อย/ตัวกรองในรายการเป็นของหน้าจอ (จำไว้ในเครื่อง) ไม่ได้อยู่ใน params จึงไม่อยู่ในที่อยู่
   { path: "inbox", screen: "WorkOrderList", tab: "WorkOrdersTab", read: () => ({ inbox: true }), write: (p) => (p?.inbox ? {} : null) },
+  // แท็บ "รอลูกค้าจ่ายเงิน" (5 พ.ย. 69) — รายการทำงานของแอดมินแบบกล่องงาน จึงมีที่อยู่ของตัวเองแบบ /inbox (แท็บสถานะอื่นยังไม่มี)
+  // คนที่ไม่มีแท็บเปิดลิงก์นี้ หน้ารายการล้าง payment เอง ที่อยู่กลับเป็น /work-orders
+  {
+    path: "awaiting-payment",
+    screen: "WorkOrderList",
+    tab: "WorkOrdersTab",
+    read: () => ({ payment: true }),
+    write: (p) => (p?.payment ? {} : null),
+  },
   // q = มาจาก "ค้นในใบงานซ่อมทั้งหมด" / "ใบงานสาขานี้" — ลิงก์แบบนี้หมายถึงผลค้นนั้น จึงเก็บไว้
   {
     path: "work-orders",
@@ -386,9 +395,10 @@ export function bootState(loggedIn: boolean): object | undefined {
 const AUTH_TITLES: Record<string, string> = { Login: "เข้าสู่ระบบ", Register: "ลงทะเบียนพนักงาน" };
 type TitleArgs = Parameters<NonNullable<DocumentTitleOptions["formatter"]>>;
 function pageTitle(options: TitleArgs[0], route: TitleArgs[1]): string {
-  const p = route?.params as { id?: unknown; code?: unknown; inbox?: unknown } | undefined;
+  const p = route?.params as { id?: unknown; code?: unknown; inbox?: unknown; payment?: unknown } | undefined;
   // กล่องงานกับใบงานซ่อมเป็นหน้าเดียวกัน (ชื่อหน้า "ใบงานซ่อม") — แท็บเบราว์เซอร์ของ /#/inbox ต้องบอกว่าเป็นกล่องงาน
   if (route?.name === "WorkOrderList" && p?.inbox === true) return "กล่องงานของฉัน · OTTERI";
+  if (route?.name === "WorkOrderList" && p?.payment === true) return "รอลูกค้าจ่ายเงิน · OTTERI";
   const title =
     route?.name === "WorkOrderDetail"
       ? typeof p?.code === "string"

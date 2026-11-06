@@ -1,6 +1,7 @@
 // ทดสอบ: ช่องค้นหาในงานของฉันวันนี้ (เจ้าของงานขอ ต.ค. 69 ตามตัวอย่างที่ตกลง)
 //   · แอดมินจอคอม: ช่องค้นหาอยู่แถวหัวข้อ · พิมพ์แล้วเหลือเฉพาะใบที่ตรง (ใบอื่นหาย) · แถบ "แสดง N ใบ … จากทั้งหมด M ใบ"
-//     M ตรงกับจำนวนใบในกล่องงานจาก API · ตัวเลขสรุปไม่เปลี่ยนตามคำค้น · ล้างคำค้นแล้วกลับมาครบ
+//     M ตรงกับจำนวนใบในกล่องงานจาก API · ตัวเลขสรุปไม่เปลี่ยนตามคำค้น · ล้างคำค้นแล้วกลับมาภาพรวม (หน้าแอดมินแบบแยกหัวข้อ
+//     5 พ.ย. 69 — ระหว่างค้นแสดงผลทุกหัวข้อ ล้างแล้วกลับหน้าที่เปิดอยู่ก่อนค้น)
 //   · กด / แล้วพิมพ์ได้เลย · ค้นไม่เจอ → ปุ่ม "ค้นในใบงานซ่อมทั้งหมด" พาไปหน้าใบงานซ่อมพร้อมคำค้นเดิม
 //   · หัวหน้าภาคบนมือถือ: ช่องค้นหา + "พบ N จาก M ใบ"
 // ต้องมี DATABASE_URL
@@ -70,7 +71,8 @@ const login = async (code) =>
     // ════ แอดมิน จอคอม ════
     {
       const { ctx, page, lbl, vis } = await session("A001", { width: 1440, height: 950 });
-      await lbl(`รายละเอียด ${codes[0]}`).first().waitFor({ timeout: 20000 }).catch(() => {});
+      await lbl("ตัวเลขสรุปงานที่รอ").first().waitFor({ timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(1000);
       const box = lbl("ค้นหาในงานของฉัน");
       (await box.count()) ? pass("แอดมินจอคอม: มีช่องค้นหาในงานของฉันวันนี้") : fail("ไม่มีช่องค้นหา");
       await page.screenshot({ path: path.join(DIR, "queue-search-1-desktop.png") });
@@ -99,7 +101,8 @@ const login = async (code) =>
 
       await lbl("ล้างคำค้นหา").first().click();
       await page.waitForTimeout(800);
-      (await shown(other.code)) && (await box.first().inputValue()) === "" ? pass("ล้างคำค้นแล้วกลับมาครบ") : fail("ล้างแล้วไม่กลับมาครบ");
+      (await shown(codes[0])) === 0 && (await page.locator('[aria-label^="ต้องทำก่อนวันนี้ "]').locator("visible=true").count()) > 0 && (await box.first().inputValue()) === ""
+        ? pass("ล้างคำค้นแล้วกลับมาภาพรวม (แถบต้องทำก่อนวันนี้ + การ์ดหัวข้อ)") : fail("ล้างแล้วไม่กลับมาภาพรวม");
 
       await box.first().fill("ไม่มีจริงxyz999");
       await page.waitForTimeout(800);

@@ -74,6 +74,7 @@ import {
 import { CutoffBanners, LiveScheduleChip } from "../components/DispatchCutoff";
 import { howtoTarget, useHowToAction } from "../utils/howto";
 import { PayFollowLine, payDaysText, type PayWaitRow } from "../components/PaymentWait";
+import { PaymentRow, TAB_COL, type PayRow, type PayTabSummary } from "../components/PaymentRow";
 import { colors, radius, shadow, spacing, headingFont } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "WorkOrderList">;
@@ -186,7 +187,14 @@ type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
  * serverNow + cutoff = นาฬิกาเซิร์ฟเวอร์และเวลาปิดนัดงานพรุ่งนี้ตอนตอบ — ป้าย "วันนี้/พรุ่งนี้" และนับถอยหลังของใบรอนัดวันเดินจากค่านี้
  * ไม่ใช่นาฬิกามือถือ (มือถือตั้งเวลาผิดเป็นเรื่องปกติ) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ว่าง
  */
-type ListData = { rows: WorkOrderRow[]; counts: Record<string, number>; serverNow?: string; cutoff?: Cutoff };
+type ListData = {
+  rows: WorkOrderRow[];
+  counts: Record<string, number>;
+  serverNow?: string;
+  cutoff?: Cutoff;
+  /** ตัวเลขของแท็บ "รอลูกค้าจ่ายเงิน" — ทุกใบขั้นนี้ในขอบเขต ไม่ตามแท็บที่เปิด · คนที่ไม่มีแท็บ / เซิร์ฟเวอร์รุ่นเก่า = ว่าง */
+  payTab?: PayTabSummary | null;
+};
 type Sort = "urgent" | "new" | "old" | "az" | "za" | "appt";
 
 const ROLE_TABS: { value: Role; label: string; color: string }[] = [
@@ -297,6 +305,20 @@ const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow
    */
   { key: "payLate", label: "รอจ่ายเกินกำหนด", dot: colors.dangerInk, test: (r) => !!r.payWait?.over },
 ];
+
+/**
+ * ชิปของแท็บรอลูกค้าจ่ายเงิน (ตัวอย่าง paytab: ทั้งหมด · เกิน 3 วัน · ยังไม่เคยตาม · ตามแล้ว พร้อมตัวเลข) — เลือกได้ทีละอัน
+ * ตัวเลขนับจากรายการของแท็บหลังตัวกรองอื่น (ทีม · สาขา) = จำนวนที่จะเห็นเมื่อกด · เส้นวันมาจากเซิร์ฟเวอร์ (label ตั้งตอนวาด)
+ */
+type PayChip = "all" | "over" | "never" | "followed";
+const PAY_CHIPS: { key: PayChip; label: string; test: (r: PayRow) => boolean }[] = [
+  { key: "all", label: "ทั้งหมด", test: () => true },
+  { key: "over", label: "เกินกำหนด", test: (r) => r.payWait.over },
+  { key: "never", label: "ยังไม่เคยตาม", test: (r) => r.payWait.follows === 0 },
+  { key: "followed", label: "ตามแล้ว", test: (r) => r.payWait.follows > 0 },
+];
+/** รอนานสุดก่อน — เท่ากันใบที่เข้าขั้นก่อนขึ้นก่อน (กติกาเดียวกับกลุ่มรอเงินเดิม) */
+const byWait = (a: PayRow, b: PayRow) => b.payWait.days - a.payWait.days || a.payWait.since.localeCompare(b.payWait.since);
 
 const APPT_TONE: Record<string, { fg: string; bg: string; line: string }> = {
   PENDING: { fg: colors.warningInk, bg: colors.warningSoft, line: colors.warningBorder },
@@ -421,7 +443,7 @@ export function stuckLabel(iso: string) {
   return n <= 0 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${n} วัน`;
 }
 
-type Filter = "INBOX" | "ACTIVE" | "AWAITING_CONFIRM" | "IN_PROGRESS" | "DONE" | "ALL";
+type Filter = "INBOX" | "ACTIVE" | "AWAITING_PAYMENT" | "AWAITING_CONFIRM" | "IN_PROGRESS" | "DONE" | "ALL";
 /** เดิม "เฉพาะงานของฉัน" — ที่จริงกรองใบที่มอบหมายให้ตัวเอง (assignedTo=me) ไม่ใช่ใบที่ตัวเองเปิด */
 const MINE_LABEL = "เฉพาะที่มอบหมายให้ฉัน";
 
@@ -435,6 +457,11 @@ const MINE_LABEL = "เฉพาะที่มอบหมายให้ฉั
 const FILTERS: { value: Filter; label: string }[] = [
   { value: "INBOX", label: "กล่องงานของฉัน" },
   { value: "ACTIVE", label: "ที่ยังค้าง" },
+  /**
+   * รอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง paytab) — ถัดจาก "ที่ยังค้าง" ก่อน "รอคอนเฟิร์มลูกค้า" ตามลำดับงาน
+   * (จ่ายเงินก่อนนัดวัน) · เฉพาะแอดมินทั่วไป/Super Admin (payTabOn) — ขั้นนี้เป็นของแอดมิน คนอื่นกดอะไรในขั้นนี้ไม่ได้
+   */
+  { value: "AWAITING_PAYMENT", label: "รอลูกค้าจ่ายเงิน" },
   { value: "AWAITING_CONFIRM", label: "รอคอนเฟิร์มลูกค้า" },
   { value: "IN_PROGRESS", label: "ช่างเข้างาน" },
   { value: "DONE", label: "ปิดแล้ว" },
@@ -637,16 +664,41 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const table = width >= 1024;
   const [rows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  // ตัวเลขแท็บรอลูกค้าจ่ายเงินจากเซิร์ฟเวอร์ (ทุกใบในขอบเขต) — ป้ายบนแท็บและแถบบรรทัดเดียวในกล่องงาน
+  const [payTab, setPayTab] = useState<PayTabSummary | null>(null);
   // นาฬิกาเซิร์ฟเวอร์ + เวลาปิดนัดของคำตอบที่อยู่บนจอ — ป้ายเวลาปิดนัดในแถวและแถบบนสุดของกล่องงานเดินต่อจากค่านี้
   const [clock, setClock] = useState<{ serverNow?: string; cutoff?: Cutoff }>({});
-  // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที
-  const [filter, setFilter] = useState<Filter>(route.params?.inbox ? "INBOX" : "ACTIVE");
+  /**
+   * แท็บ "รอลูกค้าจ่ายเงิน" — แอดมินทั่วไปกับ Super Admin (ตำแหน่งในแอปเป็น ADMIN) · Admin Spare Part ไม่มี
+   * ดูในฐานะ = ตำแหน่งของคนที่ถูกดู (หัวหน้าภาค/ช่าง/ทีม Area) จึงไม่มีแท็บไปเอง · เซิร์ฟเวอร์ตัดสินชุดเดียวกัน (seesPayTab)
+   */
+  const me = useAuth().user;
+  const payTabOn = me?.role === "ADMIN" && !me?.partsAdmin;
+  // มาจากเมนู "กล่องงานของฉัน" ก็เปิดที่กล่องงานเลย ไม่ต้องให้กดหาอีกที · ลิงก์ /#/awaiting-payment เปิดแท็บรอลูกค้าจ่ายเงิน
+  const [filter, setFilter] = useState<Filter>(
+    route.params?.payment && payTabOn ? "AWAITING_PAYMENT" : route.params?.inbox ? "INBOX" : "ACTIVE"
+  );
   // หน้ารายการถูกใช้ซ้ำเมื่อกดเมนูกล่องงาน/ใบงานซ่อมสลับกัน (ไม่ได้ขึ้นหน้าใหม่)
   // ค่าตั้งต้นข้างบนจึงไม่ทำงานรอบสอง ต้องตามค่าที่เมนูส่งมาเอง
   const inboxParam = route.params?.inbox;
   useEffect(() => {
-    if (inboxParam !== undefined) setFilter(inboxParam ? "INBOX" : "ACTIVE");
+    if (inboxParam === undefined) return;
+    setFilter(inboxParam ? "INBOX" : "ACTIVE");
+    // เมนูส่ง params ชุดใหม่ทั้งชุด (navigate ไม่รวมของเดิม) — กันไว้อีกชั้นให้ที่อยู่ไม่ค้าง /awaiting-payment
+    if (route.params?.payment) navigation.setParams({ payment: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inboxParam]);
+  /**
+   * แท็บรอลูกค้าจ่ายเงินมีที่อยู่ของตัวเอง (/#/awaiting-payment แบบเดียวกับ /#/inbox) — ก๊อบลิงก์/F5 ได้แท็บเดิม
+   * คนที่ไม่มีแท็บเปิดลิงก์นี้ = หน้าใบงานซ่อมปกติ ที่อยู่กลับเป็น /#/work-orders (ไม่ค้างที่อยู่ของแท็บที่ไม่มี)
+   */
+  const payParam = route.params?.payment;
+  useEffect(() => {
+    if (!payParam) return;
+    if (payTabOn) setFilter("AWAITING_PAYMENT");
+    else navigation.setParams({ payment: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payParam, payTabOn]);
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState(route.params?.search ?? "");
   // มาจาก "ค้นในใบงานซ่อมทั้งหมด" ของงานของฉันวันนี้ — ใบที่หาไม่เจอในงานของตัวเองมักรอคนอื่นอยู่หรือปิดไปแล้ว
@@ -722,12 +774,18 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   );
   // ชิป "ต้องรีบดู" — ไม่จำข้ามการเปิดแอปเหมือนตัวกรองหัวคอลัมน์ เปิดมาเจอรายการถูกกรองค้างไว้จะงงว่าใบหายไปไหน
   const [quick, setQuick] = useState<Set<QuickKey>>(new Set());
-  const toggleQuick = (k: string) =>
+  const toggleQuick = (k: string) => {
+    /**
+     * "รอจ่ายเกิน 3 วัน" ของคนที่มีแท็บรอลูกค้าจ่ายเงิน = ไปแท็บนั้นที่ชิป "เกิน 3 วัน" (เจ้าของงานเลือก 5 พ.ย. 69)
+     * รายการเต็มของใบที่ควรตามอยู่ในแท็บนั้นพร้อมปุ่มตามลูกค้า — กรองอยู่ในกล่องงานได้แค่แถวที่ไม่มีปุ่ม
+     */
+    if (k === "payLate" && payTabOn) return goPayTab("over");
     setQuick((s) => {
       const next = new Set(s);
       if (!next.delete(k as QuickKey)) next.add(k as QuickKey);
       return next;
     });
+  };
   const byQuick = useCallback((r: WorkOrderRow) => !quick.size || QUICK.some((q) => quick.has(q.key) && q.test(r)), [quick]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -805,10 +863,35 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   }, [rows, byOwner, byType, byCols, byQuick, prefs.sort, prefs.supTab, supTabs, colSort]);
 
   /**
+   * แท็บ "รอลูกค้าจ่ายเงิน" (ตัวอย่าง paytab) — ทุกแถวที่เซิร์ฟเวอร์ส่งมาคือใบขั้นนี้ (รายการไม่แบ่งหน้า ของครบในมือแล้ว
+   * ชิปจึงนับ/กรองจากรายการนี้ได้ตรงกับฐานข้อมูล) · "รอใคร" ต้องรีบดู และหัวคอลัมน์ไม่ใช้ในแท็บนี้: ทุกใบรอแอดมิน ·
+   * ชิปของแท็บแทนต้องรีบดู · คอลัมน์ของแท็บไม่ใช่ชุดเดียวกับตารางปกติ — ตัวกรองที่จำไว้จากแท็บอื่นต้องไม่ซ่อนใบเงียบ ๆ
+   * เรียงรอนานสุดก่อน ไม่ดึงใบด่วนขึ้น — ใบด่วนที่เพิ่งส่งราคาไม่ได้ต้องตามก่อนใบที่ลูกค้าเงียบมาสัปดาห์หนึ่ง
+   */
+  const payMode = filter === "AWAITING_PAYMENT" && payTabOn;
+  const [payChip, setPayChip] = useState<PayChip>("all");
+  const payBase = useMemo(() => (payMode ? (rows.filter((r) => r.payWait && byType(r)) as PayRow[]) : []), [payMode, rows, byType]);
+  const payRows = useMemo(() => {
+    const test = PAY_CHIPS.find((c) => c.key === payChip)!.test;
+    return payBase.filter(test).sort(byWait);
+  }, [payBase, payChip]);
+  // เส้น "เกิน N วัน" ของเซิร์ฟเวอร์ — แอปไม่มีเลข 3 ของขั้นนี้
+  const payAlert = payTab?.alertDays ?? payBase[0]?.payWait.alertDays;
+  const payChipItems = PAY_CHIPS.map((c) => ({
+    ...c,
+    label: c.key === "over" && payAlert !== undefined ? `เกิน ${payAlert} วัน` : c.label,
+    n: payBase.filter(c.test).length,
+  }));
+  /** ใบที่เห็นบนจอตอนนี้ — แท็บรอเงินใช้ชุดของแท็บ ที่เหลือใช้รายการปกติ */
+  const visible: WorkOrderRow[] = payMode ? payRows : shown;
+
+  /**
    * แถวคั่น "ด่วน (n)" / "ปกติ (n)" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน
    * ไม่มีใบด่วนก็ไม่มีแถวคั่นเลย รายการหน้าตาเหมือนเดิม
    */
   const items = useMemo<ListItem[]>(() => {
+    // แท็บรอเงินไม่แบ่งด่วน/ปกติ — เรียงรอนานสุดอย่างเดียว (ดู payMode)
+    if (payMode) return payRows;
     const hot = shown.filter(isHot).length;
     if (!hot) return shown;
     return [
@@ -817,7 +900,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       ...(shown.length > hot ? [{ sep: "NORMAL" as const, label: `ปกติ (${shown.length - hot})` }] : []),
       ...shown.slice(hot),
     ];
-  }, [shown]);
+  }, [shown, payMode, payRows]);
 
   /**
    * สอนการใช้งาน (หัวหน้าภาค/แอดมิน "ใบงานซ่อม"): เปิดใบงานให้ดูหนึ่งใบ — แค่เปิดดู ไม่บันทึกอะไร
@@ -827,7 +910,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * (ไม่มีแถบขั้นตอนให้ชี้) และแอดมินทั่วไปไม่มีปุ่มอะไรเลย — สองขั้นท้ายจะชี้ไม่เจอทั้งคู่
    */
   useHowToAction("orders.openFirst", () => {
-    const open = shown.filter((r) => r.status !== "CLAIM_REVIEW");
+    const open = visible.filter((r) => r.status !== "CLAIM_REVIEW");
     const row = open.find((r) => r.stageActor === user?.role) ?? open[0];
     if (!row) return false;
     navigation.navigate("WorkOrderDetail", { id: row.id });
@@ -896,6 +979,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     const { changed, keys } = countChanges(rowsRef.current, data.rows, (r) => r.id);
     setRows(data.rows);
     setCounts(data.counts);
+    setPayTab(data.payTab ?? null);
     setClock({ serverNow: data.serverNow, cutoff: data.cutoff });
     clearPending();
     if (keys.size) blink(keys);
@@ -932,6 +1016,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       if (seq !== loadSeq.current) return;
       setRows(data.rows);
       setCounts(data.counts);
+      setPayTab(data.payTab ?? null);
       setClock({ serverNow: data.serverNow, cutoff: data.cutoff });
       clearPending();
     } catch (e) {
@@ -968,6 +1053,30 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     setLoading(true);
     setFilter(next);
     setMarked(new Map());
+    /**
+     * ที่อยู่ของแท็บรอลูกค้าจ่ายเงิน (/#/awaiting-payment) ตามแท็บที่กด — ก๊อบลิงก์ตอนเปิดแท็บนี้ได้แท็บนี้ · ออกจากแท็บแล้วที่อยู่ไม่ค้าง
+     * (setParams = แทนที่รายการประวัติ ไม่เพิ่ม — แบบเดียวกับแท็บอื่นที่ไม่เพิ่มรายการย้อนกลับ) · กลับกล่องงาน = /#/inbox ตามเดิม
+     */
+    if (next === "AWAITING_PAYMENT") {
+      setPayChip("all");
+      navigation.setParams({ payment: true, inbox: undefined });
+    } else if (filter === "AWAITING_PAYMENT" || route.params?.payment) {
+      navigation.setParams({ payment: undefined, ...(next === "INBOX" ? { inbox: true } : {}) });
+    }
+  }
+  /** ไปแท็บรอลูกค้าจ่ายเงินที่ชิปหนึ่ง — แถบในกล่องงาน ("ดูในแท็บ") และชิปต้องรีบดู "รอจ่ายเกิน 3 วัน" */
+  function goPayTab(chip: PayChip) {
+    chooseFilter("AWAITING_PAYMENT");
+    setPayChip(chip);
+  }
+  /**
+   * จดการตามลูกค้าในแถวของแท็บแล้ว — แทนแถวนั้นในมือ ไม่โหลดรายการใหม่ (แถวไม่กระโดด/ไม่กระพริบทั้งรายการ)
+   * ตัวเลขแท็บขยับตาม: ใบที่ไม่เคยตามกลายเป็นตามแล้ว (เซิร์ฟเวอร์นับแบบเดียวกัน รอบโหลดถัดไปได้เลขเดิม)
+   */
+  function onPayFollowed(id: number, p: PayRow["payWait"]) {
+    const before = rowsRef.current.find((r) => r.id === id)?.payWait;
+    if (before && before.follows === 0 && p.follows > 0) setPayTab((t) => (t ? { ...t, never: t.never - 1, followed: t.followed + 1 } : t));
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, payWait: p } : r)));
   }
 
   // โหลดใหม่ทุกครั้งที่กลับมาหน้านี้ เพราะเพิ่งไปปิดงานมาแล้วตัวเลขต้องเปลี่ยน
@@ -1024,6 +1133,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     } else {
       clearPending();
       setCounts(data.counts);
+      setPayTab(data.payTab ?? null);
     }
   });
   const here: Spot = supTabs ? { filter, supTab: prefs.supTab } : { filter };
@@ -1062,6 +1172,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     beforeRows.current = new Map(rowsRef.current.map((r) => [r.id, r]));
     setRows(data.rows);
     setCounts(data.counts);
+    setPayTab(data.payTab ?? null);
     setClock({ serverNow: data.serverNow, cutoff: data.cutoff });
     clearPending();
     setMarked(new Map());
@@ -1078,11 +1189,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     const g = jumpTarget.current;
     if (!g || loading || g.filter !== filter || (g.supTab && supTabs && g.supTab !== prefs.supTab)) return;
     const present = g.ids.filter((id) => rows.some((r) => r.id === id));
-    if (!g.cleared && present.some((id) => !shown.some((r) => r.id === id))) {
+    if (!g.cleared && present.some((id) => !visible.some((r) => r.id === id))) {
       g.cleared = true;
       setPrefs((p) => ({ ...p, owner: "", who: "", btype: "", kind: "", claim: "" }));
       setQuick(new Set());
       setColFilters({});
+      setPayChip("all");
       feedback.toast("info", "ล้างตัวกรองให้แล้ว — ใบที่อัปเดตถูกตัวกรองซ่อนอยู่");
       return;
     }
@@ -1101,7 +1213,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     setTimeout(() => aim(true), 80);
     // เล็งซ้ำหลังการ์ดที่เพิ่งวาดวัดความสูงจริงเสร็จ — ระหว่างทางใช้ความสูงเฉลี่ย ใบท้ายรายการยาวจึงคลาดไปได้หลายใบ
     setTimeout(() => aim(false), 1200);
-  }, [rows, loading, filter, prefs.supTab, supTabs, shown, items, jumpTick, blink]);
+  }, [rows, loading, filter, prefs.supTab, supTabs, visible, items, jumpTick, blink]);
   /** การ์ดยังไม่ถูกวาด (FlatList วาดเฉพาะแถวใกล้จอ) — กระโดดไปตำแหน่งประมาณก่อน แล้วค่อยเล็งใหม่ */
   const scrollTries = useRef(0);
   const onScrollToIndexFailed = (info: { index: number; averageItemLength: number }) => {
@@ -1234,13 +1346,14 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     setMineOnly((v) => !v);
   };
   // ตัวเลขบนตัวเลือกนับจากใบที่ผ่านหัวคอลัมน์และชิปต้องรีบดูแล้ว — ตรงกับที่จะเห็นเมื่อกด
+  // แท็บรอเงิน: ตัวเลือกนับจากใบของแท็บตรง ๆ ไม่มี "รอใคร" (ทุกใบรอแอดมิน) — หัวคอลัมน์/ต้องรีบดูไม่ใช้ในแท็บนี้ (ดู payMode)
   const groups = filterGroups({
-    rows: tabRows.filter((r) => byCols(r) && byQuick(r)),
+    rows: payMode ? rows : tabRows.filter((r) => byCols(r) && byQuick(r)),
     prefs,
     setPref,
     byOwner,
     byType,
-    hideOwner: supTabs,
+    hideOwner: supTabs || payMode,
     showKind: kindOn,
   });
   // การเรียงแยกจากตัวกรองชัด ๆ (ไม่ทำให้ใบหาย) — เรียงจากหัวคอลัมน์อยู่ก็บอกบนปุ่ม กดเลือกแบบอื่นแล้วล้างอันนั้น
@@ -1256,11 +1369,25 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       setPref({ sort: v as Sort });
     },
   };
+  /**
+   * แท็บรอเงินเรียงรอนานสุดอย่างเดียว (ตัวอย่าง "เรียง: รอนานสุด") — ปุ่มเรียงบอกลำดับที่ใช้อยู่ ไม่ใช้ค่าเรียงที่จำไว้ของแท็บอื่น
+   * (เลือกในแท็บนี้แล้วไปเปลี่ยนลำดับของทุกแท็บ คนจะงงว่ารายการอื่นเรียงเปลี่ยนเพราะอะไร)
+   */
+  const paySortGroup: FilterGroup = {
+    key: "sort",
+    label: "เรียง",
+    value: "wait",
+    allValue: "wait",
+    options: [{ value: "wait", label: "รอนานสุด" }],
+    onPick: () => undefined,
+  };
   const activeTags: ActiveTag[] = [
     ...(mineOnly ? [{ key: "mine", label: "มอบหมายให้ฉัน", onClear: toggleMine }] : []),
-    ...quickItems.filter((q) => quick.has(q.key)).map((q) => ({ key: `q-${q.key}`, label: q.label, onClear: () => toggleQuick(q.key) })),
+    ...(payMode
+      ? []
+      : quickItems.filter((q) => quick.has(q.key)).map((q) => ({ key: `q-${q.key}`, label: q.label, onClear: () => toggleQuick(q.key) }))),
     ...groups.filter(isSet).map((g) => ({ key: g.key, label: `${g.label} ${pickedLabel(g)}`, onClear: () => g.onPick(g.allValue ?? "") })),
-    ...(colFilterCount
+    ...(colFilterCount && !payMode
       ? [
           {
             key: "cols",
@@ -1271,12 +1398,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         ]
       : []),
   ];
-  const activeCount = (mineOnly ? 1 : 0) + quick.size + groups.filter(isSet).length;
+  const activeCount = (mineOnly ? 1 : 0) + (payMode ? 0 : quick.size) + groups.filter(isSet).length;
   /** ล้างตัวกรองทั้งหมด — การเรียงกับคำค้นไม่ถูกล้าง (ไม่ได้ทำให้ใบหาย และคำค้นมีปุ่ม ✕ ของตัวเอง) */
   function clearAll() {
     setPrefs((p) => ({ ...p, owner: "", who: "", btype: "", kind: "", claim: "" }));
     setQuick(new Set());
     setColFilters({});
+    setPayChip("all");
     if (mineOnly) toggleMine();
   }
 
@@ -1296,13 +1424,15 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         <View style={styles.pageTitleRow}>
           {/* จอแคบ: ชื่อหน้าอยู่บนแถบหัวแล้ว ไม่พิมพ์ซ้ำตัวใหญ่ — ประหยัดที่ให้เห็นใบงานเร็วขึ้น (เจ้าของงานขอ ต.ค. 69) */}
           {docked ? (
-            <Text style={[styles.pageTitle, headingFont]}>{filter === "INBOX" ? "กล่องงานของฉัน" : "ใบงานซ่อม"}</Text>
+            <Text style={[styles.pageTitle, headingFont]}>
+              {filter === "INBOX" ? "กล่องงานของฉัน" : payMode ? "รอลูกค้าจ่ายเงิน" : "ใบงานซ่อม"}
+            </Text>
           ) : null}
           {!loading && !error ? (
             <View style={styles.countPill}>
               {/* กล่องงานหัวหน้าภาค: นับทุกแท็บ ให้ตรงกับชิป "กล่องงานของฉัน" — แท็บข้างล่างแบ่งย่อยจากตัวเลขนี้ */}
               <Text style={styles.countPillText}>
-                {(supTabs ? supTabCounts.repair + supTabCounts.dispatch + supTabCounts.outsource : shown.length).toLocaleString("th-TH")} ใบ
+                {(supTabs ? supTabCounts.repair + supTabCounts.dispatch + supTabCounts.outsource : visible.length).toLocaleString("th-TH")} ใบ
               </Text>
             </View>
           ) : null}
@@ -1337,10 +1467,12 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         {docked ? <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text> : null}
       </View>
       <ViewTabs
-        tabs={FILTERS.map((f) => ({
+        tabs={FILTERS.filter((f) => f.value !== "AWAITING_PAYMENT" || payTabOn).map((f) => ({
           value: f.value,
           label: f.label,
-          n: counts[f.value],
+          // แท็บรอเงิน: ตัวเลขของเซิร์ฟเวอร์ทั้งขอบเขต + ป้ายแดง "เกิน 3 วัน n" (ตัวอย่าง) — ขึ้นตั้งแต่ยังเปิดแท็บอื่นอยู่
+          n: f.value === "AWAITING_PAYMENT" ? payTab?.total ?? counts[f.value] : counts[f.value],
+          alert: f.value === "AWAITING_PAYMENT" && payTab?.over ? `เกิน ${payTab.alertDays} วัน ${payTab.over}` : undefined,
           dot: jumpQueue.some((g) => g.filter === f.value),
         }))}
         value={filter}
@@ -1404,18 +1536,20 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               <FilterDropdown key={g.key} group={g} />
             ))}
             <View style={styles.tbSep} />
-            <FilterDropdown group={sortGroup} icon="swap-vertical" />
+            <FilterDropdown group={payMode ? paySortGroup : sortGroup} icon="swap-vertical" />
           </>
         )}
       </View>
-      {!loading && !error && rows.length > 0 ? (
+      {payMode && !loading && !error ? (
+        <PayChips items={payChipItems} on={payChip} onPick={setPayChip} alertDays={payAlert} />
+      ) : !loading && !error && rows.length > 0 ? (
         <View style={styles.quickWrap} {...howtoTarget("orders.quick")}>
           <QuickChips items={quickItems} on={quick} toggle={toggleQuick} wrap={!compact} />
         </View>
       ) : null}
       {!loading && !error ? (
         <View style={styles.activeWrap}>
-          <ActiveBar shown={shown.length} total={tabRows.length} tags={activeTags} onClearAll={clearAll} />
+          <ActiveBar shown={visible.length} total={tabRows.length} tags={activeTags} onClearAll={clearAll} />
         </View>
       ) : null}
       {filter === "INBOX" && !loading ? (
@@ -1426,6 +1560,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           cutoff={clock.cutoff}
           role={user?.role ?? null}
           adminCut={adminCut}
+          payTab={payTabOn ? payTab : null}
+          onGoPay={() => goPayTab("all")}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
         />
       ) : null}
@@ -1442,6 +1578,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         <Text style={styles.retryText}>ลองใหม่</Text>
       </TouchableOpacity>
     </View>
+  ) : payMode && rows.length === 0 ? (
+    <EmptyState icon="wallet-outline" title="ไม่มีใบที่รอลูกค้าจ่ายเงิน" text="ใบที่ส่งใบเสนอราคาแล้วขึ้นที่นี่จนกว่าจะแนบบิลรับเงิน" />
   ) : rows.length === 0 ? (
     <EmptyState
       icon="clipboard-outline"
@@ -1453,7 +1591,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           : "กดปุ่มเพิ่มใบงานด้านบนเพื่อแจ้งซ่อมของสาขาคุณ"
       }
     />
-  ) : shown.length === 0 ? (
+  ) : visible.length === 0 ? (
     <EmptyState
       icon="funnel-outline"
       title="ไม่มีใบงานตามตัวกรองนี้"
@@ -1515,7 +1653,11 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
               {/* แถบบนลอยทับ — เว้นที่ไว้ให้หัวหน้าเริ่มใต้แถบ */}
               {barsH ? <View style={{ height: barsH }} /> : null}
               {foldable ? header : null}
-              {table && !status ? (
+              {table && !status && payMode ? (
+                <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
+                  <PayTableHead />
+                </View>
+              ) : table && !status ? (
                 <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
                   <TableHead
                     values={colValues}
@@ -1529,7 +1671,39 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </>
           }
           renderItem={({ item, index }: { item: ListItem; index: number }) =>
-            table ? (
+            payMode && !("sep" in item) ? (
+              /*
+                แท็บรอลูกค้าจ่ายเงิน — แถว/การ์ดตัวเดียวกับงานของฉันวันนี้ (PaymentRow) · ตามลูกค้าแล้วในแถว แถวขึ้น "วันนี้ · …" ทันที
+                กรอบเหลือง/กระพริบของปุ่ม "มีอัปเดต" ห่ออยู่ข้างนอก (ปุ่มนั้นพามาที่แท็บนี้ได้ — /locate)
+              */
+              <View
+                style={[
+                  table ? styles.tableMid : null,
+                  table && index === items.length - 1 && styles.tableBottom,
+                  marked.has(item.id) && !flash.has(item.id) && styles.flashRow,
+                ]}
+              >
+                <PaymentRow
+                  row={item as PayRow}
+                  variant="tab"
+                  wide={table}
+                  canFollow={payTabOn}
+                  onOpen={() => {
+                    unmark(item.id);
+                    navigation.navigate("WorkOrderDetail", { id: item.id });
+                  }}
+                  onFollowed={(p) => onPayFollowed(item.id, p)}
+                  onStale={() => void load()}
+                />
+                {marked.has(item.id) ? (
+                  <Text style={[styles.markText, styles.payMark]}>
+                    <Text style={styles.flashTag}>อัปเดต · </Text>
+                    {marked.get(item.id)}
+                  </Text>
+                ) : null}
+                {flash.has(item.id) ? <Blink radius={table ? 0 : radius.lg} /> : null}
+              </View>
+            ) : table ? (
               // ตารางเป็นกรอบเดียวที่ต่อกันจากหัวคอลัมน์ลงมาทีละแถว — หัวหน้าอยู่ในรายการเดียวกันแล้ว
               // จะใช้ทั้งรายการเป็นกรอบเหมือนเดิมไม่ได้ ไม่งั้นช่องค้นหาและตัวกรองไปอยู่ในกรอบตารางด้วย
               <View style={[styles.tableMid, index === items.length - 1 && styles.tableBottom]}>
@@ -1626,7 +1800,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ]}
         >
           <FoldedBar
-            count={shown.length}
+            count={visible.length}
             parts={[
               FILTERS.find((f) => f.value === filter)?.label ?? "",
               ...activeTags.map((t) => t.label),
@@ -1635,7 +1809,11 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             ].filter(Boolean)}
             onPress={backToTop}
           />
-          {table && !status && tableW > 0 ? (
+          {table && !status && tableW > 0 && payMode ? (
+            <View style={[styles.tableTop, styles.tableHeadFloat, { width: tableW }]}>
+              <PayTableHead />
+            </View>
+          ) : table && !status && tableW > 0 ? (
             <View style={[styles.tableTop, styles.tableHeadFloat, { width: tableW }]}>
               <TableHead
                     values={colValues}
@@ -1673,12 +1851,13 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         visible={sheetOpen && compact}
         onClose={() => setSheetOpen(false)}
         groups={groups}
-        sort={sortGroup}
-        quick={rows.length ? quickItems : []}
+        sort={payMode ? paySortGroup : sortGroup}
+        // แท็บรอเงินมีชิปของตัวเองบนหน้า (ไม่ใช้ต้องรีบดู)
+        quick={rows.length && !payMode ? quickItems : []}
         quickOn={quick}
         toggleQuick={toggleQuick}
         extra={isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
-        shown={shown.length}
+        shown={visible.length}
         onClearAll={clearAll}
       />
     </View>
@@ -2298,6 +2477,8 @@ function InboxAttention({
   cutoff,
   role,
   adminCut,
+  payTab,
+  onGoPay,
   onOpen,
 }: {
   /** ใบที่เห็นอยู่ในแท็บ/ตัวกรองนี้ — หัวข้อของแอดมิน (ไม่มีคนรับ · เลยนัด) */
@@ -2309,6 +2490,9 @@ function InboxAttention({
   role: string | null;
   /** แอดมินที่ไม่ใช่ Admin Spare Part ในกล่องงาน — หัวข้อ "ขอนัดด่วน" ของแอดมิน */
   adminCut: boolean;
+  /** ตัวเลขแท็บรอลูกค้าจ่ายเงิน (คนที่มีแท็บ) — แถบบรรทัดเดียว · null = ไม่มีแถบ */
+  payTab: PayTabSummary | null;
+  onGoPay: () => void;
   onOpen: (id: number) => void;
 }) {
   // ตั้งต้นย่อทุกหัวข้อ — ดู openAttn · state แค่ให้วาดใหม่ตอนกด ค่าจริงอยู่ที่ openAttn
@@ -2326,7 +2510,7 @@ function InboxAttention({
    * "เลยนัด" ของแอดมินอยู่ในหัวข้อเดิมข้างล่าง (overdue ของแถวที่เห็น) ไม่ซ้ำสองที่
    */
   const asks = adminCut && allRows ? adminGroups(allRows, now, cutoff).asks : null;
-  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad" | "pay"; items: WorkOrderRow[] }[] = [];
+  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
   /**
    * หัวหน้าภาค: "รอนัดวัน" (3 ชม. ก่อนปิดนัดพรุ่งนี้) · "ออกงานวันนี้" — ตัวสร้างเดียวกับงานของฉันวันนี้ นับตรงกันทุกตัวอักษร
    * "วันนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มือถือตั้งวันผิดต้องไม่บอกว่าออกงานวันนี้)
@@ -2354,27 +2538,20 @@ function InboxAttention({
         tone: "bad",
         items: overdue,
       });
-    /**
-     * รอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่างกล่องงานแอดมิน) — หัวข้อแบบเดียวกับ "ไม่มีคนรับ" / "เลยนัด"
-     * เรียงรอนานสุดก่อน แถวบอกรอมาแล้ว N วัน กับตามล่าสุด/ยังไม่เคยตาม · ชิป "รอจ่ายเกิน N วัน" ด้านบนกรองหัวข้อนี้ด้วย
-     * (rows คือใบที่ผ่านตัวกรองบนจอแล้ว) จึงเหลือเฉพาะใบที่ควรตามได้โดยไม่ต้องมีหน้าใหม่ · อยู่ท้ายหัวข้อปัญหา — รอลูกค้าไม่ใช่ของค้างของเรา
-     */
-    const pay = rows
-      .filter((r) => r.payWait)
-      .sort((a, b) => b.payWait!.days - a.payWait!.days || a.payWait!.since.localeCompare(b.payWait!.since));
-    if (pay.length) {
-      const alert = pay[0].payWait!.alertDays;
-      const late = pay.filter((r) => r.payWait!.over).length;
-      groups.push({
-        key: "pay",
-        title: `รอลูกค้าจ่ายเงิน ${pay.length}${late ? ` · เกิน ${alert} วัน ${late}` : ""}`,
-        hint: `เรียงจากรอนานสุด · แดง = รอเกิน ${alert} วัน ควรตามลูกค้า · กดชิป "รอจ่ายเกิน ${alert} วัน" ด้านบนเพื่อดูเฉพาะใบที่ควรตาม`,
-        tone: "pay",
-        items: pay,
-      });
-    }
   }
-  if (!groups.length && !sup.length && !asks) return null;
+  /**
+   * รอลูกค้าจ่ายเงิน — แถบบรรทัดเดียว + ปุ่มไปแท็บ "รอลูกค้าจ่ายเงิน" (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง paytab ข้อ 2)
+   * เดิมเป็นหัวข้อที่มีแถวทุกใบ (หลายสิบใบดันใบอื่นลงไปพ้นจอ) — รายการเต็มพร้อมปุ่มตามลูกค้าอยู่ที่แท็บแล้ว
+   * ตัวเลขชุดเดียวกับป้ายบนแท็บ (payTab ของเซิร์ฟเวอร์ ทั้งขอบเขต ไม่ตามคำค้น/ตัวกรอง) · บรรทัดเดียวจึงไม่มีปุ่มย่อ/ขยาย
+   * แบบ "ไม่มีคนรับ"/"เลยนัด" (ไม่มีแถวให้ย่อ) · ใบยังอยู่ในรายการข้างล่างตามปกติ แบบหัวข้ออื่นของกล่องงาน
+   */
+  const pay = payTab && payTab.total > 0 ? payTab : null;
+  const payTitle = pay
+    ? [`รอลูกค้าจ่ายเงิน ${pay.total}`, pay.over ? `เกิน ${pay.alertDays} วัน ${pay.over}` : null, pay.never ? `ยังไม่เคยตาม ${pay.never}` : null]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  if (!groups.length && !sup.length && !asks && !pay) return null;
   return (
     <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
       {sup.length ? <CutoffBanners groups={sup} withRows onOpen={onOpen} /> : null}
@@ -2388,7 +2565,7 @@ function InboxAttention({
         return (
         <View
           key={g.key}
-          style={[styles.attn, g.tone === "bad" ? styles.attnBad : g.tone === "pay" ? styles.attnPay : styles.attnSup]}
+          style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]}
           accessibilityLabel={`หัวข้อ ${g.title}`}
         >
           {/* ทั้งแถบหัวกดย่อ/ขยายได้ ไม่ใช่แค่ปุ่มเล็กมุมขวา — มือถือกดโดนง่าย */}
@@ -2398,7 +2575,7 @@ function InboxAttention({
             accessibilityLabel={`${shut ? "ขยาย" : "ย่อ"}หัวข้อ ${g.title}`}
             aria-expanded={!shut}
           >
-            <Text style={[styles.attnTitle, styles.attnTitleFlex, g.tone === "bad" ? styles.attnTitleBad : g.tone === "pay" ? styles.attnTitlePay : styles.attnTitleSup]}>
+            <Text style={[styles.attnTitle, styles.attnTitleFlex, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>
               {g.title}
             </Text>
             <View style={styles.attnFold}>
@@ -2407,22 +2584,8 @@ function InboxAttention({
             </View>
           </TouchableOpacity>
           {shut ? null : <Text style={styles.attnHint}>{g.hint}</Text>}
-          {shut ? null : g.key === "pay"
-            ? g.items.map((r) => (
-                <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`รอลูกค้าจ่ายเงิน ${r.code}`}>
-                  <Text style={styles.attnCode}>{r.code}</Text>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.attnText} numberOfLines={1}>
-                      {r.branchCode}
-                      {r.branchName ? ` ${r.branchName}` : ""}
-                      {" · "}
-                      <Text style={r.payWait!.over ? styles.attnPayLate : undefined}>{payDaysText(r.payWait!)}</Text>
-                    </Text>
-                    <PayFollowLine p={r.payWait!} style={styles.attnFollow} />
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
-                </TouchableOpacity>
-              ))
+          {shut
+            ? null
             : g.items.map((r) => (
                 <TouchableOpacity key={r.id} style={styles.attnRow} onPress={() => onOpen(r.id)} accessibilityLabel={`${g.title} ${r.code}`}>
                   <Text style={styles.attnCode}>{r.code}</Text>
@@ -2444,6 +2607,78 @@ function InboxAttention({
         </View>
         );
       })}
+      {pay ? (
+        <View style={[styles.attn, styles.attnPay, styles.payBar]} accessibilityLabel={`หัวข้อ ${payTitle}`}>
+          <View style={{ flex: 1, minWidth: 220, gap: 2 }}>
+            <Text style={[styles.attnTitle, styles.attnTitlePay]}>{payTitle}</Text>
+            <Text style={styles.attnHint}>รายการเต็มย้ายไปอยู่แท็บด้านบนแล้ว กล่องงานจะได้ไม่ยาว</Text>
+          </View>
+          <TouchableOpacity style={styles.payGo} onPress={onGoPay} accessibilityLabel="ดูในแท็บ รอลูกค้าจ่ายเงิน">
+            <Text style={styles.payGoText}>ดูในแท็บ รอลูกค้าจ่ายเงิน ›</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** หัวตารางของแท็บรอลูกค้าจ่ายเงิน — ความกว้างคอลัมน์ชุดเดียวกับแถว (TAB_COL ใน PaymentRow) */
+function PayTableHead() {
+  return (
+    <View style={[styles.tr, styles.thead, styles.payHead]}>
+      <Text style={[styles.th, TAB_COL.code]}>ใบงาน</Text>
+      <Text style={[styles.th, TAB_COL.branch]}>สาขา · งาน</Text>
+      <Text style={[styles.th, TAB_COL.quoted]}>ส่งใบเสนอราคา</Text>
+      <Text style={[styles.th, TAB_COL.days]}>รอมาแล้ว</Text>
+      <Text style={[styles.th, TAB_COL.last]}>ตามลูกค้าล่าสุด</Text>
+      <View style={TAB_COL.actions} />
+    </View>
+  );
+}
+
+/**
+ * ชิปของแท็บรอลูกค้าจ่ายเงิน — เลือกได้ทีละอัน (ตัวอย่าง) · ตัวเลข = จำนวนที่จะเห็นเมื่อกด · ได้ 0 ใบจาง กดไม่ได้ (กติกาเดียวกับตัวกรองอื่น)
+ * "เกิน N วัน" แดงตลอด — เป็นชิปเดียวที่บอกว่าต้องรีบ
+ */
+function PayChips({
+  items,
+  on,
+  onPick,
+  alertDays,
+}: {
+  items: { key: PayChip; label: string; n: number }[];
+  on: PayChip;
+  onPick: (k: PayChip) => void;
+  alertDays: number | undefined;
+}) {
+  return (
+    <View style={styles.payChips} {...howtoTarget("orders.quick")}>
+      <View style={styles.payChipRow}>
+        <Text style={styles.payHint}>ใบที่ส่งใบเสนอราคาแล้ว รอลูกค้าโอน · แอดมินแนบบิลเมื่อลูกค้าจ่าย ·</Text>
+        {items.map((c) => {
+          const sel = on === c.key;
+          const red = c.key === "over";
+          const off = !c.n && !sel && c.key !== "all";
+          return (
+            <TouchableOpacity
+              key={c.key}
+              style={[styles.payChip, red && styles.payChipRed, sel && (red ? styles.payChipRedOn : styles.payChipOn), off && styles.payChipOff]}
+              onPress={() => onPick(c.key)}
+              disabled={off}
+              accessibilityLabel={`ชิปรอจ่าย ${c.label} ${c.n}`}
+              accessibilityState={{ selected: sel, disabled: off }}
+              // เว็บไม่แปลง accessibilityState เป็น aria-selected (CLAUDE.md) — เทสต์อ่านว่าชิปไหนติดจากตรงนี้
+              aria-selected={sel}
+            >
+              <Text style={[styles.payChipText, red && { color: colors.dangerInk }, sel && { color: "#fff" }]}>{c.label}</Text>
+              <Text style={[styles.payChipText, styles.payChipN, red && { color: colors.dangerInk }, sel && { color: "#fff" }]}>{c.n}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={styles.payNote}>
+        เรียงจากรอนานสุด{alertDays !== undefined ? ` · แดง = รอเกิน ${alertDays} วัน ควรตามลูกค้า` : ""}
+      </Text>
     </View>
   );
 }
@@ -2485,8 +2720,32 @@ const styles = StyleSheet.create({
   // รอลูกค้าจ่ายเงิน — ส้มแบบป้าย "รอคนนอก" (ไม่ใช่แดงของปัญหา) · แถวที่เกินเส้นแดงในตัว
   attnPay: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
   attnTitlePay: { color: colors.warningInk },
-  attnPayLate: { color: colors.dangerInk, fontWeight: "700" },
-  attnFollow: { fontSize: 12.5, lineHeight: 18 },
+  payBar: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.md },
+  payGo: { minHeight: 42, paddingHorizontal: 16, borderRadius: 10, backgroundColor: colors.navyFill, alignItems: "center", justifyContent: "center" },
+  payGoText: { color: "#fff", fontSize: 13.5, fontWeight: "700" },
+  payHead: { paddingHorizontal: spacing.md },
+  payMark: { paddingHorizontal: spacing.md, paddingBottom: 6 },
+  payChips: { paddingTop: spacing.md, marginHorizontal: spacing.lg, gap: 4 },
+  payChipRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  payHint: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  payNote: { fontSize: 12.5, lineHeight: 18, color: colors.textMuted },
+  payChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+  },
+  payChipOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
+  payChipRed: { borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft },
+  payChipRedOn: { backgroundColor: colors.dangerFill, borderColor: colors.dangerFill },
+  payChipOff: { opacity: 0.45 },
+  payChipText: { fontSize: 13.5, lineHeight: 20, color: colors.body },
+  payChipN: { fontWeight: "700", fontVariant: ["tabular-nums"] },
   attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
   attnTitleFlex: { flex: 1, minWidth: 0 },
   attnHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 36 },

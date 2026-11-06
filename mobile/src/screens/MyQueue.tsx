@@ -12,7 +12,7 @@
  * เพราะหน้านี้โหลดใบที่รอทั้งหมดมาแล้ว (ไม่แบ่งหน้า) · ตัวเลขสรุปด้านบนนับจากทั้งหมดเสมอ ไม่ตามคำค้น
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { BackHandler, Platform, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "../components/Tap";
@@ -42,6 +42,8 @@ import { dayTime } from "../components/claims/ClaimTrail";
 import { takeFlash, type QueueFlash } from "../utils/flash";
 import { howtoTarget, useHowToAction, useHowToContext } from "../utils/howto";
 import { PAY_GO_LABEL, PayFollowLine, payDaysText } from "../components/PaymentWait";
+import { PaymentRow, QUEUE_COL, type PayRow } from "../components/PaymentRow";
+import { TOPIC_STAGES, apptRel, buildTopics, type ChipTone, type RowKind, type Topic, type TopicId } from "../utils/adminTopics";
 import {
   PAST_GROUP_HINT,
   RELEASE_STAGES,
@@ -54,6 +56,7 @@ import {
   timeText,
   useServerClock,
   useServerNowFn,
+  type AdminCutoffGroups,
   type Cutoff,
 } from "../utils/dispatchCutoff";
 
@@ -373,6 +376,103 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
     </View>
   );
 
+  const modals = (
+    <>
+      {/*
+        หน้าต่างคำขอนัดด่วน — ทำเสร็จแล้วใบออกจากหัวข้อ "ขอนัดด่วน" (และกล่องงานแอดมิน) โหลดใหม่ให้เห็นว่าเสร็จจริง
+        ปิดหลังเจอ "คำขอเปลี่ยนไปแล้ว" (stale) ก็โหลดใหม่ — แถวที่ค้างอยู่คือคำขอที่ไม่มีแล้ว
+      */}
+      {urgentFor ? (
+        <UrgentReleaseModal
+          order={urgentFor}
+          onCancel={(stale) => {
+            setUrgentFor(null);
+            if (stale) void load();
+          }}
+          onDone={async () => {
+            setUrgentFor(null);
+            await load();
+          }}
+        />
+      ) : null}
+      {answerFor ? (
+        <UrgentAnswerModal
+          order={answerFor}
+          onCancel={(stale) => {
+            setAnswerFor(null);
+            if (stale) void load();
+          }}
+          onDone={async () => {
+            setAnswerFor(null);
+            await load();
+          }}
+        />
+      ) : null}
+      {sendFor ? (
+        <SendAdminReviewModal
+          order={sendFor}
+          onClose={() => setSendFor(null)}
+          onDone={async () => {
+            setSendFor(null);
+            await load();
+          }}
+        />
+      ) : null}
+      {replyFor?.adminReview ? (
+        <AdminReplyModal
+          order={replyFor}
+          review={replyFor.adminReview}
+          onClose={() => setReplyFor(null)}
+          onDone={async () => {
+            setReplyFor(null);
+            await load();
+          }}
+        />
+      ) : null}
+    </>
+  );
+
+  /**
+   * แอดมินทั่วไปกับ Super Admin — หน้าแบบแยกหัวข้อ (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง myday "ทำตามที่แนะนำ")
+   * หัวหน้าภาค ช่าง และ Admin Spare Part ใช้หน้าเดิมข้างล่างไปก่อน (คำตอบข้อ 1) · ข้อมูล ตัวเลขสรุป ช่องค้นหา หน้าต่าง
+   * และการโหลดใหม่ (ดึงลง · ปุ่มรีเฟรช · หลังเที่ยงคืน) ชุดเดียวกับหน้าเดิม — ต่างกันแค่การจัดวาง
+   */
+  if (adminCut) {
+    return (
+      <AdminTopics
+        rows={rows}
+        error={error}
+        cut={cut}
+        now={now}
+        query={query}
+        setQuery={setQuery}
+        searchBox={searchBox}
+        stats={
+          rows ? (
+            <View style={styles.stats} accessibilityLabel="ตัวเลขสรุปงานที่รอ" {...howtoTarget("queue.stats")}>
+              <Stat n={all.length} label="รอทำทั้งหมด" />
+              <Stat n={urgent} label="ด่วน" tone={urgent ? "danger" : undefined} />
+              <Stat n={stale} label={`ค้างเกิน ${STALE_DAYS} วัน`} tone={stale ? "warning" : undefined} />
+              <Stat n={out} label="อะไหล่หมด" tone={out ? "danger" : undefined} />
+            </View>
+          ) : null
+        }
+        pickFlash={pickFlash}
+        onFlashClose={() => setPickFlash(null)}
+        onOpen={onOpen}
+        onSearchAll={onSearchAll}
+        refresh={refresh}
+        reload={load}
+        setRows={setRows}
+        onSend={setSendFor}
+        onReply={setReplyFor}
+        onUrgent={setUrgentFor}
+        onAnswerAsk={setAnswerFor}
+        modals={modals}
+      />
+    );
+  }
+
   return (
     <ScrollView
       style={styles.page}
@@ -427,28 +527,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         1) แถบแจ้งผลของรอบเลือกอะไหล่ — นอกเงื่อนไข "มีใบในกล่อง" เหมือนกัน: คอนเฟิร์มใบสุดท้ายแล้วกล่องว่าง ยังต้องเห็นว่าใบไปไหน
         แดง = ตีกลับ (ใบกลับไปหาทีมช่าง) · เขียว = คอนเฟิร์ม (ใบไปขั้นถัดไป) · แตะเพื่อปิด
       */}
-      {pickFlash ? (
-        <TouchableOpacity
-          style={[styles.pickFlash, pickFlash.kind === "returned" ? styles.pickFlashRed : styles.pickFlashGreen]}
-          onPress={() => setPickFlash(null)}
-          activeOpacity={0.8}
-          accessibilityLabel="แถบแจ้งผลรายการอะไหล่"
-        >
-          <View role="status" accessibilityLiveRegion="polite" style={styles.pickFlashRow}>
-            <Ionicons
-              name={pickFlash.kind === "returned" ? "arrow-undo" : "checkmark-circle"}
-              size={18}
-              color={pickFlash.kind === "returned" ? colors.dangerInk : colors.successInk}
-            />
-            <Text style={[styles.pickFlashText, { color: pickFlash.kind === "returned" ? colors.dangerInk : colors.successInk }]}>
-              {pickFlash.kind === "returned"
-                ? `ตีกลับ ${pickFlash.code} ให้ทีม${pickFlash.team ?? "ที่ไปตรวจ"}แก้แล้ว — ใบงานกลับมาที่กล่องนี้เมื่อช่างส่งใหม่`
-                : `คอนเฟิร์ม ${pickFlash.code} แล้ว — ใบงานไปที่ ${pickFlash.label}`}
-            </Text>
-            <Ionicons name="close" size={16} color={colors.textMuted} />
-          </View>
-        </TouchableOpacity>
-      ) : null}
+      {pickFlash ? <PickFlashBar flash={pickFlash} onClose={() => setPickFlash(null)} /> : null}
       {/* กรอบห่อให้วิธีใช้ชี้แถบเวลาปิดนัด (ชื่อคงที่) — ไม่ต้องแก้ตัวแถบเอง · ลูกตัวเดียวแทนลูกตัวเดียว ลำดับลูกไม่ขยับ */}
       {rows && !error && banners.length ? (
         <View {...howtoTarget("queue.cutoff")}>
@@ -677,58 +756,713 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
           </View>
         ))
       )}
-      {/*
-        หน้าต่างคำขอนัดด่วน — ทำเสร็จแล้วใบออกจากหัวข้อ "ขอนัดด่วน" (และกล่องงานแอดมิน) โหลดใหม่ให้เห็นว่าเสร็จจริง
-        ปิดหลังเจอ "คำขอเปลี่ยนไปแล้ว" (stale) ก็โหลดใหม่ — แถวที่ค้างอยู่คือคำขอที่ไม่มีแล้ว
-      */}
-      {urgentFor ? (
-        <UrgentReleaseModal
-          order={urgentFor}
-          onCancel={(stale) => {
-            setUrgentFor(null);
-            if (stale) void load();
-          }}
-          onDone={async () => {
-            setUrgentFor(null);
-            await load();
-          }}
-        />
-      ) : null}
-      {answerFor ? (
-        <UrgentAnswerModal
-          order={answerFor}
-          onCancel={(stale) => {
-            setAnswerFor(null);
-            if (stale) void load();
-          }}
-          onDone={async () => {
-            setAnswerFor(null);
-            await load();
-          }}
-        />
-      ) : null}
-      {sendFor ? (
-        <SendAdminReviewModal
-          order={sendFor}
-          onClose={() => setSendFor(null)}
-          onDone={async () => {
-            setSendFor(null);
-            await load();
-          }}
-        />
-      ) : null}
-      {replyFor?.adminReview ? (
-        <AdminReplyModal
-          order={replyFor}
-          review={replyFor.adminReview}
-          onClose={() => setReplyFor(null)}
-          onDone={async () => {
-            setReplyFor(null);
-            await load();
-          }}
-        />
-      ) : null}
+      {modals}
     </ScrollView>
+  );
+}
+
+/**
+ * ชื่อขั้นจากตัวเลือกของเซิร์ฟเวอร์ (stages[].action = ป้ายขั้นที่ตัด "แอดมิน · " ออก) — ชื่อหัวข้อตรงกับป้ายขั้นทุกที่ในแอป
+ * จำไว้ทั้งแอป (ชื่อขั้นเปลี่ยนเฉพาะตอน deploy) · ยังไม่มา/ถามไม่ได้ = หัวข้อที่มีใบใช้ป้ายจากแถว หัวข้อว่างรอจนได้ชื่อ
+ */
+let stageNamesCache: Record<string, string> | null = null;
+function useStageNames() {
+  const [names, setNames] = useState<Record<string, string>>(stageNamesCache ?? {});
+  useEffect(() => {
+    if (stageNamesCache) return;
+    let alive = true;
+    api
+      .get<{ stages: { value: string; action: string }[] }>("/work-orders/options", { loadingText: false })
+      .then(({ data }) => {
+        stageNamesCache = Object.fromEntries(data.stages.map((s) => [s.value, s.action]));
+        if (alive) setNames(stageNamesCache);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return names;
+}
+
+/** สีชิป/ป้ายของหัวข้อ (ตัวอย่าง: แดงทึบ = ต้องรีบที่สุด · แดงอ่อน · เหลือง = ใกล้ถึง/ค้าง · เทา) */
+const TONE: Record<ChipTone, { bg: string; fg: string }> = {
+  red: { bg: colors.dangerFill, fg: "#fff" },
+  redSoft: { bg: colors.dangerSoft, fg: colors.dangerInk },
+  amber: { bg: colors.warningSoft, fg: colors.warningInk },
+  plain: { bg: colors.rowAlt, fg: colors.body },
+};
+const flagsOf = (t: Topic) => t.chips.filter((c) => c.flag && c.n > 0);
+/** หัวข้อที่มีเรื่องแดงทึบ (ขอนัดด่วน · รอจ่ายเกินกำหนด) — การ์ดขอบแดง ตัวเลขแดง */
+const hotTopic = (t: Topic) => t.chips.some((c) => c.tone === "red" && c.n > 0);
+const stepLabel = (t: Topic) => (t.id === "first" ? "ก่อนทุกขั้น" : t.step ? `ขั้นที่ ${t.step} ของแอดมิน` : "นอกขั้นข้างบน");
+const stuckText = (r: WorkOrderRow) => {
+  const d = rowDays(r);
+  return d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`;
+};
+
+type AdminTopicsProps = {
+  rows: WorkOrderRow[] | null;
+  error: string | null;
+  cut: AdminCutoffGroups | null;
+  now: number;
+  query: string;
+  setQuery: (q: string) => void;
+  searchBox: React.ReactNode;
+  stats: React.ReactNode;
+  pickFlash: QueueFlash | null;
+  onFlashClose: () => void;
+  onOpen: Props["onOpen"];
+  onSearchAll?: Props["onSearchAll"];
+  refresh: () => Promise<void>;
+  reload: () => Promise<void>;
+  setRows: React.Dispatch<React.SetStateAction<WorkOrderRow[] | null>>;
+  onSend: (r: WorkOrderRow) => void;
+  onReply: (r: WorkOrderRow) => void;
+  onUrgent: (r: WorkOrderRow) => void;
+  onAnswerAsk: (r: WorkOrderRow) => void;
+  modals: React.ReactNode;
+};
+
+/**
+ * งานของฉันวันนี้ของแอดมิน แบบแยกหัวข้อ (ตัวอย่าง myday) — เปิดมาเจอ "ภาพรวม" (คำตอบข้อ 2):
+ * แถบแดง "ต้องทำก่อนวันนี้" แล้วการ์ดหัวข้อละใบ (จำนวน · ทำอะไร · ป้ายเรื่องที่ต้องรีบ · ค้างนานสุด/นัดใกล้สุด) เรียงตามลำดับงาน (ข้อ 3)
+ * จอคอม: เมนูหัวข้อซ้าย เนื้อหาขวา · มือถือ: ภาพรวมเป็นรายการ แตะหัวข้อเปิดรายการของหัวข้อนั้น "‹ ภาพรวม" (และปุ่มย้อนกลับของ Android) พากลับ
+ * ใบไหนอยู่หัวข้อไหน/เรียงอย่างไรอยู่ที่ utils/adminTopics.ts · ปุ่มบนแถวเปิดใบพร้อมฟอร์มของขั้น (ข้อ 4)
+ */
+function AdminTopics(p: AdminTopicsProps) {
+  const { rows, cut, now, query } = p;
+  const { docked } = useDocked();
+  const names = useStageNames();
+  const [view, setView] = useState<TopicId | "home">("home");
+  const [chip, setChip] = useState("all");
+  const [paneW, setPaneW] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+  // จอคอมที่เนื้อหาขวากว้างพอ = ตารางแบบตัวอย่าง · แคบกว่านั้น (จอ 1100–1400 ที่เมนูข้างกางค้าง) การ์ดแบบเดิมอ่านง่ายกว่าตารางที่บีบ
+  const grid = docked && paneW >= 820;
+  const topics = useMemo(() => (rows ? buildTopics(rows, cut, now, names) : []), [rows, cut, now, names]);
+  const all = rows ?? [];
+  const q = query.trim().toLowerCase();
+  const topic = view === "home" ? null : topics.find((t) => t.id === view) ?? null;
+  const first = topics.find((t) => t.id === "first");
+
+  const open = (id: TopicId | "home") => {
+    setView(id);
+    setChip("all");
+    // มือถือ: รายการของหัวข้อเริ่มบนสุดเสมอ (ไม่ค้างที่ตำแหน่งเลื่อนของภาพรวม)
+    if (!docked) scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
+  // ปุ่มย้อนกลับของ Android = กลับภาพรวม (ไม่ออกจากหน้า) — เว็บมีปุ่ม "‹ ภาพรวม" บนหัวรายการ
+  useEffect(() => {
+    if (Platform.OS !== "android" || view === "home") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      setView("home");
+      return true;
+    });
+    return () => sub.remove();
+  }, [view]);
+  /**
+   * สอนการใช้งาน (แอดมิน ขั้น "ปุ่มของขั้นนี้"): เปิดหัวข้อแรกที่มีใบให้ดู — แค่เปิดรายการในหน้านี้ ไม่บันทึกอะไร
+   * ขั้นของใบก่อน (ปุ่มน้ำเงินเป็นปุ่มของขั้นจริง) แล้วค่อยหัวข้ออื่น · ชื่อหัวข้อขึ้นในกล่องเล็ก ("เปิดหัวข้อ … ให้ดูแล้ว")
+   */
+  useHowToAction("queue.openTopic", () => {
+    const pick =
+      topics.find((t) => t.rows.length && (TOPIC_STAGES as readonly string[]).includes(t.id) && t.id !== "AWAITING_PAYMENT") ??
+      topics.find((t) => t.rows.length);
+    if (!pick) return false;
+    p.setQuery("");
+    open(pick.id);
+    return { ok: true, code: pick.name };
+  });
+
+  /** จดการตามลูกค้าในแถวแล้ว — แทนแถวในมือ (ไม่โหลดกล่องใหม่) ตัวเลข/ชิปของหัวข้อคิดใหม่จากแถวชุดนี้เอง */
+  const onFollowed = (id: number, pw: WorkOrderRow["payWait"]) =>
+    p.setRows((rs) => (rs ? rs.map((r) => (r.id === id ? { ...r, payWait: pw } : r)) : rs));
+
+  const rowOf = (t: Topic, r: WorkOrderRow, wide: boolean) =>
+    t.id === "AWAITING_PAYMENT" && r.payWait ? (
+      <PaymentRow
+        key={r.id}
+        row={r as PayRow}
+        variant="queue"
+        wide={wide}
+        canFollow
+        onOpen={() => p.onOpen(r.id)}
+        // ปุ่มหลักของขั้นนี้: เปิดใบพร้อมฟอร์มแนบบิล (open: "stage") — ชื่อเดียวกับปุ่มในหน้าใบงาน
+        onAttach={() => p.onOpen(r.id, "stage")}
+        onFollowed={(pw) => onFollowed(r.id, pw)}
+        onStale={() => void p.reload()}
+        render={(text, style, lines) => <Hi text={text} q={q} style={style as object} numberOfLines={lines} />}
+        actionsTarget={howtoTarget("queue.actions")}
+      />
+    ) : (
+      <TopicRow key={r.id} {...p} t={t} row={r} kind={t.kindOf(r)} wide={wide} now={now} q={q} />
+    );
+
+  const tableHead = (t: Topic) =>
+    grid ? (
+      <View style={[ad.tr, ad.thead]}>
+        <Text style={[ad.th, QUEUE_COL.code]}>ใบงาน</Text>
+        <Text style={[ad.th, QUEUE_COL.branch]}>สาขา</Text>
+        <Text style={[ad.th, QUEUE_COL.work]}>งาน · เครื่อง</Text>
+        <Text style={[ad.th, QUEUE_COL.info]}>{t.infoHead}</Text>
+        <View style={QUEUE_COL.actions} />
+      </View>
+    ) : null;
+
+  // ── ภาพรวม ──
+  const n0 = (first?.chips ?? []).map((c) => c.n);
+  const firstBar = first ? (
+    <TouchableOpacity
+      style={[ad.firstBar, !first.rows.length && ad.firstBarCalm]}
+      onPress={() => open("first")}
+      disabled={!first.rows.length}
+      activeOpacity={0.85}
+      accessibilityLabel={`ต้องทำก่อนวันนี้ ${first.rows.length} ใบ`}
+      {...howtoTarget("queue.first")}
+    >
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text style={[ad.firstTitle, headingFont, !first.rows.length && { color: colors.text }]}>ต้องทำก่อนวันนี้ {first.rows.length} ใบ</Text>
+        <Text style={ad.firstSub}>
+          {!first.rows.length
+            ? "ไม่มีร้านขอนัดด่วนหรือใบที่เลยวันนัด"
+            : docked
+              ? `ร้านขอนัดด่วน ${n0[0] ?? 0} ใบ (รอคำตอบวันนี้/พรุ่งนี้) · เลยวันนัดแล้ว ${n0[1] ?? 0} ใบ`
+              : // มือถือ: บรรทัดเดียวสั้น ๆ แบบตัวอย่าง (จอแคบ ประโยคเต็มตกสองบรรทัด)
+                `ขอนัดด่วน ${n0[0] ?? 0} · เลยนัด ${n0[1] ?? 0}`}
+        </Text>
+      </View>
+      {first.rows.length ? (
+        docked ? (
+          <View style={ad.firstGo}>
+            <Text style={ad.firstGoText}>เริ่มจากตรงนี้ ›</Text>
+          </View>
+        ) : (
+          <Ionicons name="chevron-forward" size={20} color={colors.dangerInk} />
+        )
+      ) : null}
+    </TouchableOpacity>
+  ) : null;
+  const rest = topics.filter((t) => t.id !== "first");
+  // การ์ดภาพรวม 3 ใบต่อแถว (2 ใบเมื่อเนื้อหาขวาแคบ) กว้างเท่ากันทุกใบ — ใบสุดท้ายที่เหลือเดี่ยวไม่ยืดเต็มแถว
+  const cols = paneW >= 780 ? 3 : 2;
+  const cardW = paneW ? Math.floor((paneW - spacing.md * (cols - 1)) / cols) : undefined;
+  // กล่องว่างทั้งกล่อง — บอกตรง ๆ (หัวข้อทุกหัวข้อยังอยู่ที่เดิมเป็น 0 จาง ตำแหน่งไม่เปลี่ยน)
+  const allClear = all.length ? null : (
+    <View style={ad.clear}>
+      <Ionicons name="checkmark-done-outline" size={20} color={colors.successInk} />
+      <Text style={ad.clearTitle}>ไม่มีงานค้างรอคุณ</Text>
+      <Text style={ad.clearText}>ใบงานที่ถึงขั้นของคุณจะขึ้นที่นี่ทันที</Text>
+    </View>
+  );
+  const home = docked ? (
+    <View style={{ gap: spacing.md }}>
+      {allClear}
+      {firstBar}
+      <View style={ad.cards} {...howtoTarget("queue.group")}>
+        {rest.map((t) => {
+          const hot = hotTopic(t);
+          const empty = !t.rows.length;
+          return (
+            <TouchableOpacity
+              key={t.id}
+              style={[ad.card, cardW ? { width: cardW } : ad.cardFlex, hot && ad.cardHot, empty && ad.dim]}
+              onPress={() => open(t.id)}
+              activeOpacity={0.85}
+              accessibilityLabel={`หัวข้อ ${t.name} ${t.rows.length} ใบ`}
+            >
+              <View style={ad.cardTop}>
+                <Text style={ad.cardStep}>{t.step ? `ขั้น ${t.step}` : "อื่น ๆ"}</Text>
+                <View style={{ flex: 1 }} />
+                <Text style={[ad.cardN, headingFont, hot && { color: colors.dangerInk }]}>{t.rows.length}</Text>
+              </View>
+              <Text style={[ad.cardName, headingFont]}>{t.name}</Text>
+              <Text style={ad.cardWhat}>{t.what}</Text>
+              <View style={ad.flags}>
+                {flagsOf(t).map((c) => (
+                  <View key={c.key} style={[ad.flag, { backgroundColor: TONE[c.tone].bg }]}>
+                    <Text style={[ad.flagText, { color: TONE[c.tone].fg }]}>
+                      {c.label} {c.n}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={ad.cardOldest}>{t.oldest}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  ) : (
+    <View style={{ gap: spacing.sm }}>
+      {allClear}
+      {firstBar}
+      <Text style={ad.navHead}>หัวข้อที่ต้องทำ · เรียงตามลำดับงาน</Text>
+      <View style={ad.list} {...howtoTarget("queue.group")}>
+        {rest.map((t, i) => {
+          const f = flagsOf(t);
+          const hot = hotTopic(t);
+          return (
+            <TouchableOpacity
+              key={t.id}
+              style={[ad.listRow, i > 0 && ad.listLine, !t.rows.length && ad.dim]}
+              onPress={() => open(t.id)}
+              accessibilityLabel={`หัวข้อ ${t.name} ${t.rows.length} ใบ`}
+            >
+              <StepDot step={t.step} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={ad.listName}>{t.name}</Text>
+                {f.length ? (
+                  <Text style={[ad.listFlag, { color: f.some((c) => c.tone.startsWith("red")) ? colors.dangerInk : colors.warningInk }]}>
+                    {f.map((c) => `${c.label} ${c.n}`).join(" · ")}
+                  </Text>
+                ) : null}
+              </View>
+              <Text style={[ad.listN, hot && { color: colors.dangerInk }]}>{t.rows.length}</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <Text style={ad.foot}>แตะหัวข้อเพื่อเปิดรายการของหัวข้อนั้น · ปุ่ม “‹ ภาพรวม” พากลับมาหน้านี้</Text>
+    </View>
+  );
+
+  // ── รายการของหัวข้อ ──
+  const topicView = (t: Topic) => {
+    const test = t.chips.find((c) => c.key === chip)?.test;
+    const list = test ? t.rows.filter(test) : t.rows;
+    return (
+      <View style={{ gap: spacing.md }} accessibilityLabel={`รายการหัวข้อ ${t.name}`}>
+        <View style={ad.tHead} {...howtoTarget("queue.group")}>
+          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+            <Text style={ad.tStep}>{stepLabel(t)}</Text>
+            <Text style={[ad.tName, headingFont]}>
+              {t.name} <Text style={ad.tN}>{t.rows.length} ใบ</Text>
+            </Text>
+            <Text style={ad.tWhat}>{t.what}</Text>
+          </View>
+          <TouchableOpacity style={ad.back} onPress={() => open("home")} accessibilityLabel="กลับไปภาพรวม">
+            <Text style={ad.backText}>‹ ภาพรวม</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={ad.chips}>
+          {[{ key: "all", label: "ทั้งหมด", n: t.rows.length, tone: "plain" as ChipTone }, ...t.chips].map((c) => {
+            const on = chip === c.key;
+            const off = !c.n && !on && c.key !== "all";
+            return (
+              <TouchableOpacity
+                key={c.key}
+                style={[ad.chip, on && ad.chipOn, off && ad.dim]}
+                onPress={() => setChip(c.key)}
+                disabled={off}
+                accessibilityLabel={`ชิปหัวข้อ ${c.label} ${c.n}`}
+                accessibilityState={{ selected: on, disabled: off }}
+                // เว็บไม่แปลง accessibilityState เป็น aria-selected (CLAUDE.md)
+                aria-selected={on}
+              >
+                <Text style={[ad.chipText, on && ad.chipTextOn]}>{c.label}</Text>
+                <Text style={[ad.chipText, ad.chipN, on && ad.chipTextOn]}>{c.n}</Text>
+              </TouchableOpacity>
+            );
+          })}
+          <View style={{ flex: 1 }} />
+          <Text style={ad.sortText}>เรียง: {t.sortText}</Text>
+        </View>
+        {/*
+          คำอธิบายของหัวข้อปักเดิมยังอยู่ (ประโยคเดียวกับกล่องงาน — ตัวสร้างเดียวกัน): ขอนัดด่วนบอกสองทางที่แอดมินเลือกได้
+          ไม่ให้คิดว่าต้องแก้เป็นงานด่วนให้ทุกใบ · เลยนัดบอกว่าแก้ด้วยการเลื่อนวันนัดและค้างที่ใคร
+        */}
+        {t.id === "first" && (cut?.asks || cut?.past) ? (
+          <View style={{ gap: 2 }}>
+            {cut?.asks ? (
+              <Text style={styles.groupHint}>
+                <Text style={{ fontWeight: "700", color: colors.roleAdmin }}>ขอนัดด่วน: </Text>
+                {cut.asks.hint}
+              </Text>
+            ) : null}
+            {cut?.past ? (
+              <Text style={styles.groupHint}>
+                <Text style={{ fontWeight: "700", color: colors.dangerInk }}>เลยนัด: </Text>
+                {PAST_GROUP_HINT}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+        {t.rows.length ? (
+          <View style={grid ? ad.table : { gap: spacing.md }}>
+            {tableHead(t)}
+            {list.map((r) => rowOf(t, r, grid))}
+          </View>
+        ) : (
+          <Text style={ad.empty}>ไม่มีใบในหัวข้อนี้</Text>
+        )}
+        <Text style={ad.foot}>
+          แสดง {list.length} จาก {t.rows.length} ใบ · กดปุ่มน้ำเงินแล้วเข้าใบงานพร้อมเปิดฟอร์มของขั้นนี้ให้เลย
+        </Text>
+      </View>
+    );
+  };
+
+  // ── ผลค้น: ทุกหัวข้อพร้อมกัน แยกตามหัวข้อ (ตามลำดับงาน) ──
+  const matches = q ? topics.map((t) => ({ t, list: t.rows.filter((r) => haystack(r).includes(q)) })).filter((g) => g.list.length) : [];
+  const found = matches.reduce((n, g) => n + g.list.length, 0);
+  const results = (
+    <View style={{ gap: spacing.lg }}>
+      {matches.map(({ t, list }) => (
+        <View key={t.id} style={{ gap: spacing.sm }} accessibilityLabel={`ผลค้นหัวข้อ ${t.name}`}>
+          <View style={ad.resHead}>
+            <StepDot step={t.step} />
+            <Text style={[ad.resName, headingFont]}>{t.name}</Text>
+            <Text style={ad.resN}>
+              {list.length} จาก {t.rows.length}
+            </Text>
+          </View>
+          <View style={grid ? ad.table : { gap: spacing.md }}>
+            {tableHead(t)}
+            {list.map((r) => rowOf(t, r, grid))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+  const none = (
+    <View style={styles.none}>
+      <View style={styles.noneIcon}>
+        <Ionicons name="search" size={26} color={colors.navy} />
+      </View>
+      <Text style={styles.noneTitle}>ไม่มี “{query.trim()}” ในงานของฉันวันนี้</Text>
+      <Text style={styles.noneText}>ใบงานนั้นอาจรอคนอื่นอยู่หรือปิดไปแล้ว — ค้นในใบงานซ่อมทั้งหมดได้</Text>
+      {p.onSearchAll ? (
+        <TouchableOpacity style={styles.noneGo} onPress={() => p.onSearchAll!(query.trim())} accessibilityLabel="ค้นในใบงานซ่อมทั้งหมด">
+          <Ionicons name="clipboard-outline" size={18} color="#fff" />
+          <Text style={styles.noneGoText}>ค้นในใบงานซ่อมทั้งหมด</Text>
+        </TouchableOpacity>
+      ) : null}
+      <TouchableOpacity style={styles.noneClear} onPress={() => p.setQuery("")} accessibilityLabel="ล้างคำค้นหา">
+        <Text style={styles.resultClearText}>ล้างคำค้น</Text>
+      </TouchableOpacity>
+    </View>
+  );
+  const body = q ? (found ? results : none) : topic ? topicView(topic) : home;
+
+  const nav = (
+    <View style={ad.nav} accessibilityLabel="หัวข้อที่ต้องทำ">
+      <TouchableOpacity
+        style={[ad.navItem, view === "home" && !q && ad.navHome]}
+        onPress={() => {
+          p.setQuery("");
+          open("home");
+        }}
+        accessibilityLabel={`เมนูหัวข้อ ภาพรวม ${all.length}`}
+        aria-selected={view === "home" && !q}
+      >
+        <Text style={[ad.navName, { fontWeight: "700" }]}>ภาพรวม</Text>
+        <Text style={ad.navAll}>{all.length}</Text>
+      </TouchableOpacity>
+      <Text style={ad.navHead}>หัวข้อที่ต้องทำ · เรียงตามลำดับงาน</Text>
+      {topics.map((t) => {
+        const on = view === t.id && !q;
+        const f = flagsOf(t)[0];
+        const urgent = t.id === "first" && t.rows.length > 0;
+        return (
+          <TouchableOpacity
+            key={t.id}
+            style={[ad.navItem, urgent && ad.navUrgent, on && ad.navOn, !t.rows.length && !on && ad.dim]}
+            onPress={() => {
+              p.setQuery("");
+              open(t.id);
+            }}
+            accessibilityLabel={`เมนูหัวข้อ ${t.name} ${t.rows.length}`}
+            aria-selected={on}
+          >
+            <StepDot step={t.step} on={on} urgent={urgent} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[ad.navName, on && { color: "#fff" }]}>{t.name}</Text>
+              {f ? (
+                <Text style={[ad.navFlag, { color: on ? "#fff" : c2(f.tone) }]}>
+                  {f.label} {f.n}
+                </Text>
+              ) : null}
+            </View>
+            <View style={[ad.navN, urgent && { backgroundColor: colors.dangerFill }, on && ad.navNOn]}>
+              <Text style={[ad.navNText, (urgent || on) && { color: "#fff" }]}>{t.rows.length}</Text>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      style={styles.page}
+      contentContainerStyle={[styles.content, docked && ad.contentWide]}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={p.refresh} />}
+      // มือถือ: ช่องค้นหาติดอยู่ใต้แถบหัว (ลูกตัวที่ 3 = แถวค้นหา — แบบหน้าเดิม)
+      stickyHeaderIndices={!docked && rows && all.length ? [2] : undefined}
+    >
+      <View style={styles.head}>
+        {docked ? <Text style={[styles.title, headingFont]}>งานของฉันวันนี้</Text> : null}
+        <View style={styles.rolePill}>
+          <Text style={styles.rolePillText}>งานที่รอแอดมินทำ</Text>
+        </View>
+        {docked && rows && all.length ? p.searchBox : null}
+      </View>
+      {p.stats}
+      {!docked && rows && all.length ? (
+        <View style={styles.stickySearch}>
+          {p.searchBox}
+          {q ? (
+            <Text style={[styles.foundText, !found && { color: colors.dangerInk }]}>
+              {found ? `พบ ${found} จาก ${all.length} ใบ` : `ไม่พบใน ${all.length} ใบที่รอคุณ`}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {docked && q && found ? (
+        <View style={styles.result}>
+          <Text style={styles.resultText}>
+            แสดง <Text style={{ fontWeight: "700" }}>{found} ใบ</Text> ที่ตรงกับ <Text style={{ fontWeight: "700" }}>“{query.trim()}”</Text> จากทั้งหมด{" "}
+            {all.length} ใบ
+          </Text>
+          <TouchableOpacity style={styles.resultClear} onPress={() => p.setQuery("")} accessibilityLabel="ล้างคำค้นหา">
+            <Text style={styles.resultClearText}>ล้างคำค้น</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {p.pickFlash ? <PickFlashBar flash={p.pickFlash} onClose={p.onFlashClose} /> : null}
+      {p.error ? (
+        <EmptyState icon="cloud-offline-outline" title="โหลดงานไม่ได้" text={p.error} />
+      ) : !rows ? (
+        <Spinner page color={colors.primary} />
+      ) : docked ? (
+        <View style={ad.split}>
+          {nav}
+          <View style={ad.pane} onLayout={(e) => setPaneW(Math.round(e.nativeEvent.layout.width))}>
+            {body}
+          </View>
+        </View>
+      ) : (
+        body
+      )}
+      {p.modals}
+    </ScrollView>
+  );
+}
+const c2 = (tone: ChipTone) => (tone === "red" || tone === "redSoft" ? colors.dangerInk : tone === "amber" ? colors.warningInk : colors.textMuted);
+
+/** วงกลมเลขขั้น — "!" ก่อนทุกขั้น (แดง) · ว่าง = อื่น ๆ */
+function StepDot({ step, on, urgent }: { step: string; on?: boolean; urgent?: boolean }) {
+  return (
+    <View style={[ad.dot, urgent && { backgroundColor: colors.dangerFill }, on && { backgroundColor: "#fff" }]}>
+      <Text style={[ad.dotText, urgent && { color: "#fff" }, on && { color: colors.navy }]}>{step || "…"}</Text>
+    </View>
+  );
+}
+
+/**
+ * แถวของหัวข้อ (ที่ไม่ใช่รอเงิน — รอเงินใช้ PaymentRow ตัวเดียวกับแท็บในหน้าใบงานซ่อม)
+ * จอคอมเป็นแถวตาราง (ตัวอย่าง) · มือถือเป็นการ์ดแบบเดิม · ป้าย/ข้อมูลเดิมของการ์ดยังอยู่ครบ (ด่วน · ย้อนขั้น · ไม่มีคนรับ ·
+ * คำขอตรวจสอบ · ขอนัดด่วนใครขอเมื่อไร) · ปุ่มชุดเดิม (CardActions — ปุ่มขั้น · เลื่อนวันนัด · ตอบกลับ · แก้เป็นงานด่วน)
+ */
+function TopicRow({
+  t,
+  row: r,
+  kind,
+  wide,
+  now,
+  q,
+  onOpen,
+  onSend,
+  onReply,
+  onUrgent,
+  onAnswerAsk,
+  reload,
+}: { t: Topic; row: WorkOrderRow; kind: RowKind; wide: boolean; now: number; q: string } & AdminTopicsProps) {
+  const hot = r.priority === "URGENT";
+  const work = [r.symptom || r.title, r.machineCode ? `เครื่อง ${machineTag(r.machineCode, r.machineCapacityKg)}` : null].filter(Boolean).join(" · ");
+  const info = infoOf(t, r, kind, now);
+  const tags = (
+    <>
+      {r.rolledBackFrom ? <Tag text="↩ ย้อนขั้นมา" fg={colors.rollbackInk} bg={colors.rollbackSoft} /> : null}
+      {t.id !== "PARTS_SOURCING" && (r.partsOut ?? 0) > 0 ? <Tag text={`อะไหล่หมด ${r.partsOut}`} fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
+      {r.orphan ? <Tag text="ไม่มีคนรับ" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
+      {r.overdue && kind !== "past" ? <Tag text="เลยนัด" fg={colors.dangerInk} bg={colors.dangerSoft} /> : null}
+      {r.rescheduled ? <Tag text="เลื่อนวันนัด — คอนเฟิร์มวันใหม่" fg={colors.warningInk} bg={colors.warningSoft} /> : null}
+      {kind !== "review" ? <AdminReviewTag review={r.adminReview} /> : null}
+    </>
+  );
+  const actions = (
+    <View {...(kind === "stage" ? howtoTarget("queue.actions") : null)} style={wide ? QUEUE_COL.actions : null}>
+      <CardActions
+        row={r}
+        // คำขอตรวจสอบที่รอตอบ = ปุ่มตอบกลับ (ไม่ใช่ปุ่มขั้น) · ขอนัดด่วน/เลยนัดมีปุ่มของตัวเอง — ชนิดเดียวกับหัวข้อปักเดิม
+        kind={kind === "stage" ? "stage" : kind}
+        stageLabel={stageName(r.statusLabel)}
+        isAdmin
+        wide={wide}
+        fit={wide}
+        onOpen={onOpen}
+        onSend={() => onSend(r)}
+        onReply={() => onReply(r)}
+        onUrgent={() => onUrgent(r)}
+        onAnswerAsk={() => onAnswerAsk(r)}
+        onChanged={reload}
+      />
+    </View>
+  );
+  // แถวตารางของหัวข้อ "ตอบหัวหน้าภาค" บอกคำถามในคอลัมน์ "หัวหน้าภาคถามว่า" แล้ว — ไม่วาดกล่องคำขอซ้ำใต้แถว (การ์ดบนมือถือยังมีกล่อง)
+  const showReview = !!r.adminReview && !(wide && kind === "review");
+  const extra = (
+    <>
+      {r.orphan && r.orphanReason ? <Text style={styles.note}>{r.orphanReason}</Text> : null}
+      {showReview ? <AdminReviewBox review={r.adminReview!} viewer="admin" /> : null}
+    </>
+  );
+  if (wide) {
+    return (
+      <View style={ad.rowWrap} accessibilityLabel={`แถว ${r.code}`}>
+        <View style={ad.tr}>
+          <View style={[QUEUE_COL.code, { gap: 3, alignItems: "flex-start" }]}>
+            <Hi text={r.code} q={q} style={[styles.code, headingFont]} />
+            {hot ? (
+              <View style={styles.tagHot}>
+                <Text style={styles.tagHotText}>ด่วน</Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={QUEUE_COL.branch}>
+            <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={ad.branch} numberOfLines={2} />
+          </View>
+          <View style={QUEUE_COL.work}>
+            <Hi text={work} q={q} style={ad.cell} numberOfLines={2} />
+          </View>
+          <View style={[QUEUE_COL.info, { gap: 2 }]}>
+            <Text
+              style={[ad.info, info.tone === "red" && { color: colors.dangerInk }, info.tone === "ask" && { color: colors.roleAdmin }]}
+              accessibilityLabel={info.tone === "ask" ? info.main : undefined}
+            >
+              {info.main}
+            </Text>
+            {info.sub ? (
+              <Text style={ad.sub} accessibilityLabel={info.tone === "ask" ? info.sub : undefined}>
+                {info.sub}
+              </Text>
+            ) : null}
+            {info.note ? <Text style={styles.cutCause}>{info.note}</Text> : null}
+            <View style={styles.cardTop}>{tags}</View>
+          </View>
+          {actions}
+        </View>
+        {showReview || (r.orphan && r.orphanReason) ? <View style={ad.rowExtra}>{extra}</View> : null}
+      </View>
+    );
+  }
+  return (
+    <View style={[styles.card, hot && styles.cardHot, kind === "ask" && ad.cardAsk, kind === "past" && ad.cardPast]} accessibilityLabel={`แถว ${r.code}`}>
+      <View style={styles.cardTop}>
+        <Hi text={r.code} q={q} style={[styles.code, headingFont]} />
+        {hot ? (
+          <View style={styles.tagHot}>
+            <Text style={styles.tagHotText}>ด่วน</Text>
+          </View>
+        ) : null}
+        {tags}
+        <View style={{ flex: 1 }} />
+        <Text style={[styles.wait, rowDays(r) > STALE_DAYS && styles.waitLate]}>{stuckText(r)}</Text>
+      </View>
+      <Hi text={`${r.branchCode} ${r.branchName}`} q={q} style={styles.branch} numberOfLines={1} />
+      <Hi text={work} q={q} style={styles.meta} numberOfLines={2} />
+      {/* แถวขอนัดด่วน: บรรทัด "ขอนัด … (วันนี้/พรุ่งนี้)" กับ "หัวหน้าภาค … · ขอเมื่อ …" มีชื่อให้โปรแกรมอ่านจอแบบการ์ดเดิม */}
+      <Text
+        style={[ad.info, info.tone === "red" && { color: colors.dangerInk }, info.tone === "ask" && { color: colors.roleAdmin }]}
+        accessibilityLabel={info.tone === "ask" ? info.main : undefined}
+      >
+        {info.main}
+      </Text>
+      {/* "ค้าง N วัน" อยู่มุมขวาบนของการ์ดแล้ว — ไม่ขึ้นซ้ำ */}
+      {info.sub && info.sub !== stuckText(r) ? (
+        <Text style={ad.sub} accessibilityLabel={info.tone === "ask" ? info.sub : undefined}>
+          {info.sub}
+        </Text>
+      ) : null}
+      {info.note ? <Text style={styles.cutCause}>{info.note}</Text> : null}
+      {extra}
+      {actions}
+    </View>
+  );
+}
+
+/** ข้อมูลของแถวตามหัวข้อ (คอลัมน์ "ทำไมต้องทำก่อน" / "วันตรวจ" / "อะไหล่" ฯลฯ ของตัวอย่าง) — คิดจากข้อมูลจริงของรายการเท่านั้น */
+function infoOf(t: Topic, r: WorkOrderRow, kind: RowKind, now: number): { main: string; sub?: string; note?: string | null; tone?: "red" | "ask" } {
+  if (kind === "ask") {
+    const a = askRowLines(r, now);
+    return a ? { main: a.appt, sub: a.who, note: a.note, tone: "ask" } : { main: "ขอนัดด่วน" };
+  }
+  if (kind === "past") {
+    const day = r.scheduledAt?.slice(0, 10);
+    return {
+      main: [`เลยนัด`, day ? `${dayFull(day)} · ${timeText(r.scheduledTime)}` : null].filter(Boolean).join(" · "),
+      // ค้างที่ขั้นไหน = ต้องตามใคร (ค้างโอน/เบิกคลังอื่น = ตามหัวหน้าภาค) แบบแถวกล่องงาน
+      sub: `ค้างที่ ${r.statusLabel}`,
+      tone: "red",
+    };
+  }
+  if (kind === "review" && r.adminReview) {
+    const a = r.adminReview;
+    return {
+      main: a.note ? `${a.reasonLabel} — “${a.note}”` : a.reasonLabel,
+      sub: `ส่งมา ${dayTime(a.at)}${a.byName ? ` · ${a.byName}` : ""}`,
+    };
+  }
+  const tag = r.partsState ? PARTS_TAG[r.partsState]?.text : undefined;
+  const team = r.assignedTeam ? ` · ทีม${r.assignedTeam}` : "";
+  switch (t.id) {
+    case "INSPECT_CONFIRM":
+      return { main: `${apptRel(r, now) ?? "ยังไม่มีวันตรวจ"}${team}`, sub: stuckText(r) };
+    case "PARTS_SOURCING":
+      return (r.partsOut ?? 0) > 0
+        ? {
+            main: `อะไหล่หมด ${r.partsOut} รายการ${r.partsExpectedAt ? ` · คาดเข้า ${thaiDate(r.partsExpectedAt.slice(0, 10))}` : ""}`,
+            sub: stuckText(r),
+            tone: "red",
+          }
+        : { main: "ยังไม่เช็คว่ามี/หมด", sub: stuckText(r) };
+    case "AWAITING_QUOTE":
+      return { main: stuckText(r), sub: tag, tone: rowDays(r) > STALE_DAYS ? "red" : undefined };
+    case "PARTS_REQUESTED":
+    case "AWAITING_CONFIRM":
+      return { main: `นัด ${apptRel(r, now) ?? "—"}${team}`, sub: tag ?? stuckText(r) };
+    default:
+      return { main: stageName(r.statusLabel), sub: r.orphan ? undefined : stuckText(r) };
+  }
+}
+
+/** แถบแจ้งผลรอบเลือกอะไหล่ (utils/flash) — หน้าเดิมกับหน้าแบบแยกหัวข้อของแอดมินใช้ตัวเดียวกัน */
+function PickFlashBar({ flash, onClose }: { flash: QueueFlash; onClose: () => void }) {
+  return (
+    <TouchableOpacity
+      style={[styles.pickFlash, flash.kind === "returned" ? styles.pickFlashRed : styles.pickFlashGreen]}
+      onPress={onClose}
+      activeOpacity={0.8}
+      accessibilityLabel="แถบแจ้งผลรายการอะไหล่"
+    >
+      <View role="status" accessibilityLiveRegion="polite" style={styles.pickFlashRow}>
+        <Ionicons
+          name={flash.kind === "returned" ? "arrow-undo" : "checkmark-circle"}
+          size={18}
+          color={flash.kind === "returned" ? colors.dangerInk : colors.successInk}
+        />
+        <Text style={[styles.pickFlashText, { color: flash.kind === "returned" ? colors.dangerInk : colors.successInk }]}>
+          {flash.kind === "returned"
+            ? `ตีกลับ ${flash.code} ให้ทีม${flash.team ?? "ที่ไปตรวจ"}แก้แล้ว — ใบงานกลับมาที่กล่องนี้เมื่อช่างส่งใหม่`
+            : `คอนเฟิร์ม ${flash.code} แล้ว — ใบงานไปที่ ${flash.label}`}
+        </Text>
+        <Ionicons name="close" size={16} color={colors.textMuted} />
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -742,6 +1476,7 @@ function CardActions({
   stageLabel,
   isAdmin,
   wide,
+  fit = false,
   onOpen,
   onSend,
   onReply,
@@ -754,6 +1489,11 @@ function CardActions({
   stageLabel: string;
   isAdmin: boolean;
   wide: boolean;
+  /**
+   * ช่องปุ่มกว้างคงที่ (แถวตารางของหน้าแอดมินแบบแยกหัวข้อ) — ปุ่มที่ไม่พอที่ลงบรรทัดใหม่ ไม่ใช่บีบปุ่มขั้นจนเหลือแต่ไอคอน
+   * หน้าเดิม (การ์ด) ไม่ส่ง — แถวปุ่มเหมือนเดิมทุกอย่าง
+   */
+  fit?: boolean;
   onOpen: Props["onOpen"];
   onSend: () => void;
   onReply: () => void;
@@ -776,7 +1516,7 @@ function CardActions({
   const pendingReview = isAdmin && !!r.adminReview && !r.adminReview.answered;
   const reply = (full: boolean) => (
     <TouchableOpacity
-      style={[full ? styles.goFull : styles.goBtn, styles.replyBtn]}
+      style={[full ? styles.goFull : styles.goBtn, fit && !full && styles.goFit, styles.replyBtn]}
       onPress={onReply}
       accessibilityLabel={`ตรวจแล้ว ตอบกลับ ${r.code}`}
     >
@@ -803,7 +1543,7 @@ function CardActions({
     ) : null;
     const grant = (full: boolean) =>
       canAct ? (
-        <TouchableOpacity style={full ? styles.goFull : styles.goBtn} onPress={onUrgent} accessibilityLabel={`แก้เป็นงานด่วน ${r.code}`}>
+        <TouchableOpacity style={[full ? styles.goFull : styles.goBtn, fit && !full && styles.goFit]} onPress={onUrgent} accessibilityLabel={`แก้เป็นงานด่วน ${r.code}`}>
           <Ionicons name="lock-open-outline" size={18} color="#fff" />
           <Text style={styles.goText} numberOfLines={1}>
             แก้เป็นงานด่วน
@@ -812,7 +1552,7 @@ function CardActions({
       ) : null;
     if (wide) {
       return (
-        <View style={styles.actions}>
+        <View style={[styles.actions, fit && styles.actionsFit]}>
           {detail}
           {answer}
           {grant(false)}
@@ -822,7 +1562,7 @@ function CardActions({
     }
     return (
       <View>
-        <View style={styles.actions}>
+        <View style={[styles.actions, fit && styles.actionsFit]}>
           {detail}
           {answer ? <View style={{ flex: 1 }}>{answer}</View> : null}
         </View>
@@ -841,9 +1581,9 @@ function CardActions({
   // แอดมิน: คำขอที่รอตอบ — ปุ่มหลักคือตอบกลับ (ขั้นของใบทำจากหน้ารายละเอียด)
   if (kind === "review") {
     return (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
-        <TouchableOpacity style={[styles.goBtn, styles.replyBtn]} onPress={onReply} accessibilityLabel={`ตรวจแล้ว ตอบกลับ ${r.code}`}>
+        <TouchableOpacity style={[styles.goBtn, fit && styles.goFit, styles.replyBtn]} onPress={onReply} accessibilityLabel={`ตรวจแล้ว ตอบกลับ ${r.code}`}>
           <Ionicons name="checkmark-circle" size={18} color="#fff" />
           <Text style={styles.goText}>ตรวจแล้ว · ตอบกลับ</Text>
         </TouchableOpacity>
@@ -852,7 +1592,7 @@ function CardActions({
   }
   if (kind === "answer") {
     return (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         {ack}
       </View>
@@ -863,7 +1603,7 @@ function CardActions({
   const goLabel = r.status === "AWAITING_PAYMENT" ? PAY_GO_LABEL : stageLabel;
   const go = (
     <TouchableOpacity
-      style={!wide && !isAdmin ? styles.goFull : styles.goBtn}
+      style={!wide && !isAdmin ? styles.goFull : [styles.goBtn, fit && styles.goFit]}
       onPress={() => onOpen(r.id, r.status === "IN_PROGRESS" ? "close" : "stage")}
       accessibilityLabel={`ทำขั้น ${goLabel} ${r.code}`}
     >
@@ -887,7 +1627,7 @@ function CardActions({
     // ใบเลยนัดที่มีคำขอตรวจสอบค้าง (อยู่หัวข้อ "เลยนัด" แทนหัวข้อคำขอ) — ตอบกลับได้จากการ์ดนี้
     const replyHere = kind === "past" && pendingReview;
     const row = (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         {r.overdue && r.scheduledAt && RESCHEDULE_STAGES.includes(r.status) && canMoveDates(user) ? (
           <TouchableOpacity style={[styles.sideBtn, styles.moveBtn]} onPress={() => onOpen(r.id, "reschedule")} accessibilityLabel={`เลื่อนวันนัด ${r.code}`}>
@@ -937,7 +1677,7 @@ function CardActions({
   );
   if (wide) {
     return (
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         {side}
         {go}
@@ -946,7 +1686,7 @@ function CardActions({
   }
   return (
     <View>
-      <View style={styles.actions}>
+      <View style={[styles.actions, fit && styles.actionsFit]}>
         {detail}
         <View style={{ flex: 1 }}>{side}</View>
       </View>
@@ -1183,6 +1923,9 @@ const styles = StyleSheet.create({
   pickFlashRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   pickFlashText: { flex: 1, fontSize: 13.5, lineHeight: 20, fontWeight: "600" },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
+  // ช่องปุ่มกว้างคงที่ (ตารางหน้าแอดมิน) — ปุ่มขั้นไม่ต่ำกว่านี้ ไม่พอที่ลงบรรทัดใหม่เต็มช่อง
+  actionsFit: { flexWrap: "wrap", marginTop: 0 },
+  goFit: { minWidth: 160 },
   detailBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -1252,4 +1995,143 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   supWaitText: { fontSize: 13.5, lineHeight: 20, fontWeight: "700", color: colors.textMuted, flexShrink: 1 },
+});
+
+/** หน้าแบบแยกหัวข้อของแอดมิน (ตัวอย่าง myday) — แยกจาก styles ของหน้าเดิม หน้าของหัวหน้าภาค/Admin Spare Part ไม่ถูกแตะ */
+const ad = StyleSheet.create({
+  contentWide: { maxWidth: 1440 },
+  split: { flexDirection: "row", alignItems: "flex-start", gap: spacing.lg },
+  nav: {
+    width: 270,
+    flexShrink: 0,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.xl,
+    padding: 10,
+    gap: 4,
+  },
+  navItem: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 48, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10 },
+  navHome: { backgroundColor: colors.primarySoft },
+  navOn: { backgroundColor: colors.navyFill },
+  navUrgent: { backgroundColor: colors.dangerSoft },
+  navName: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.text },
+  navFlag: { fontSize: 12, lineHeight: 17, fontWeight: "600" },
+  navAll: { marginLeft: "auto", fontSize: 13, fontWeight: "700", color: colors.textMuted, fontVariant: ["tabular-nums"] },
+  navHead: { fontSize: 11.5, lineHeight: 17, fontWeight: "700", letterSpacing: 0.4, color: colors.textMuted, paddingTop: 10, paddingHorizontal: 12, paddingBottom: 4 },
+  navN: { borderRadius: 999, paddingHorizontal: 9, backgroundColor: colors.rowAlt },
+  navNOn: { backgroundColor: "rgba(255,255,255,0.18)" },
+  navNText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.body, fontVariant: ["tabular-nums"] },
+  pane: { flex: 1, minWidth: 0 },
+  dot: { width: 22, height: 22, borderRadius: 11, backgroundColor: colors.rowAlt, alignItems: "center", justifyContent: "center" },
+  dotText: { fontSize: 11.5, lineHeight: 16, fontWeight: "700", color: colors.body },
+  firstBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: radius.xl,
+    backgroundColor: colors.dangerSoft,
+    borderWidth: 1,
+    borderColor: colors.dangerLine,
+  },
+  // ไม่มีใบต้องทำก่อน — แถบยังอยู่ที่เดิม (ตำแหน่งไม่กระโดด · สอนการใช้งานชี้ได้) แต่ไม่แดง
+  firstBarCalm: { backgroundColor: colors.card, borderColor: colors.border },
+  firstTitle: { fontSize: 17, lineHeight: 24, fontWeight: "700", color: colors.dangerInk },
+  firstSub: { fontSize: 13, lineHeight: 19, color: colors.body },
+  firstGo: { minHeight: 44, paddingHorizontal: 18, borderRadius: 10, backgroundColor: colors.dangerFill, justifyContent: "center" },
+  firstGoText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  cards: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
+  card: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: radius.xl,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 8,
+    ...shadow.card,
+  },
+  cardFlex: { flexGrow: 1, flexBasis: 230 },
+  cardHot: { borderWidth: 2, borderColor: colors.dangerFill },
+  cardTop: { flexDirection: "row", alignItems: "center", gap: 8 },
+  cardStep: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  cardN: { fontSize: 26, lineHeight: 32, fontWeight: "700", color: colors.navy, fontVariant: ["tabular-nums"] },
+  cardName: { fontSize: 17, lineHeight: 24, fontWeight: "700", color: colors.text },
+  cardWhat: { fontSize: 13, lineHeight: 19, color: colors.textMuted, minHeight: 38 },
+  flags: { flexDirection: "row", flexWrap: "wrap", gap: 6, minHeight: 24 },
+  flag: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 2 },
+  flagText: { fontSize: 12, lineHeight: 18, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  cardOldest: { fontSize: 12.5, lineHeight: 18, color: colors.body, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8 },
+  // หัวข้อว่าง — ยังอยู่ที่เดิม (ตำแหน่งไม่เปลี่ยนทุกวัน) แต่จาง
+  dim: { opacity: 0.55 },
+  list: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, overflow: "hidden" },
+  listRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 58, paddingVertical: 8, paddingHorizontal: 14 },
+  listLine: { borderTopWidth: 1, borderTopColor: colors.border },
+  listName: { fontSize: 14.5, lineHeight: 21, fontWeight: "600", color: colors.text },
+  listFlag: { fontSize: 12, lineHeight: 17, fontWeight: "600" },
+  listN: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.navy, fontVariant: ["tabular-nums"] },
+  foot: { fontSize: 12.5, lineHeight: 18, color: colors.textMuted },
+  tHead: { flexDirection: "row", alignItems: "flex-end", gap: spacing.md, flexWrap: "wrap" },
+  tStep: { fontSize: 12.5, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  tName: { fontSize: 22, lineHeight: 30, fontWeight: "700", color: colors.text },
+  tN: { fontSize: 17, color: colors.textMuted },
+  tWhat: { fontSize: 14, lineHeight: 20, color: colors.body },
+  back: {
+    minHeight: 40,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+    justifyContent: "center",
+  },
+  backText: { fontSize: 13.5, fontWeight: "700", color: colors.navy },
+  chips: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.card,
+  },
+  chipOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
+  chipText: { fontSize: 13.5, lineHeight: 20, color: colors.body },
+  chipN: { fontWeight: "700", fontVariant: ["tabular-nums"] },
+  chipTextOn: { color: "#fff" },
+  sortText: { fontSize: 12.5, lineHeight: 18, color: colors.textMuted },
+  table: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, overflow: "hidden" },
+  thead: { backgroundColor: colors.sky50, borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 9 },
+  th: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
+  tr: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: 10, paddingHorizontal: spacing.md },
+  rowWrap: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  rowExtra: { paddingHorizontal: spacing.md, paddingBottom: 10, gap: 6 },
+  branch: { fontSize: 13.5, lineHeight: 19, fontWeight: "600", color: colors.text },
+  cell: { fontSize: 13, lineHeight: 19, color: colors.body },
+  info: { fontSize: 13, lineHeight: 19, fontWeight: "600", color: colors.text },
+  sub: { fontSize: 12.5, lineHeight: 18, color: colors.textMuted },
+  empty: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.xl },
+  cardAsk: { borderColor: colors.roleAdminLine },
+  cardPast: { borderColor: colors.dangerLine },
+  clear: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.successSoft,
+    borderWidth: 1,
+    borderColor: colors.successLine,
+  },
+  clearTitle: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.successInk },
+  clearText: { fontSize: 13, lineHeight: 20, color: colors.body },
+  resHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  resName: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.navy },
+  resN: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
 });

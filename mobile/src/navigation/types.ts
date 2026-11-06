@@ -44,7 +44,8 @@ export type HomeStackParamList = {
   MachineDashboard: undefined;
   MachineImport: undefined;
   /** inbox = เปิดมาที่กล่องงานของตัวเองเลย ไม่ใช่รายการรวม · search = ค้นต่อจากงานของฉันวันนี้ (ค้นในใบทั้งหมด) */
-  WorkOrderList: { inbox?: boolean; search?: string } | undefined;
+  /** payment = แท็บ "รอลูกค้าจ่ายเงิน" (/#/awaiting-payment) — แอดมินทั่วไป/Super Admin เท่านั้น คนอื่นได้ "ที่ยังค้าง" */
+  WorkOrderList: { inbox?: boolean; search?: string; payment?: boolean } | undefined;
   // มาจากกระดานได้ ถ้าเปิดจากเคสจะพกรหัสเคสกับข้อความตั้งต้นมาด้วย
   // machineCode ติดมาจากกระดานเพื่อเติมรุ่นกับขนาดที่เคยกรอกไว้ของเครื่องตัวนั้น
   // ฟอร์มไม่มีช่องรหัสเครื่องในทางนี้ จึงหาเองจากที่พิมพ์ไม่ได้เหมือนทางเปิดเอง

@@ -258,7 +258,8 @@ function sampler(LABEL) {
           await check("งานของฉันวันนี้", login, view.tag === "desk" ? "งานของฉันวันนี้" : "งานของฉัน", async (mine, name) => {
             const inbox = mine.find((a) => a.inbox);
             if (!inbox) return fail(`${name}: ไม่เห็นคำขอกล่องงาน (status=INBOX)`);
-            await either(name, "กลุ่มใบงาน", inbox.rows > 0, () => page.locator('[aria-label^="กลุ่ม "]').locator("visible=true").count(), ["ไม่มีงานค้างรอคุณ"]);
+            // หน้าแอดมินแบบแยกหัวข้อ (5 พ.ย. 69): เปิดมาที่ภาพรวม — การ์ด/แถวหัวข้อที่มีใบ ("หัวข้อ … n ใบ" ที่ n ไม่ใช่ 0)
+            await either(name, "หัวข้อที่มีใบ", inbox.rows > 0, () => page.locator('[aria-label^="หัวข้อ "][aria-label$=" ใบ"]:not([aria-label$=" 0 ใบ"])').locator("visible=true").count(), ["ไม่มีงานค้างรอคุณ"]);
           });
           // แล้วไปใบงานซ่อม — จอคอมกดเมนูข้าง · มือถือกดแท็บล่าง "ใบงาน" (หน้ารายการโหมดแถบลอย)
           const openList = view.tag === "desk"
