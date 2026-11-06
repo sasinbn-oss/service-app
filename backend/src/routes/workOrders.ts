@@ -23,6 +23,7 @@ import {
   isCrossTeam,
   OUT_OF_SCOPE,
   outOfScopeText,
+  itViewOnly,
   ownTeamOf,
   ownTeamWhere,
   scopesOf,
@@ -8647,8 +8648,9 @@ async function outOfScopeReason(
   scope: SupervisorScope,
   wo: { jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
 ) {
-  if (wo.jobType === IT_JOB) return outOfScopeText(scope, wo);
-  return seesWorkOrder(scope, await teamsForSupervisor(scope), wo) ? VIEW_ONLY : OUT_OF_SCOPE;
+  const sees = seesWorkOrder(scope, await teamsForSupervisor(scope), wo);
+  if (wo.jobType === IT_JOB) return sees ? itViewOnly(scope) : outOfScopeText(scope, wo);
+  return sees ? VIEW_ONLY : OUT_OF_SCOPE;
 }
 
 /**
@@ -11597,14 +11599,21 @@ const supervisorCloseSchema = z.object({
  */
 const CROSS_CLOSE_STAGES: readonly string[] = ["INSPECTING", "IN_PROGRESS"];
 
-/** หัวหน้าภาคคนนี้เป็นหัวหน้าของทีมที่รับงานข้ามทีมของใบนี้ และใบอยู่ในขั้นที่ปิดได้ (ดู CROSS_CLOSE_STAGES) */
+/**
+ * หัวหน้าภาคที่ไม่ใช่เจ้าของใบแต่ปิดใบงานได้:
+ * - ใบที่จ่ายข้ามทีมมาให้ทีมตัวเอง — เฉพาะตอนทีมอยู่หน้างาน (ดู CROSS_CLOSE_STAGES)
+ * - ใบ IT ในพื้นที่ตัวเอง (เจ้าของงานขอ 6 พ.ย. 69: "งาน IT หัวหน้าภาคอื่นเห็นใบงานได้ด้วย และปิดงานได้ด้วย") — ทุกขั้นที่ยังปิดได้
+ *   เหมือนหัวหน้าภาคปิดใบในพื้นที่ตัวเอง: ร้านโทรมาบอกว่าหายแล้ว คนที่รู้ก่อนคือหัวหน้าภาคของพื้นที่ ไม่ใช่คนดูแลงาน IT
+ *   ขั้นอื่นของใบ IT ยังเป็นของหัวหน้าภาคที่ดูแลงาน IT
+ */
 async function receiverMayClose(
   scope: SupervisorScope,
   wo: { status: string; jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
 ) {
-  if (!CROSS_CLOSE_STAGES.includes(wo.status) || coversWorkOrder(scope, wo)) return false;
-  // seesWorkOrder ไม่นับใบ IT (เป็นของหัวหน้าภาคที่ดูแลงาน IT คนเดียว) — ทีมที่รับใบ IT จึงไม่ได้สิทธิ์ปิดไปด้วย
-  return seesWorkOrder(scope, await teamsForSupervisor(scope), wo);
+  if (coversWorkOrder(scope, wo)) return false;
+  if (!seesWorkOrder(scope, await teamsForSupervisor(scope), wo)) return false;
+  if (wo.jobType === IT_JOB) return !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(wo.status);
+  return CROSS_CLOSE_STAGES.includes(wo.status);
 }
 
 router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) => {

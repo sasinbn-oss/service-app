@@ -5,7 +5,8 @@
 //     กดชิปภาคแล้วเหลือใบของภาคนั้น
 //   · หน้าใบงาน: ใบ IT ขั้นของแอดมิน (ส่งใบเสนอราคา) หัวหน้า IT เห็นปุ่มของขั้น · ใบ CM ขั้นเดียวกันไม่เห็น
 //   · แก้จากระยะไกลแล้ว · ปิดงาน: บันทึก + ภาพหน้าจอ → ฐานข้อมูล DONE · REMOTE_FIXED · ไฟล์ REMOTE_FIX · ประวัติ REMOTE_CLOSED
-//   · หัวหน้าภาคคนอื่น (ภาคเดียวกับสาขาของใบ IT) ไม่เห็นใบ IT ในกล่องงาน
+//   · หัวหน้าภาคคนอื่น (ภาคเดียวกับสาขาของใบ IT) ไม่เห็นใบ IT ในกล่องงาน · เปิดใบได้ กล่องบอกว่าใครดูแล + ปุ่ม "ปิดใบงาน"
+//     ไม่มีปุ่มขั้นอื่น (เจ้าของงานขอ 6 พ.ย. 69: หัวหน้าภาคอื่นเห็นและปิดใบงาน IT ได้)
 //   · กล่องงานแอดมิน: ใบ IT อยู่ส่วน "งาน IT" ไม่อยู่ส่วน "งาน CM" · งานของฉันวันนี้มีหัวข้อ "งาน IT"
 // ต้องมี DATABASE_URL · สร้างหัวหน้าภาคชั่วคราวสองคนแล้วลบทิ้ง · คืนภาคของ S001 และธง itLead ทุกคน
 const { chromium } = require("playwright");
@@ -220,7 +221,14 @@ const login = async (code) => (await call(null, "POST", "auth/login", { employee
       ? pass("หัวหน้าภาคคนอื่น: ไม่เห็นใบ IT ในกล่องงาน · ไม่มีสวิตช์ งาน IT") : fail("หัวหน้าภาคคนอื่นยังเห็นใบ IT");
     await page.goto(`${BASE}/#/wo/${IS.code}`, { waitUntil: "networkidle" }).catch(() => {});
     await page.waitForTimeout(3500);
-    (await vis("หัวหน้าไอทีเว็บ", false).count()) ? pass("เปิดลิงก์ใบ IT ตรง ๆ: บอกว่าอยู่กับหัวหน้า IT (ชื่อ)") : fail("ข้อความเปิดใบ IT ไม่บอกชื่อหัวหน้า IT");
+    {
+      const box = (await label("กล่องใบงาน IT").count()) ? await label("กล่องใบงาน IT").first().innerText() : "";
+      const closeBtn = await page.locator('[aria-label="ปิดใบงาน"]').locator("visible=true").count();
+      const stepBtn = await label("ระบุอะไหล่").count();
+      box.includes("หัวหน้าไอทีเว็บ") && box.includes("ปิดใบงานได้") && closeBtn > 0 && stepBtn === 0
+        ? pass("หัวหน้าภาคของพื้นที่เปิดใบ IT: กล่องบอกว่าใครดูแล + ปุ่ม \"ปิดใบงาน\" · ไม่มีปุ่มระบุอะไหล่")
+        : fail(`ใบ IT ของหัวหน้าภาคพื้นที่: กล่อง="${box}" ปุ่มปิด=${closeBtn} ปุ่มขั้น=${stepBtn}`);
+    }
 
     errors.length ? fail(`JS error: ${errors.slice(0, 3).join(" | ")}`) : pass("ไม่มี JS error");
   } catch (e) {

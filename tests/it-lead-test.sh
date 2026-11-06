@@ -2,7 +2,8 @@
 # ทดสอบ: หัวหน้าภาคที่ดูแลงาน IT (เจ้าของงานตัดสิน 6 พ.ย. 69 · แก้ข้อ 4 วันเดียวกัน: ใบ IT ยังอยู่ในกล่องแอดมิน)
 #   · สวิตช์ได้คนเดียว: มีคนถือแล้วตอบ 409 พร้อมชื่อ · replaceItLead ย้ายในธุรกรรมเดียว (ฐานข้อมูลมีคนเดียวเสมอ)
 #     ช่างตั้งไม่ได้ · เปลี่ยนบทบาท/ลบ = ถอด · /auth/me บอก itLead
-#   · ขอบเขต: หัวหน้า IT เห็น/กดใบ IT ทุกภาค · หัวหน้าภาคคนอื่น (แม้ภาคเดียวกับสาขา) ไม่เห็น ไม่กด — ข้อความบอกชื่อหัวหน้า IT
+#   · ขอบเขต: หัวหน้า IT เห็น/กดใบ IT ทุกภาค · หัวหน้าภาคของพื้นที่เห็นใบ IT ในพื้นที่ตัวเองและปิดใบงานได้ (เจ้าของงานขอ 6 พ.ย. 69)
+#     แต่กดขั้นอื่นไม่ได้ ไม่เข้ากล่องงาน · หัวหน้าภาคนอกพื้นที่ไม่เห็น — ข้อความบอกชื่อหัวหน้า IT
 #     งาน CM ของหัวหน้า IT ตามภาคเหมือนเดิม · ช่างยังเห็นใบ IT ที่ทีมตัวเองรับ · "ใครดูแล" ของใบ IT = หัวหน้า IT
 #   · ขั้นของแอดมิน: หัวหน้า IT ส่งใบเสนอราคา/ตามลูกค้าในใบ IT ได้ · ใบ CM ได้ 403 · ตรวจเคลมยัง 403 · แอดมินยังทำได้
 #   · กล่องงาน: หัวหน้า IT ได้ใบ IT ทั้งขั้นหัวหน้าภาคและขั้นแอดมิน · กล่องแอดมินยังมีใบ IT · ตัวเลขกล่องงานตรงกับแถว
@@ -87,6 +88,7 @@ IT3=$(newwo $BR_S IT NEW); IDS="$IDS $IT3"               # ใบ IT ไว้�
 IT4=$(newwo $BR_C IT IN_PROGRESS); IDS="$IDS $IT4"       # ใบ IT ที่ช่างถืออยู่
 CM1=$(newwo $BR_C CM AWAITING_QUOTE); IDS="$IDS $CM1"    # ใบ CM ภาคของ L รอแอดมิน
 CM2=$(newwo $BR_S CM NEW); IDS="$IDS $CM2"               # ใบ CM ภาคใต้ของ S001
+IT5=$(newwo $BR_S IT NEW); IDS="$IDS $IT5"               # ใบ IT ภาคใต้ ไว้ให้หัวหน้าภาคของพื้นที่ (S001) ปิด
 DB "update \"WorkOrder\" set \"assignedTeam\"='$TEAM_C' where id=$IT4" >/dev/null
 echo "  ใบทดสอบ: $(DB "select string_agg(code||'='||\"jobType\"||'/'||status, ' ' order by id) from \"WorkOrder\" where id in ($IT1,$IT2,$IT3,$IT4,$CM1,$CM2)")"
 [ "$(DB "select count(*) from \"WorkOrder\" where id in ($IT1,$IT2,$IT3,$IT4) and \"jobType\"='IT'")" = "4" ] && pass "เปิดใบ IT ทดสอบได้ 4 ใบ" || fail "เปิดใบ IT ไม่ครบ"
@@ -110,12 +112,22 @@ DB "update \"User\" set \"itLead\"=true where id=$BID" >/dev/null 2>&1
 echo "═══ ขอบเขตใบ IT"
 [ "$(HAS $L ACTIVE $IT1)|$(HAS $L ACTIVE $IT2)|$(HAS $L ACTIVE $CM1)|$(HAS $L ACTIVE $CM2)" = "มี|มี|มี|ไม่มี" ] \
   && pass "หัวหน้า IT เห็นใบ IT ทุกภาค · งาน CM ตามภาคตัวเองเหมือนเดิม" || fail "L เห็น: $(HAS $L ACTIVE $IT1)|$(HAS $L ACTIVE $IT2)|$(HAS $L ACTIVE $CM1)|$(HAS $L ACTIVE $CM2)"
-[ "$(HAS $S ACTIVE $IT1)|$(HAS $S ACTIVE $CM2)|$(HAS $B ACTIVE $IT2)|$(HAS $B ACTIVE $CM1)" = "ไม่มี|มี|ไม่มี|มี" ] \
-  && pass "หัวหน้าภาคคนอื่นไม่เห็นใบ IT แม้อยู่ภาคตัวเอง · ใบ CM ยังเห็น" || fail "คนอื่นเห็น: $(HAS $S ACTIVE $IT1)|$(HAS $S ACTIVE $CM2)|$(HAS $B ACTIVE $IT2)|$(HAS $B ACTIVE $CM1)"
+[ "$(HAS $S ACTIVE $IT1)|$(HAS $S ACTIVE $CM2)|$(HAS $B ACTIVE $IT2)|$(HAS $B ACTIVE $CM1)|$(HAS $S ACTIVE $IT2)" = "มี|มี|มี|มี|ไม่มี" ] \
+  && pass "หัวหน้าภาคของพื้นที่เห็นใบ IT ในพื้นที่ตัวเอง (เจ้าของงานขอ 6 พ.ย. 69) · ใบ IT ภาคอื่นไม่เห็น · ใบ CM เหมือนเดิม" \
+  || fail "คนอื่นเห็น: $(HAS $S ACTIVE $IT1)|$(HAS $S ACTIVE $CM2)|$(HAS $B ACTIVE $IT2)|$(HAS $B ACTIVE $CM1)|$(HAS $S ACTIVE $IT2)"
 GC=$(GETC $S "work-orders/$IT1")
-[ "$GC" = "403" ] && BODY 'd.error' | grep -q "หัวหน้าไอทีทดสอบ" && pass "เปิดใบ IT ตรง ๆ ได้ 403 บอกว่าอยู่กับใคร" || fail "S เปิดใบ IT: $GC $(BODY 'd.error')"
-GC=$(CODE $S "work-orders/$IT1/supervisor-close" '{"reason":"PHONE","note":"ทดสอบปิดใบที่ไม่ใช่ของตัวเองทางโทรศัพท์"}')
-[ "$GC|$(DB "select status from \"WorkOrder\" where id=$IT1")" = "403|NEW" ] && pass "หัวหน้าภาคคนอื่นกดใบ IT ไม่ได้ (403 · ฐานข้อมูลไม่เปลี่ยน)" || fail "S ปิดใบ IT: $GC $(BODY 'd.error')"
+[ "$GC|$(BODY '[d.viewOnly,d.crossClose].join(",")')" = "200|true,true" ] \
+  && pass "หัวหน้าภาคของพื้นที่เปิดใบ IT ได้ · ดูอย่างเดียว + ปิดใบงานได้ (crossClose)" || fail "S เปิดใบ IT: $GC $(BODY 'JSON.stringify([d.error,d.viewOnly,d.crossClose])')"
+GC=$(GETC $S "work-orders/$IT2")
+[ "$GC" = "403" ] && BODY 'd.error' | grep -q "หัวหน้าไอทีทดสอบ" && pass "ใบ IT ภาคอื่นเปิดตรง ๆ ได้ 403 บอกว่าอยู่กับใคร" || fail "S เปิดใบ IT ภาคอื่น: $GC $(BODY 'd.error')"
+GC=$(CODE $S "work-orders/$IT1/parts" '{"needsParts":false}')
+[ "$GC|$(DB "select status from \"WorkOrder\" where id=$IT1")" = "403|NEW" ] && BODY 'd.error' | grep -q "คุณเห็นและปิดใบงานได้" \
+  && pass "หัวหน้าภาคของพื้นที่กดขั้นอื่นของใบ IT ไม่ได้ (403 บอกว่าปิดได้ · ฐานข้อมูลไม่เปลี่ยน)" || fail "S กดขั้นใบ IT: $GC $(BODY 'd.error')"
+GC=$(CODE $S "work-orders/$IT5/supervisor-close" '{"reason":"PHONE","note":"ร้านโทรมาบอกว่าเครื่องออนไลน์ได้แล้ว"}')
+[ "$GC|$(DB "select status||'|'||\"closeResult\"||'|'||\"closedById\" from \"WorkOrder\" where id=$IT5")" = "200|DONE|SUPERVISOR_CLOSED|$SID" ] \
+  && pass "หัวหน้าภาคของพื้นที่ปิดใบ IT ได้ (ฐานข้อมูล: ปิดงาน · SUPERVISOR_CLOSED · คนปิดคือ S001)" || fail "S ปิดใบ IT: $GC $(BODY 'd.error')"
+GC=$(CODE $S "work-orders/$IT2/supervisor-close" '{"reason":"PHONE","note":"ทดสอบปิดใบภาคอื่นทางโทรศัพท์"}')
+[ "$GC|$(DB "select status from \"WorkOrder\" where id=$IT2")" = "403|AWAITING_QUOTE" ] && pass "ใบ IT ภาคอื่นปิดไม่ได้ (403 · ฐานข้อมูลไม่เปลี่ยน)" || fail "S ปิดใบ IT ภาคอื่น: $GC"
 [ "$(GETC $T "work-orders/$IT4")" = "200" ] && pass "ช่างทีมที่รับยังเปิดใบ IT ที่ถืออยู่ได้" || fail "ช่างเปิดใบ IT ไม่ได้: $(BODY 'd.error')"
 [ "$(GETC $A "work-orders/$IT1")|$(BODY 'd.supervisors.map(s=>s.name).join(",")')|$(BODY 'd.itLead&&d.itLead.name')" = "200|หัวหน้าไอทีทดสอบ|หัวหน้าไอทีทดสอบ" ] \
   && pass "หน้าใบงาน: ใครดูแลใบ IT = หัวหน้า IT" || fail "detail supervisors: $(BODY 'JSON.stringify([d.supervisors,d.itLead])')"
@@ -157,7 +169,9 @@ echo "═══ ไม่มีหัวหน้า IT"
 [ "$(PATCHU $A $LID '{"itLead":false}')|$(LEADS)" = "200|-" ] && pass "ปิดสวิตช์ → ไม่มีหัวหน้า IT" || fail "ปิดสวิตช์: $(LEADS)"
 [ "$(ROW $A INBOX $IT1 'r.orphan+"|"+/ยังไม่ได้เลือกหัวหน้าภาคที่ดูแลงาน IT/.test(r.orphanReason)')" = "true|true" ] \
   && pass "ใบ IT รอหัวหน้าภาค = ไม่มีคนรับในกล่องแอดมิน (เหตุผลบอกให้เลือกหัวหน้า IT)" || fail "orphan: $(ROW $A INBOX $IT1 'JSON.stringify([r.orphan,r.orphanReason])')"
-[ "$(HAS $L ACTIVE $IT1)|$(HAS $S ACTIVE $IT1)" = "ไม่มี|ไม่มี" ] && pass "ไม่มีหัวหน้าภาคคนไหนเห็นใบ IT" || fail "ยังมีคนเห็น"
+[ "$(HAS $L ACTIVE $IT1)|$(HAS $S ACTIVE $IT1)|$(HAS $S INBOX $IT1)" = "ไม่มี|มี|ไม่มี" ] \
+  && pass "ไม่มีหัวหน้า IT: คนที่เคยถือ (ภาคอื่น) ไม่เห็นใบ IT ภาคใต้ · หัวหน้าภาคของพื้นที่ยังเห็น (ปิดได้) แต่ไม่เข้ากล่องงาน" \
+  || fail "ไม่มีหัวหน้า IT: L=$(HAS $L ACTIVE $IT1) S=$(HAS $S ACTIVE $IT1) S-กล่อง=$(HAS $S INBOX $IT1)"
 [ "$(INBOXN $A)" = "$(ROWSN $A)" ] && pass "ตัวเลขกล่องแอดมินรวมใบไม่มีคนรับทันที (ล้างที่จำไว้)" || fail "admin count: $(INBOXN $A) vs $(ROWSN $A)"
 PATCHU $A $CID '{"itLead":true}' >/dev/null
 [ "$(PATCHU $A $CID '{"role":"EMPLOYEE"}')|$(DB "select \"itLead\" from \"User\" where id=$CID")|$(LEADS)" = "200|f|-" ] \
