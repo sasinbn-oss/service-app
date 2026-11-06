@@ -300,7 +300,15 @@ export default function PopupScreen({
                 />
               ) : null}
             </Animated.View>
-            {overlay}
+            {/*
+              ปุ่ม/หน้าต่างแชทใบงานลอยมุมขวาล่าง — ซ่อนตอนมีฟอร์มเลื่อนเข้ามา (ปิดงาน · นัดวัน · ฯลฯ) ไม่งั้นบังปุ่มท้ายฟอร์ม
+              ("ยืนยันปิดงาน" · "ถัดไป" อยู่มุมขวาล่างพอดี — กดไม่ได้ทั้งบนมือถือและจอคอม) · ซ่อนเฉย ๆ ไม่ถอด ข้อความที่พิมพ์ค้างไว้ไม่หาย
+            */}
+            {overlay ? (
+              <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, panes.length ? { display: "none" } : null]}>
+                {overlay}
+              </View>
+            ) : null}
             {panes.map((p) => (
               <PaneView key={p.key} pane={p} width={cardW} onGone={remove} onSwiped={markGone} />
             ))}

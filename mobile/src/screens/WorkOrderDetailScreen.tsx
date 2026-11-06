@@ -2129,7 +2129,9 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       startMaximized
       instant={instant}
       // แชทใบงาน (พ.ย. 69) — มาจากรายการแชทบนแถบหัว (open: "chat") = เปิดหน้าต่างแชทเลย
+      // หน้าตรวจเคลมมีแถบตัดสินชิดล่าง (ปุ่มขวาสุด) — ปุ่มแชทลอยทับพอดี และคนตรวจเคลมไม่ได้คุยในหน้านี้
       overlay={
+        reviewMode ? null : (
         <ChatBubble
           key={order.id}
           orderId={order.id}
@@ -2137,6 +2139,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           branch={`${order.branchCode} ${order.branchName}`}
           startOpen={route.params.open === "chat"}
         />
+        )
       }
       right={
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -4091,6 +4094,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         logs={order.logs}
         onClose={() => setStepInfo(null)}
       />
+      {/* ที่ว่างท้ายใบเท่าปุ่มแชทใบงานที่ลอยมุมขวาล่าง — เลื่อนสุดแล้วปุ่ม/ข้อความบรรทัดสุดท้ายไม่อยู่ใต้ปุ่มแชท */}
+      {reviewMode ? null : <View style={{ height: 84 }} />}
     </ScrollView>
     {/*
       แถบตัดสินเคลมอยู่นอกส่วนที่เลื่อน (ต่อท้าย ScrollView ในกรอบใบงาน) — เลื่อนไปดูหลักฐานไหนก็ยังเห็นปุ่ม
