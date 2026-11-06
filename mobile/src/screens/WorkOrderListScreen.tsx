@@ -2621,9 +2621,9 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         </View>
       </View>
       <View style={styles.colAction}>
-        {/* ปุ่มทึบสีกรมท่า (หน้าตาใหม่ พ.ย. 69) — ทั้งแถวกดเปิดได้เหมือนเดิม ปุ่มนี้แค่บอกให้เห็นชัด */}
+        {/* ปุ่มดูแบบเดิม (พื้นฟ้าอ่อน) — ลองทำเป็นปุ่มทึบกรมท่าตามแบบใหม่แล้ว เจ้าของงานให้คงแบบเดิม (6 พ.ย. 69) */}
         <View style={styles.viewBtn}>
-          <Ionicons name="eye-outline" size={15} color="#fff" />
+          <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
           <Text style={styles.viewBtnText}>ดู</Text>
         </View>
       </View>
@@ -3370,13 +3370,13 @@ const styles = StyleSheet.create({
   viewBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    backgroundColor: colors.navyFill,
-    borderRadius: 8,
-    paddingHorizontal: 12,
+    gap: 4,
+    backgroundColor: colors.sky50,
+    borderRadius: 10,
+    paddingHorizontal: 10,
     paddingVertical: 6,
   },
-  viewBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: "#fff" },
+  viewBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
   rowNumBox: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, borderColor: colors.primaryLine },
   rowNum: { fontSize: 12.5, lineHeight: 18, fontWeight: "800", color: colors.primaryInk, fontVariant: ["tabular-nums"] },
   // หัวการ์ดของกลุ่ม (หน้าตาใหม่ พ.ย. 69)
