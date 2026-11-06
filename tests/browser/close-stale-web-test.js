@@ -188,10 +188,10 @@ const waitFor = async (fn, ms = 10000) => {
     await page.waitForTimeout(2500);
     /**
      * ป้ายสถานะของใบบนหน้าใบงาน — ไม่นับปุ่ม "ปิดงาน" เพราะการ์ดในหน้างานของฉันใต้หน้าต่างใบงานก็มีปุ่มชื่อเดียวกัน
-     * ยังไม่ปิด = "ช่าง · เข้างาน/ปิดงาน" · ปิดแล้ว = แถบ/ป้าย "ปิดงานแล้ว"
+     * ยังไม่ปิด = "ช่าง · เข้างาน" หรือ "ช่าง · ปิดงาน" (ขั้นช่างแยกตามการถึงหน้างาน พ.ย. 69) · ปิดแล้ว = แถบ/ป้าย "ปิดงานแล้ว"
      */
     const state = async () => ({
-      open: await page.getByText("ช่าง · เข้างาน/ปิดงาน", { exact: true }).locator("visible=true").count(),
+      open: await page.getByText(/^ช่าง · (เข้างาน|ปิดงาน)$/).locator("visible=true").count(),
       done: await page.getByText("ปิดงานแล้ว", { exact: true }).locator("visible=true").count(),
     });
     const before = await state();
