@@ -175,7 +175,8 @@ const SRC = "ร้านหาของมาเอง";
       offRow().endsWith("|true") && st() === "AWAITING_QUOTE" && offAns() === `true|${SRC}|${DETAIL}|S001|true`
         ? pass("กดยืนยันตามที่ติดให้ → หาได้ ลงผลเช็คของแอดมิน · ไปขั้นเสนอราคา · คำตอบหัวหน้าภาคไม่ถูกทับ (ฐานข้อมูล)")
         : fail(`หลังเช็ค: ${st()} · ${offRow()} · ${offAns()}`);
-      await vis("ส่งใบเสนอราคา").first().click();
+      // ปุ่มขั้นท้ายการ์ด — ชื่อขั้นบนแถบเป็นวงที่เต้นอยู่ (ขั้นปัจจุบัน) Playwright รอให้นิ่งไม่จบ
+      await vis("ส่งใบเสนอราคา").last().click();
       await page.waitForTimeout(1500);
       (await vis("รายการที่ต้องใส่ในใบเสนอราคา").count()) > 0 &&
       (await vis(`อะไหล่นอก · ${NAME} × 2 เส้น · ${SPEC}`).count()) > 0 &&

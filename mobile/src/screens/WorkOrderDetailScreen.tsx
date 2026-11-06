@@ -214,7 +214,7 @@ interface WorkOrder {
   detail: string | null;
   status: string;
   statusLabel: string;
-  /** ช่างถึงหน้างานในรอบนี้แล้ว — ขั้นช่างแยก "เข้างาน" / "ปิดงาน" ตามค่านี้ (ตัวอย่าง พ.ย. 69) · ขั้นอื่นเป็น null */
+  /** ช่างถึงหน้างานในรอบนี้แล้ว — ขั้นช่างแยก "เข้างาน" / "ปิดงาน" ตามค่านี้ (พ.ย. 69) · ขั้นอื่นเป็น null */
   onSite?: boolean | null;
   /** ระงับชั่วคราวอยู่ (พ.ย. 69) — until = เที่ยงคืนเวลาไทยของวันที่กลับมาทำ · ไม่ได้ระงับ = null */
   hold?: { until: string; reason: string | null; at: string } | null;
@@ -1763,7 +1763,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
    * ขั้นปัจจุบันเปิดฟอร์มของสถานะจริงของใบเสมอ — ขั้น 1 ระหว่างตรวจหน้างาน (loop) เปิดฟอร์มขั้นตรวจที่ค้างอยู่
    */
   /**
-   * ช่างกดถึงหน้างานจากหน้าใบงาน (ตัวอย่าง พ.ย. 69) — เดิมกดได้ที่ "งานของฉัน" ที่เดียว ช่างที่เปิดใบจากกล่องงาน/ลิงก์
+   * ช่างกดถึงหน้างานจากหน้าใบงาน (พ.ย. 69) — เดิมกดได้ที่ "งานของฉัน" ที่เดียว ช่างที่เปิดใบจากกล่องงาน/ลิงก์
    * ไม่เห็นปุ่ม ขั้นจึงค้าง "เข้างาน" ทั้งที่ยืนอยู่ในร้าน · ไม่มีพิกัดก็บันทึก (เซิร์ฟเวอร์บอกในประวัติว่าไม่มีพิกัด)
    */
   async function arriveNow() {
@@ -1785,6 +1785,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   function pressStep(key: string, state: StepState) {
     if (state === "done") {
       setStepInfo(key);
+      return;
+    }
+    // แอดมิน/หัวหน้าภาคปิดงานได้ตั้งแต่ขั้นเข้างาน (ปุ่มล่างเป็น "ปิดงาน" อยู่แล้ว) — วงขั้นปิดงานต้องทำแบบเดียวกับปุ่ม
+    // ไม่งั้นกดชื่อขั้นที่ตรงกับปุ่มแล้วเงียบ (ขั้นนี้ยังเป็นขั้นข้างหน้าเพราะช่างยังไม่ถึง)
+    if (key === "IN_PROGRESS" && state === "future" && !isTech && order?.status === "IN_PROGRESS" && myTurn(order) && !busy) {
+      setClosing(true);
       return;
     }
     if ((state !== "now" && state !== "loop") || !order || !myTurn(order) || busy) return;
@@ -2365,7 +2371,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       ) : null}
 
       {/*
-        ย้อนขั้นมา — แถบบนสุดเหนือแถบขั้นตอน (ตัวอย่าง พ.ย. 69 ตามแบบ: "ย้อนกลับมาขั้นตอนที่ 2 เรียบร้อยแล้ว")
+        ย้อนขั้นมา — แถบบนสุดเหนือแถบขั้นตอน (พ.ย. 69 ตามแบบ: "ย้อนกลับมาขั้นตอนที่ 2 เรียบร้อยแล้ว")
         คนที่เปิดใบต้องรู้ก่อนอย่างอื่นว่าใบนี้ถอยมา เพราะอะไร ใครย้อน · ข้อมูลเดิมไม่หาย (rollbackPrefill) · หายเองเมื่อกดผ่านขั้นนี้
       */}
       {order.rolledBack ? (
@@ -2602,7 +2608,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                         </Text>
                       ) : null}
                       {showLabel && row.note ? <Text style={styles.stageActor}>{row.note}</Text> : null}
-                      {/* ขั้นที่ทำแล้ว: ใครทำ วันไหน (ตัวอย่าง พ.ย. 69) — กดวงยังเปิดรายละเอียดเต็มเหมือนเดิม */}
+                      {/* ขั้นที่ทำแล้ว: ใครทำ วันไหน (พ.ย. 69) — กดวงยังเปิดรายละเอียดเต็มเหมือนเดิม */}
                       {state === "done" && row.key === "ARRIVE" ? (() => {
                         // เข้างานแล้ว: ใครถึง กี่โมง ห่างร้านเท่าไร — จากประวัติ "ช่างถึงหน้างาน" ล่าสุด
                         const a = [...order.logs].filter((l) => l.action === "ARRIVED").sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id - x.id)[0];
@@ -2706,7 +2712,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           );
         })()}
         {/*
-          แถวท้ายแถบขั้นตอน (ตัวอย่าง พ.ย. 69 ตามแบบ): ความเร่ง/พักรออะไหล่ · อยู่ขั้นนี้มานานเท่าไร · ใครต้องทำตอนนี้
+          แถวท้ายแถบขั้นตอน (พ.ย. 69 ตามแบบ): ความเร่ง/พักรออะไหล่ · อยู่ขั้นนี้มานานเท่าไร · ใครต้องทำตอนนี้
           ไม่มีคำว่า SLA — ระบบยังไม่มีเกณฑ์เวลาต่อขั้น (ถามเจ้าของงานในตัวอย่าง)
         */}
         {!done ? (
@@ -2814,7 +2820,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                       : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
             </Text>
           </View>
-          {/* "แก้ไขอาการ/สถานะ" ย้ายไปท้ายการ์ดเป็น "แก้ไขรายละเอียด" (ตัวอย่าง พ.ย. 69 ตามแบบ) */}
+          {/* "แก้ไขอาการ/สถานะ" ย้ายไปท้ายการ์ดเป็น "แก้ไขรายละเอียด" (พ.ย. 69 ตามแบบ) */}
         </View>
         {/*
           ขั้นรอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — ส่งใบเสนอราคาเมื่อไร (เปิดใบเสนอราคาได้เลย) · รอมากี่วัน · การตามลูกค้า
@@ -3071,7 +3077,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         {/* อาการกับอะไหล่ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
         {order.symptom || order.inspectionNote || order.waitingParts.length > 0 || order.services.length > 0 ? (
           <View style={styles.nowBody}>
-            {/* อาการที่แจ้ง — ค่าในกรอบตัวหนา (ตัวอย่าง พ.ย. 69 ตามแบบ) */}
+            {/* อาการที่แจ้ง — ค่าในกรอบตัวหนา (พ.ย. 69 ตามแบบ) */}
             <View style={styles.fxRow}>
               <Text style={styles.fxLabel}>อาการที่แจ้ง</Text>
               <View style={styles.fxBox}>
@@ -4199,13 +4205,13 @@ const STAGE_ACTIONS: Record<string, string[]> = {
   PARTS_CHECKED: ["ASSIGNED", "SCHEDULED"],
   AWAITING_CONFIRM: ["CONFIRMED", "RESCHEDULED"],
   ASSIGNED: ["DISPATCHED", "ASSIGNED"],
-  // ขั้น "เข้างาน" (ตัวอย่าง พ.ย. 69) — นับเป็นการเข้าขั้นด้วย เวลาค้างขั้นจึงเริ่มนับใหม่ตอนถึงหน้างาน = เวลาที่อยู่หน้างาน
+  // ขั้น "เข้างาน" (พ.ย. 69) — นับเป็นการเข้าขั้นด้วย เวลาค้างขั้นจึงเริ่มนับใหม่ตอนถึงหน้างาน = เวลาที่อยู่หน้างาน
   ARRIVE: ["ARRIVED"],
   IN_PROGRESS: ["CLOSED"],
 };
 
 /**
- * แถบขั้นตอนแบบใหม่ (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา)
+ * แถบขั้นตอนแบบใหม่ (พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา)
  * ใต้ขั้นที่ทำแล้วบอกใครทำ วันไหน — จากประวัติชุดเดียวกับที่กดดูรายละเอียดขั้น (STAGE_ACTIONS)
  */
 function stepDoneBy(stages: string[], logs: WorkOrder["logs"]) {
@@ -8616,7 +8622,7 @@ const ROLE_DOT: Record<string, { fg: string; bg: string; label: string }> = {
 };
 
 /**
- * สีของแต่ละบรรทัดในประวัติ — บอกว่า "เป็นเรื่องอะไร" (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา)
+ * สีของแต่ละบรรทัดในประวัติ — บอกว่า "เป็นเรื่องอะไร" (พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา)
  * แบบเดิมใช้สีตามคนทำ หัวหน้าภาคระบุอะไหล่กับหัวหน้าภาคส่งทีมตรวจเลยเป็นสีเดียวกัน ทั้งที่คนอ่านอยากหาว่า
  * "อะไหล่ไปถึงไหน" หรือ "ลูกค้าว่ายังไง" — ไล่ตาตามสีได้เลย · ป้ายบทบาทยังบอกว่าใครทำ
  * ม่วง = เปิด/เริ่ม · ฟ้า = ส่งต่อ/สั่งงาน · คราม = ลูกค้า · เหลือง = อะไหล่ · เขียว = หน้างาน/ปิดงาน · แดง = ถอย/ติดปัญหา · เทา = อื่น ๆ
@@ -11898,7 +11904,7 @@ const styles = StyleSheet.create({
   },
   summaryLabel: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.primaryInk },
   summaryText: { fontSize: 17, lineHeight: 27, fontWeight: "800", color: colors.text },
-  // ประวัติแบบเรียบ (ตัวอย่าง พ.ย. 69 ตามแบบ) — จุดมีวงจางรอบ เส้นเทาบางต่อกันทุกจุด วันเวลาชิดขวา
+  // ประวัติแบบเรียบ (พ.ย. 69 ตามแบบ) — จุดมีวงจางรอบ เส้นเทาบางต่อกันทุกจุด วันเวลาชิดขวา
   hRow: { flexDirection: "row", gap: 12 },
   hRail: { width: 22, alignItems: "center" },
   hLine: { position: "absolute", top: 11, bottom: -11, width: 2, backgroundColor: colors.border },

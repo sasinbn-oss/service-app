@@ -52,6 +52,22 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     await (await fetch("http://127.0.0.1:4000/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ employeeCode: "A001", password: "test1234" }) })).json()
   ).token;
 
+  // W71 ที่ D0012 ต้องมีใบค้าง (ข้อมูล seed:test) — ฐานทดสอบที่ใบนั้นถูกปิด/ลบไปแล้วเทสต์นี้ตกทั้งที่แอปไม่ได้ผิด สร้างให้เองแล้วลบตอนจบ
+  // อาการไม่ขึ้นต้นด้วย PREFIX — ไม่ปนกับการนับ 23 ใบที่นำเข้า
+  const HOLD_SYMPTOM = `ใบค้างของเทสต์นำเข้าเว็บ${process.pid}`;
+  const hadW71 = sql(`select count(*) from "Machine" m join "Branch" b on b.id=m."branchId" where b.code='D0012' and m.code='W71'`) !== "0";
+  const openW71 = () =>
+    sql(`select count(*) from "WorkOrder" w join "Branch" b on b.id=w."branchId" join "Machine" m on m.id=w."machineId"
+         where b.code='D0012' and m.code='W71' and w.status not in ('DONE','CANCELLED') and w."deletedAt" is null`);
+  if (openW71() === "0") {
+    await fetch("http://127.0.0.1:4000/api/work-orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ branchCode: "D0012", jobType: "CM", priority: "NORMAL", contactPhone: "089-111-2222", machines: [{ code: "W71", symptom: HOLD_SYMPTOM }] }),
+    });
+    if (openW71() === "0") fail("เตรียมใบค้างของ W71 ที่ D0012 ไม่ได้");
+  }
+
   const browser = await chromium.launch({
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
     args: ["--no-sandbox"],
@@ -214,6 +230,8 @@ const sql = (q) => execSync(`psql "${process.env.DATABASE_URL.split("?")[0]}" -A
     fs.rmSync(specFile, { force: true });
     try {
       await purgeOrders(token, sql(`select id from "WorkOrder" where symptom like '${PREFIX}%'`).split("\n").filter(Boolean));
+      await purgeOrders(token, sql(`select id from "WorkOrder" where symptom='${HOLD_SYMPTOM}'`).split("\n").filter(Boolean));
+      if (!hadW71) sql(`delete from "Machine" m using "Branch" b where b.id=m."branchId" and b.code='D0012' and m.code='W71' and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
       sql(`delete from "ImportRun" where id > ${IH0}`);
       sql(`delete from "Machine" m using "Branch" b where b.id=m."branchId" and b.code='D0012' and m.code in (${spec.slice(0, 15).map((r) => `'${r.machine}'`).join(",")})
            and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
