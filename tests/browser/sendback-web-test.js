@@ -74,7 +74,7 @@ const { setup, visitDay } = require("./fixture");
     await page.waitForTimeout(3500);
 
     // แก้รายละเอียด
-    await vis("แก้ไขอาการ/สถานะ").last().click();
+    await vis("แก้ไขรายละเอียด").last().click();
     await page.waitForTimeout(1000);
     await label("ชื่อผู้ติดต่อ").fill("คุณใหม่ทดสอบ");
     await vis("บันทึก").last().click();
