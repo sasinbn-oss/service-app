@@ -2784,7 +2784,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                   ? "คอนเฟิร์มอะไหล่"
                   : pickReturned(order)
                     ? "ตรวจหน้างาน — แก้รายการอะไหล่"
-                    : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
+                    : order.status === "IN_PROGRESS"
+                      ? // ขั้นช่างแยกสอง (ตัวอย่าง พ.ย. 69) — ชื่อตามแถบ ไม่ใช่ชื่อรวม "เข้างาน/ปิดงาน" ของเซิร์ฟเวอร์
+                        order.onSite
+                        ? "ปิดงาน"
+                        : "เข้างาน — กดถึงหน้างานเมื่อถึงร้าน"
+                      : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
             </Text>
           </View>
           {/* "แก้ไขอาการ/สถานะ" ย้ายไปท้ายการ์ดเป็น "แก้ไขรายละเอียด" (ตัวอย่าง พ.ย. 69 ตามแบบ) */}
@@ -8530,9 +8535,14 @@ function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed
         </View>
         <Text style={[styles.hTitle, headingFont]}>ประวัติ</Text>
         <View style={{ flex: 1 }} />
+        {/* ลิงก์มุมขวาตามแบบ — ไทม์ไลน์เต็มเป็นของผู้ดูแลระบบ · คนอื่นใช้ที่เดียวกันเปิดรายการแนบไฟล์ที่ซ่อนไว้ */}
         {onTimeline ? (
           <TouchableOpacity onPress={onTimeline} accessibilityLabel="ดูไทม์ไลน์เต็ม">
             <Text style={styles.hTimeline}>ดูไทม์ไลน์เต็ม</Text>
+          </TouchableOpacity>
+        ) : minor > 0 ? (
+          <TouchableOpacity onPress={() => setAll((v) => !v)} accessibilityLabel={all ? "ซ่อนรายการแนบไฟล์" : "ดูประวัติทั้งหมด"}>
+            <Text style={styles.hTimeline}>{all ? "ซ่อนแนบไฟล์" : `ดูทั้งหมด (${ordered.length})`}</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -8579,7 +8589,8 @@ function History({ logs, closed, onTimeline }: { logs: WorkOrder["logs"]; closed
           </View>
         );
       })}
-      {minor > 0 ? (
+      {/* ผู้ดูแลระบบ: ลิงก์มุมขวาเป็นไทม์ไลน์ จึงเปิดแนบไฟล์ที่ท้ายการ์ดแทน */}
+      {onTimeline && minor > 0 ? (
         <TouchableOpacity onPress={() => setAll((v) => !v)} activeOpacity={0.7} style={styles.hMore}>
           <Text style={styles.hMoreText}>
             {all ? "ซ่อนรายการแนบไฟล์" : `แสดงทั้งหมด (รวมแนบไฟล์ ${minor} รายการ)`}
