@@ -17,6 +17,7 @@ import { navigationRef } from "../navigation/navigationRef";
 import { colors, headingFont } from "../theme";
 import { appendFile, pickImageAttachment, PickedAttachment } from "../utils/attachments";
 import { showAlert } from "../utils/alert";
+import { isAreaTeam } from "../utils/areaTeam";
 
 export interface ChatMessage {
   id: number;
@@ -91,7 +92,17 @@ function useThreads(poll: boolean) {
 }
 
 /** ปุ่มกลมมุมขวาล่างของหน้าใบงาน — กดแล้วกางหน้าต่างแชท (startOpen = เปิดมาจากรายการแชทบนแถบหัว) */
-export function ChatBubble({ orderId, code, branch, startOpen }: { orderId: number; code: string; branch: string; startOpen?: boolean }) {
+/** ทีม Area ไม่อยู่ในวงแชทใบงาน (ช่าง · หัวหน้าภาค · แอดมิน — เจ้าของงานเลือก) เซิร์ฟเวอร์ไม่เปิดเส้นแชทให้ */
+function chatAudience(user: ReturnType<typeof useAuth>["user"]) {
+  return !!user && !isAreaTeam(user);
+}
+
+export function ChatBubble(props: { orderId: number; code: string; branch: string; startOpen?: boolean }) {
+  const { user } = useAuth();
+  return chatAudience(user) ? <Bubble {...props} /> : null;
+}
+
+function Bubble({ orderId, code, branch, startOpen }: { orderId: number; code: string; branch: string; startOpen?: boolean }) {
   const [open, setOpen] = useState(!!startOpen);
   const [threads, reload] = useThreads(!open);
   const unread = threads?.find((t) => t.id === orderId)?.unread ?? 0;
@@ -356,6 +367,11 @@ function ChatWindow({ orderId, code, branch, onClose }: { orderId: number; code:
 
 /** ไอคอนแชทบนแถบหัว — ตัวเลข = ห้องที่มีข้อความยังไม่อ่าน · กดแล้วกางรายการห้องแบบ Messenger */
 export function ChatInbox() {
+  const { user } = useAuth();
+  return chatAudience(user) ? <Inbox /> : null;
+}
+
+function Inbox() {
   const [open, setOpen] = useState(false);
   // จอมือถือ: กางเต็มความกว้างจอแบบเดียวกับกระดิ่ง — กล่องกว้าง 400 ชิดไอคอนล้นขอบซ้ายของจอ 360
   const narrow = useWindowDimensions().width < 640;
