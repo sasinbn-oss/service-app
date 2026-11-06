@@ -73,7 +73,7 @@ import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/S
 import { pageEnterLayout } from "../components/PageEnter";
 import AreaOnlyGate from "../components/AreaOnlyGate";
 import HowToButton from "../components/HowToButton";
-import { CreateOrderButton, ProfileMenu, QueueSwitch } from "../components/TopNav";
+import { CreateOrderButton, ProfileMenu } from "../components/TopNav";
 import GlobalSearch from "../components/GlobalSearch";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
@@ -303,7 +303,7 @@ function AppTopBar() {
       {/*
         แถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา — components/TopNav.tsx)
         ซ้ายบนเป็นช่องค้นหาทั้งระบบแทนแท็บลัด (เจ้าของงานเลือก — แท็บลัดซ้ำกับเมนูข้าง)
-        สลับงานของฉัน/ภาพรวมขึ้นเมื่อจอกว้างพอ ไม่งั้นชื่อผู้ใช้ถูกบีบหาย
+        ไม่มีสลับ "งานของฉัน / ภาพรวม" แล้ว (เจ้าของงานให้เอาออก — ซ้ำกับกล่องงานของฉัน/หน้าหลักในเมนูข้าง)
       */}
       <GlobalSearch />
       <View style={{ flex: 1 }} />
@@ -311,7 +311,6 @@ function AppTopBar() {
       {/* ดูในฐานะ · คนออนไลน์ กลับมาอยู่บนแถบ (เจ้าของงานขอ) — จอไม่ถึง 1700 เหลือไอคอน ให้ช่องค้นหาไม่ถูกบีบ */}
       <ViewAsButton compact={width < 1700} />
       <UsageButton compact={width < 1700} />
-      {width >= 1100 ? <QueueSwitch /> : null}
       <CreateOrderButton />
       <View style={styles.headerRight}>
         <HowToButton compact />
