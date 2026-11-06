@@ -24,6 +24,7 @@ import {
   OUT_OF_SCOPE,
   outOfScopeText,
   itViewOnly,
+  itAreaDispatches,
   ownTeamOf,
   ownTeamWhere,
   scopesOf,
@@ -4570,6 +4571,8 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
     ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}),
     // หัวหน้าภาคของทีมที่รับงานข้ามทีม — ดูอย่างเดียวแต่ปิดใบงานได้ตอนทีมอยู่หน้างาน (ดู CROSS_CLOSE_STAGES)
     ...(viewer.scope && (await receiverMayClose(viewer.scope, d.row)) ? { crossClose: true } : {}),
+    // ใบ IT ในพื้นที่ตัวเองที่ขั้นจ่ายงาน — ดูอย่างเดียว แต่มีปุ่มนัดวัน/ปล่อยงานของขั้นนั้น (IT_AREA_DISPATCH_STAGES)
+    ...(viewer.scope && itAreaDispatches(viewer.scope, d.row) ? { itDispatch: true } : {}),
   });
 });
 
@@ -5957,7 +5960,8 @@ async function guardStage(
   }
 
   if (scope) {
-    if (!coversWorkOrder(scope, wo)) {
+    // ใบ IT ในพื้นที่ตัวเองที่อยู่ขั้นจ่ายงาน — หัวหน้าภาคพื้นที่นัดวัน/ปล่อยงานได้ด้วย (IT_AREA_DISPATCH_STAGES)
+    if (!coversWorkOrder(scope, wo) && !itAreaDispatches(scope, wo)) {
       res.status(403).json({ error: await outOfScopeReason(scope, wo) });
       return null;
     }
