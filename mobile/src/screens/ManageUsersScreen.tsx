@@ -54,6 +54,8 @@ interface ManagedUser {
   supervisedTeams: string[];
   /** สาขาที่ Maid (COCO) ประจำ — Maid เห็นเฉพาะสาขาเหล่านี้ */
   maidBranches?: CocoBranch[];
+  /** หัวหน้าภาคที่ดูแลงาน IT ทุกภาค (ได้คนเดียว) — เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง */
+  itLead?: boolean;
   mustChangePassword: boolean;
 }
 
@@ -263,13 +265,31 @@ export default function ManageUsersScreen() {
       teams?: string[];
       supervisedTeams?: string[];
       maidBranches?: string[];
+      itLead?: boolean;
+      replaceItLead?: boolean;
     }
   ) {
     setSavingId(id);
     try {
       const res = await api.patch<ManagedUser>(`/auth/users/${id}`, patch);
-      setUsers((list) => list.map((u) => (u.id === id ? res.data : u)));
+      // ย้ายหัวหน้า IT = คนเดิมถูกถอดในธุรกรรมเดียวกัน — ล้างป้ายบนการ์ดคนอื่นด้วย ไม่งั้นจอโชว์สองคนจนกว่าจะโหลดใหม่
+      setUsers((list) => list.map((u) => (u.id === id ? res.data : res.data.itLead && u.itLead ? { ...u, itLead: false } : u)));
     } catch (e) {
+      // มีคนอื่นถืออยู่ — ถามก่อนย้าย (เซิร์ฟเวอร์ตอบ 409 พร้อมชื่อคนเดิม) ไม่ย้ายเงียบ ๆ
+      const holder = (e as { response?: { status?: number; data?: { itLeadHolder?: { name: string } } } }).response;
+      if (patch.itLead && !patch.replaceItLead && holder?.status === 409 && holder.data?.itLeadHolder) {
+        const name = holder.data.itLeadHolder.name;
+        const who = users.find((u) => u.id === id)?.name ?? "คนนี้";
+        showAlert(
+          `ย้ายงาน IT จาก ${name}?`,
+          `ตอนนี้ ${name} ดูแลงาน IT ทุกภาคอยู่ — ได้คนเดียว\nถ้ายืนยัน ใบงาน IT ทั้งหมดจะย้ายไปที่ ${who} และ ${name} จะไม่เห็นใบงาน IT อีก`,
+          [
+            { text: "ยกเลิก", style: "cancel" },
+            { text: `ย้ายมาที่ ${who}`, onPress: () => update(id, { itLead: true, replaceItLead: true }) },
+          ]
+        );
+        return;
+      }
       showAlert("บันทึกไม่สำเร็จ", apiErrorMessage(e));
     } finally {
       setSavingId(null);
@@ -455,6 +475,12 @@ export default function ManageUsersScreen() {
           <View style={styles.head}>
             <Text style={styles.name}>{u.name}</Text>
             <Text style={styles.code}>{u.employeeCode}</Text>
+            {u.role === "SUPERVISOR" && u.itLead ? (
+              <View style={styles.itBadge} accessibilityLabel={`${u.name} ดูแลงาน IT`}>
+                <Ionicons name="desktop-outline" size={12} color={colors.primary} />
+                <Text style={styles.itBadgeText}>ดูแลงาน IT</Text>
+              </View>
+            ) : null}
             {savingId === u.id ? <Spinner size="small" color={colors.primary} /> : null}
           </View>
           {/* ช่างที่ยังไม่มีทีมมีข้อความใต้ช่องทีมอยู่แล้ว — ที่นี่สำหรับกรณีอื่น (ทีมสะกดผิด หัวหน้าภาคไม่มีขอบเขต) */}
@@ -655,6 +681,31 @@ export default function ManageUsersScreen() {
                   <Text style={styles.warnText}>ยังไม่ได้เลือกภาคหรือทีม จะไม่เห็นใบงานใดเลย</Text>
                 </View>
               ) : null}
+              {/*
+                หัวหน้าภาคที่ดูแลงาน IT (เจ้าของงานตัดสิน 6 พ.ย. 69) — ได้คนเดียว: เปิดให้คนนี้ขณะที่คนอื่นถืออยู่
+                เซิร์ฟเวอร์ตอบ 409 พร้อมชื่อ แล้วถามยืนยันการย้าย (ดู update) · งาน CM ภาคตัวเองไม่เปลี่ยน
+              */}
+              <TouchableOpacity
+                style={styles.itSwitch}
+                onPress={() => update(u.id, { itLead: !u.itLead })}
+                disabled={savingId !== null}
+                activeOpacity={0.7}
+                accessibilityRole="switch"
+                accessibilityLabel={`ดูแลงาน IT ทุกภาคด้วย ${u.name}`}
+                accessibilityState={{ checked: !!u.itLead }}
+                // เว็บไม่แปลง accessibilityState เป็น aria-checked — ใส่เอง (ดู Tick ใน RejectPanel)
+                {...({ "aria-checked": !!u.itLead } as object)}
+              >
+                <View style={[styles.track, u.itLead && styles.trackOn]}>
+                  <View style={[styles.knob, u.itLead && styles.knobOn]} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.itSwitchText}>ดูแลงาน IT ทุกภาคด้วย</Text>
+                  <Text style={styles.hint}>
+                    ได้คนเดียว · ใบงาน IT ทุกภาคมาที่คนนี้ หัวหน้าภาคคนอื่นไม่เห็น · งาน CM ภาคตัวเองยังทำเหมือนเดิม
+                  </Text>
+                </View>
+              </TouchableOpacity>
             </>
           ) : null}
 
@@ -1430,6 +1481,22 @@ const styles = StyleSheet.create({
   importButton: { backgroundColor: colors.sky50, borderWidth: 1, borderColor: colors.border },
   addButtonText: { color: "#fff", fontSize: 15, lineHeight: 24, fontWeight: "700" },
   pending: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
+  itBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: colors.sky50,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  itBadgeText: { fontSize: 11, lineHeight: 18, color: colors.primary, fontWeight: "700" },
+  itSwitch: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md, minHeight: 44 },
+  itSwitchText: { fontSize: 13, lineHeight: 22, color: colors.text, fontWeight: "600" },
+  track: { width: 36, height: 20, borderRadius: 10, backgroundColor: colors.border, padding: 2 },
+  trackOn: { backgroundColor: colors.primary },
+  knob: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#fff" },
+  knobOn: { transform: [{ translateX: 16 }] },
   pendingText: { fontSize: 11, lineHeight: 19, color: colors.warning },
   actions: {
     flexDirection: "row",
