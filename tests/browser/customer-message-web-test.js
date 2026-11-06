@@ -49,7 +49,8 @@ const { setup } = require("./fixture");
     {
       const { ctx, page, vis } = await openAs("A001", repair);
       (await vis("💬 ข้อความแจ้งลูกค้า").count()) === 0 ? pass("ยังรอลูกค้าคอนเฟิร์ม = ยังไม่มีข้อความให้คัดลอก") : fail("มีข้อความก่อนคอนเฟิร์ม");
-      await vis("คอนเฟิร์มลูกค้า").first().click();
+      // ปุ่มขั้นท้ายการ์ด — ชื่อขั้นบนแถบเป็นวงที่เต้นอยู่ (ขั้นปัจจุบัน) Playwright รอให้นิ่งไม่จบ
+      await vis("คอนเฟิร์มลูกค้า").last().click();
       await page.waitForTimeout(1200);
       await vis("ลูกค้าคอนเฟิร์มวันเดิม").click();
       await page.waitForTimeout(300);
