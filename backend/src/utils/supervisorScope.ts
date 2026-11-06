@@ -150,6 +150,14 @@ const NO_OWN_TEAM: Prisma.WorkOrderWhereInput = {
  * จะได้ไม่ชนกับ OR/branch ของตัวกรองอื่น · ที่เห็นได้ (รวมใบที่ทีมตัวเองรับข้ามทีมมา) ดู workOrderVisible
  */
 export function workOrderInScope(s: SupervisorScope): Prisma.WorkOrderWhereInput {
+  const area = areaWhere(s);
+  // ใบ IT ไม่ตามภาค/ทีม — เป็นของหัวหน้าภาคที่ดูแลงาน IT ทุกใบ · คนอื่นไม่ได้เป็นเจ้าของสักใบ (ดู SupervisorScope.itLead)
+  // หัวหน้าภาคของพื้นที่ยังเห็นและปิดใบ IT ในพื้นที่ตัวเองได้ — แต่นั่นคือ workOrderVisible ไม่ใช่ความเป็นเจ้าของ (ไม่เข้ากล่องงาน)
+  return s.itLead ? { OR: [{ AND: [NOT_IT, area] }, { jobType: IT_JOB }] } : { AND: [NOT_IT, area] };
+}
+
+/** ใบในพื้นที่ (ภาค/ทีม) ของหัวหน้าภาคคนนี้ ทุกประเภทงาน — แบบเดียวกับก่อนแยกงาน IT */
+function areaWhere(s: SupervisorScope): Prisma.WorkOrderWhereInput {
   const or: Prisma.WorkOrderWhereInput[] = [];
   if (s.regions.length) {
     const c = s.claimed ?? [];
@@ -175,9 +183,7 @@ export function workOrderInScope(s: SupervisorScope): Prisma.WorkOrderWhereInput
     );
   }
   // ยังไม่ได้ตั้งภาคหรือทีม = ไม่เห็นอะไร (แบบเดิมที่ไม่มีภาค)
-  const area: Prisma.WorkOrderWhereInput = or.length ? { OR: or } : { id: -1 };
-  // ใบ IT ไม่ตามภาค/ทีม — เป็นของหัวหน้าภาคที่ดูแลงาน IT ทุกใบ · คนอื่นไม่ได้สักใบ (ดู SupervisorScope.itLead)
-  return s.itLead ? { OR: [{ AND: [NOT_IT, area] }, { jobType: IT_JOB }] } : { AND: [NOT_IT, area] };
+  return or.length ? { OR: or } : { id: -1 };
 }
 
 const NOT_IT: Prisma.WorkOrderWhereInput = { jobType: { not: IT_JOB } };
@@ -193,14 +199,25 @@ function receivedWhere(teams: Iterable<string>): Prisma.WorkOrderWhereInput[] {
  */
 export async function workOrderVisible(s: SupervisorScope): Promise<Prisma.WorkOrderWhereInput> {
   const own = workOrderInScope(s);
-  // ใบ IT ที่จ่ายข้ามทีมมาก็ไม่เห็น — ใบ IT เป็นของหัวหน้าภาคที่ดูแลงาน IT คนเดียว (ซึ่งเห็นทุกใบผ่าน own อยู่แล้ว)
-  const received = receivedWhere(await teamsForSupervisor(s)).map((w) => ({ AND: [NOT_IT, w] }));
-  return received.length ? { OR: [own, ...received] } : own;
+  /**
+   * ใบ IT ในพื้นที่ตัวเอง (และใบ IT ที่จ่ายข้ามทีมมาให้ทีมตัวเอง) — เห็นและปิดใบงานได้ (เจ้าของงานขอ 6 พ.ย. 69 ·
+   * "งาน IT หัวหน้าภาคอื่นเห็นใบงานได้ด้วย และปิดงานได้ด้วย") · ขั้นอื่นยังเป็นของหัวหน้าภาคที่ดูแลงาน IT
+   * หัวหน้า IT เห็นทุกใบผ่าน own อยู่แล้ว
+   */
+  const itArea: Prisma.WorkOrderWhereInput[] = s.itLead ? [] : [{ AND: [{ jobType: IT_JOB }, areaWhere(s)] }];
+  const received = receivedWhere(await teamsForSupervisor(s));
+  const extra = [...itArea, ...received];
+  return extra.length ? { OR: [own, ...extra] } : own;
 }
 
 /** หัวหน้าภาคคนนี้เป็นเจ้าของใบไหม (ทำขั้นของหัวหน้าภาคได้) — กติกาเดียวกับ workOrderInScope */
 export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
   if (wo.jobType === IT_JOB) return !!s.itLead;
+  return coversArea(s, wo);
+}
+
+/** ใบอยู่ในพื้นที่ (ภาค/ทีม) ของหัวหน้าภาคคนนี้ไหม ไม่ดูประเภทงาน — กติกาเดียวกับ areaWhere */
+function coversArea(s: SupervisorScope, wo: ScopedOrder) {
   // เทียบหลังทำความสะอาดชื่อ — ข้อมูลที่ยังไม่ผ่าน migration ล้างชื่อ (หรือหลุดมาทางอื่น) ก็ยังจับคู่ได้ ดู utils/names.ts
   const teams = new Set(s.teams.map(cleanName).filter(Boolean));
   const mine = (t: string | null) => {
@@ -221,7 +238,8 @@ export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
  */
 export function seesWorkOrder(s: SupervisorScope, teams: Set<string>, wo: ScopedOrder) {
   if (coversWorkOrder(s, wo)) return true;
-  if (wo.jobType === IT_JOB) return false;
+  // ใบ IT ในพื้นที่ตัวเอง — เห็นและปิดใบงานได้ แต่ไม่ใช่เจ้าของ (เจ้าของงานขอ 6 พ.ย. 69 · ดู workOrderVisible)
+  if (wo.jobType === IT_JOB && coversArea(s, wo)) return true;
   const sent = cleanName(wo.assignedTeam);
   return isCrossTeam(wo) && sent !== null && teams.has(sent);
 }
@@ -271,6 +289,14 @@ export function itOutOfScope(s: SupervisorScope) {
   return s.itLeadName
     ? `ใบงาน IT อยู่กับ ${s.itLeadName} (${IT_LEAD_TITLE}) — หัวหน้าภาคคนอื่นไม่ได้ดูแลใบงาน IT แล้ว`
     : `ใบงาน IT ไม่ได้อยู่กับหัวหน้าภาคตามพื้นที่แล้ว — ยังไม่ได้เลือก${IT_LEAD_TITLE} แอดมินเป็นคนดูแลไปก่อน`;
+}
+/**
+ * ใบ IT ในพื้นที่ตัวเองที่กดขั้นอื่นนอกจากปิดใบงาน (เจ้าของงานขอ 6 พ.ย. 69: หัวหน้าภาคอื่นเห็นและปิดได้)
+ * บอกว่าทำอะไรได้ ไม่ใช่แค่ "ไม่ได้" — คนกดจะได้รู้ว่าปิดใบงานยังทำได้
+ */
+export function itViewOnly(s: SupervisorScope) {
+  const who = s.itLeadName ? `${s.itLeadName} (${IT_LEAD_TITLE})` : "แอดมิน (ยังไม่ได้เลือกหัวหน้าภาคที่ดูแลงาน IT)";
+  return `ใบงาน IT อยู่กับ ${who} — คุณเห็นและปิดใบงานได้ ขั้นอื่นเป็นของคนที่ดูแลงาน IT`;
 }
 /** ข้อความ 403 ของใบที่คนนี้ไม่เห็น — ใบ IT บอกว่าอยู่กับใคร ใบอื่นตามเดิม */
 export function outOfScopeText(s: SupervisorScope, wo: { jobType: string }) {
