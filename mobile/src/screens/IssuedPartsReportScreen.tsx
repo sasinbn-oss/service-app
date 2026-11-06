@@ -19,6 +19,7 @@ import { showAlert } from "../utils/alert";
 import { openUrl } from "../utils/share";
 import { HomeStackParamList } from "../navigation/types";
 import { formatDateTime } from "./WorkOrderListScreen";
+import { SENT_TO_CUSTOMER } from "../utils/dispatchParts";
 import { colors, radius, spacing } from "../theme";
 
 type Props = NativeStackScreenProps<HomeStackParamList, "IssuedPartsReport">;
@@ -56,6 +57,8 @@ interface Row {
   transferReqNo: string | null;
   transferNo: string | null;
   transferArrived: boolean;
+  /** แอดมินส่งของให้ลูกค้าแล้ว (พ.ย. 69) — ของอยู่ที่ร้าน ไม่ได้อยู่กับช่าง · เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = ไม่มีป้าย */
+  sentToCustomer?: boolean;
   issuedAt: string | null;
   issuedDays: number | null;
 }
@@ -96,7 +99,8 @@ const short = (w: string | null) => (w ?? "—").replace(/^คลังลาด
 function issuedText(r: Row) {
   if (r.inStock === true && r.requisitionNo) {
     const via = r.transferReqNo ? ` · โอนจาก${r.transferFrom ?? "—"}` : "";
-    return `${short(r.warehouse)} · ใบเบิก ${r.requisitionNo}${via}`;
+    // ส่งให้ลูกค้าแล้ว = ของออกจากคลังไปอยู่ที่ร้าน ไม่ได้อยู่กับช่าง — คนตามของค้างต้องรู้ว่าถามใคร
+    return `${short(r.warehouse)} · ใบเบิก ${r.requisitionNo}${via}${r.sentToCustomer ? ` · ${SENT_TO_CUSTOMER}` : ""}`;
   }
   return `เบิกจาก${r.transferFrom ?? "—"} · ใบเบิก ${r.transferReqNo} → ${short(r.warehouse)} · ใบโอน ${r.transferNo ?? "—"} · ${
     r.transferArrived ? "โอนถึงแล้ว" : "กำลังโอน"

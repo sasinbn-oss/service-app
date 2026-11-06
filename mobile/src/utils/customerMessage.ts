@@ -180,6 +180,8 @@ export interface SubOrder {
     inStock: boolean | null;
     warehouse: string | null;
     requisitionNo: string | null;
+    // ส่งให้ลูกค้าแล้ว — ทีม SUB ไม่ต้องไปรับชิ้นนั้นที่คลัง (คำเดียวกับข้อความทีมช่าง · dispatchPartLines)
+    sentToCustomer?: boolean;
     // หาได้จากที่ไหน (ของนอกสโตร์) — ทีม SUB ไม่มีแอปให้เปิดดู แหล่งในข้อความคือทั้งหมดที่เขาจะรู้
     offFound?: boolean | null;
     offKind?: string | null;

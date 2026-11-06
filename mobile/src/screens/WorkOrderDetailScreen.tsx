@@ -54,6 +54,7 @@ import BrandChips, { rememberMachineModels } from "../components/BrandChips";
 import { brandFileOf, fileAllows, isOutsidePart } from "../utils/brandFile";
 import { CopyButton, CustomerMessageCard, CustomerMessageModal } from "../components/CustomerMessage";
 import { hasCustomerMessage, subDispatch } from "../utils/customerMessage";
+import { SENT_TO_CUSTOMER } from "../utils/dispatchParts";
 import OffPartEditor, {
   OffPart,
   OffSourceInfo,
@@ -276,7 +277,7 @@ interface WorkOrder {
     scheduledAt: string | null;
     scheduledTime: string | null;
     partsExpectedAt: string | null;
-    parts: { sparePartId: number; inStock: boolean | null; warehouse: string | null; requisitionNo: string | null }[];
+    parts: { sparePartId: number; inStock: boolean | null; warehouse: string | null; requisitionNo: string | null; sentToCustomer?: boolean }[];
   } | null;
   /** ผลตรวจหน้างาน — หัวหน้าภาคใช้ระบุอะไหล่รอบถัดไป */
   inspectedAt: string | null;
@@ -877,6 +878,29 @@ interface StockPart extends PickedPart {
   transferReqNo?: string | null;
   transferNo?: string | null;
   transferredAt?: string | null;
+  /** แอดมินเบิกคลัง 94 แล้วส่งของให้ลูกค้าเอง — ช่างไม่ต้องไปรับที่คลัง (พ.ย. 69) · เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = รับที่คลัง */
+  sentToCustomer?: boolean;
+}
+
+/**
+ * "ใบเบิก RQ-1" — ชิ้นที่แอดมินส่งให้ลูกค้าแล้วต่อท้าย "· ส่งให้ลูกค้าแล้ว" (พ.ย. 69) ทุกที่ในหน้าใบงานที่โชว์เลขใบเบิก
+ * คำเดียวกับการ์ดช่างและข้อความไลน์ (SENT_TO_CUSTOMER) — คนเปิดใบงานกับช่างในกลุ่มไลน์ต้องอ่านได้เรื่องเดียวกัน
+ */
+function requisitionLine(p: { requisitionNo: string | null; sentToCustomer?: boolean }) {
+  return `ใบเบิก ${p.requisitionNo}${p.sentToCustomer ? ` · ${SENT_TO_CUSTOMER}` : ""}`;
+}
+
+/**
+ * เลขใบเบิกในรายการอะไหล่ของใบงาน — "ส่งให้ลูกค้าแล้ว" สีเขียวตัวหนา ช่างที่เปิดใบงานเห็นทันทีว่าชิ้นนี้ไม่ต้องแวะคลัง
+ * (ตัวเลขใบเบิกเป็นสีจาง ถ้าคำนี้จางตามก็เท่ากับไม่ได้บอก — เห็นจากภาพหน้าจอจริง)
+ */
+function RequisitionText({ part }: { part: StockPart }) {
+  return (
+    <Text style={styles.partRequisition}>
+      ใบเบิก {part.requisitionNo}
+      {part.sentToCustomer ? <Text style={styles.partSent}> · {SENT_TO_CUSTOMER}</Text> : null}
+    </Text>
+  );
 }
 
 interface Technician {
@@ -2893,7 +2917,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                               <Text style={styles.ptCell}>{part.offCatalog ? part.note ?? "" : part.name}</Text>
                               {part.offCatalog ? <OffTag /> : null}
                             </View>
-                            {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
+                            {part.requisitionNo ? <RequisitionText part={part} /> : null}
                           </View>
                           <Text style={[styles.ptCell, styles.ptQty]}>{qty}</Text>
                           <View style={styles.ptStock}>{chipView}</View>
@@ -2924,7 +2948,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                           {part.offCatalog ? part.note ?? "" : part.name}
                         </Text>
                         {/* เลขใบเบิกอยู่บรรทัดของตัวเอง แถวเดียวกับคลังจะยาวเกินจอมือถือ */}
-                        {part.requisitionNo ? <Text style={styles.partRequisition}>ใบเบิก {part.requisitionNo}</Text> : null}
+                        {part.requisitionNo ? <RequisitionText part={part} /> : null}
                         <OffSourceInfo part={part} when={formatDateTime} />
                         {out ? <View style={styles.ptCardEta}>{eta}</View> : null}
                       </View>
@@ -5453,6 +5477,12 @@ function StageModal({
    * อีกทางคือช่างไปเบิกไกลจากหน้างาน
    */
   const [transferChoice, setTransferChoice] = useState<Record<number, boolean>>({});
+  /**
+   * ขั้นเบิกคลัง 94: ชิ้นไหนแอดมินส่งให้ลูกค้าแล้ว (เจ้าของงานขอ พ.ย. 69 — เลือกทีละชิ้น) · true = ส่งแล้ว ช่างไม่ต้องไปรับที่คลัง
+   * ค่าตั้งต้นคือรับที่คลัง (ไม่มีในนี้) ต่างจาก "ต้องโอนไหม" ที่ไม่ตั้งค่าให้: รับที่คลังคือแบบเดียวที่เคยมี ส่วนใหญ่ยังเป็นแบบนั้น
+   * แอดมินกดเฉพาะชิ้นที่ส่งไปแล้ว · เลือกผิดเป็น "รับที่คลัง" ช่างแค่แวะคลังเสียเที่ยว ไม่ใช่ของหาย
+   */
+  const [sentChoice, setSentChoice] = useState<Record<number, boolean>>({});
   // ขั้นเบิกอะไหล่: ของอยู่คลังอื่น — ข้อความถึงหัวหน้าภาคที่ต้องไปเบิก (บังคับเมื่อมีตัวที่อยู่คลังอื่น)
   const [pickupNote, setPickupNote] = useState("");
   // ขั้นหัวหน้าภาคเบิก: คลังที่เบิกจริง + เลขใบเบิก รายตัว (อาจเบิกคนละคลังคนละใบ) · เบิกไม่ได้ = ส่งกลับแอดมิน
@@ -5564,6 +5594,15 @@ function StageModal({
     setOffParts(split.off);
     setServices(order.services.map((v) => ({ name: v.name, quantity: v.quantity, unit: v.unit ?? "", note: v.note ?? "" })));
     const oldCheck = new Map((pf?.parts ?? []).map((p) => [p.sparePartId, p]));
+    // ส่งให้ลูกค้าแล้วผูกกับเลขใบเบิก — ย้อนขั้นมาเบิกใหม่ เติมค่าก่อนย้อนให้เหมือนเลขใบเบิก (ชิ้นที่ยังไม่ได้เบิกรอบนี้เท่านั้น)
+    const sentBefore =
+      order.status === "PARTS_REQUESTED"
+        ? order.waitingParts
+            .filter((p) => !(p.inStock === true && p.requisitionNo) && oldCheck.get(p.sparePartId)?.sentToCustomer === true)
+            .map((p) => p.sparePartId)
+        : [];
+    if (sentBefore.length) used.push("ส่งให้ลูกค้าแล้ว");
+    setSentChoice(Object.fromEntries(sentBefore.map((pid) => [pid, true])));
     const checkPrefilled = order.waitingParts.some((p) => p.inStock === null && oldCheck.get(p.sparePartId)?.inStock != null);
     if (checkPrefilled && ["PARTS_SOURCING", "PARTS_REQUESTED"].includes(order.status)) used.push("ผลเช็คคลัง");
     // ผลเช็คก่อนเสนอราคาที่เก่าเกิน 3 วัน — ของอาจถูกงานอื่นใช้ไประหว่างรอเงิน ต้องเช็คใหม่ (ไม่เติมให้)
@@ -5810,6 +5849,8 @@ function StageModal({
             // เลขใบเบิกของแอดมินใช้กับของคลังลาดพร้าว 94 เท่านั้น — คลังอื่นหัวหน้าภาคใส่เอง
             requisitionNo:
               p.offCatalog || checks[p.sparePartId]?.warehouse !== adminWarehouse ? null : requisitionNo.trim() || null,
+            // ส่งเฉพาะชิ้นที่เลือกว่าส่งให้ลูกค้าแล้ว — ไม่ส่ง = รับที่คลัง (เซิร์ฟเวอร์รุ่นก่อนก็เข้าใจแบบนี้)
+            ...(sendable(p) && sentChoice[p.sparePartId] ? { sentToCustomer: true } : {}),
           })),
           pickupNote: toPickup.length ? pickupNote.trim() || undefined : undefined,
           ...(askTransfer.length ? { noTransfer: askTransfer.filter((pid) => transferChoice[pid] === false) } : {}),
@@ -6081,6 +6122,16 @@ function StageModal({
   const askTransfer = toPickup
     .filter((p) => !(p.transferredAt && p.warehouse === checks[p.sparePartId]?.warehouse))
     .map((p) => p.sparePartId);
+  /**
+   * ชิ้นที่ถามได้ว่า "ส่งให้ลูกค้าแล้ว" — ของในสโตร์ที่แอดมินเบิกจากคลัง 94 รอบนี้ (รวมชิ้นที่โอนมาถึง 94 แล้ว)
+   * ชิ้นที่หัวหน้าภาคเบิกจากคลังอื่นไม่อยู่ในเรื่องนี้ (เจ้าของงานขอเฉพาะการเบิกของแอดมิน) — เซิร์ฟเวอร์ปฏิเสธเหมือนกัน
+   */
+  const sendable = (p: StockPart) =>
+    order.status === "PARTS_REQUESTED" &&
+    !p.offCatalog &&
+    checks[p.sparePartId]?.inStock === true &&
+    checks[p.sparePartId]?.warehouse === adminWarehouse;
+  const firstSendable = thisRound.find(sendable)?.sparePartId;
   // มีของที่คลังลาดพร้าว 94 อย่างน้อยหนึ่งตัวในรอบนี้ = แอดมินเบิก = ต้องมีเลขใบเบิก
   const needsRequisition =
     order.status === "PARTS_REQUESTED" &&
@@ -6919,7 +6970,7 @@ function StageModal({
                     <Text style={styles.issuedTitle}>เบิกไปแล้วรอบก่อน</Text>
                     {issued.map((p) => (
                       <Text key={p.sparePartId} style={styles.issuedLine}>
-                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · ใบเบิก {p.requisitionNo}
+                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · {requisitionLine(p)}
                       </Text>
                     ))}
                     <Text style={styles.issuedHint}>
@@ -6999,6 +7050,43 @@ function StageModal({
                             }))
                           }
                         />
+                      ) : null}
+                      {/*
+                        ส่งให้ลูกค้าแล้ว (เจ้าของงานขอ พ.ย. 69) — ทีละชิ้น ใบเดียวมีทั้งชิ้นที่ช่างต้องรับที่คลังและชิ้นที่ส่งไปร้านแล้วได้
+                        ขั้นตอนไม่เปลี่ยน (ไปคอนเฟิร์มลูกค้า → ปล่อยงานเหมือนเดิม) เปลี่ยนแค่คำที่ช่างเห็นว่าต้องแวะคลังไหม
+                        aria-pressed ใส่เอง — เว็บไม่แปลง accessibilityState (CLAUDE.md) เทสต์เบราว์เซอร์อ่านว่าปุ่มไหนติดจากตรงนี้
+                      */}
+                      {sendable(part) ? (
+                        <View style={styles.options} accessibilityLabel={`ส่งให้ลูกค้าแล้วหรือรับที่คลัง ${part.partCode}`}>
+                          {([
+                            [false, "รับที่คลัง"],
+                            [true, "อะไหล่ส่งให้ลูกค้าแล้ว"],
+                          ] as const).map(([v, text]) => {
+                            const on = (sentChoice[part.sparePartId] === true) === v;
+                            return (
+                              <TouchableOpacity
+                                key={text}
+                                style={[styles.option, on && styles.optionOn]}
+                                onPress={() => setSentChoice((x) => ({ ...x, [part.sparePartId]: v }))}
+                                activeOpacity={0.7}
+                                accessibilityState={{ selected: on }}
+                                aria-pressed={on}
+                                accessibilityLabel={`${text} ${part.partCode}`}
+                              >
+                                <Text style={[styles.optionText, on && styles.optionTextOn]}>{text}</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                          {prevUsed.includes("ส่งให้ลูกค้าแล้ว") && order.rollbackPrefill?.parts.some((x) => x.sparePartId === part.sparePartId && x.sentToCustomer) ? (
+                            <Text style={styles.prevTag}> ค่าเดิมก่อนย้อน </Text>
+                          ) : null}
+                        </View>
+                      ) : null}
+                      {/* คำอธิบายบรรทัดเดียว ใต้ชิ้นแรกที่ถาม — ไม่ซ้ำทุกชิ้น */}
+                      {part.sparePartId === firstSendable ? (
+                        <Text style={styles.linkedText} accessibilityLabel="คำอธิบาย อะไหล่ส่งให้ลูกค้าแล้ว">
+                          อะไหล่ส่งให้ลูกค้าแล้ว = ช่างไม่ต้องไปรับชิ้นนั้นที่คลัง
+                        </Text>
                       ) : null}
                       {c.inStock === true && !part.offCatalog && c.warehouse && c.warehouse !== adminWarehouse ? (
                         <Text style={styles.pickupTag} accessibilityLabel={`หัวหน้าภาคเบิก ${part.partCode}`}>
@@ -7284,7 +7372,7 @@ function StageModal({
                     <Text style={styles.issuedTitle}>เบิกส่งมอบแล้ว</Text>
                     {issued.map((p) => (
                       <Text key={p.sparePartId} style={styles.issuedLine}>
-                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · ใบเบิก {p.requisitionNo}
+                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · {requisitionLine(p)}
                       </Text>
                     ))}
                   </View>
@@ -7372,7 +7460,7 @@ function StageModal({
                     <Text style={styles.issuedTitle}>แอดมินเบิกแล้ว</Text>
                     {issued.map((p) => (
                       <Text key={p.sparePartId} style={styles.issuedLine}>
-                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · ใบเบิก {p.requisitionNo}
+                        {p.partCode} × {p.quantity} · {p.warehouse ?? "-"} · {requisitionLine(p)}
                       </Text>
                     ))}
                   </View>
@@ -8233,7 +8321,7 @@ function PartsReady({ order, adminWarehouse, viewer = "supervisor" }: { order: W
               {p.offCatalog
                 ? `หาได้แล้ว (นอกสโตร์${p.offFound && p.offKind ? ` · ${p.offKind}` : ""})`
                 : p.requisitionNo
-                  ? `เบิกแล้ว · ${p.warehouse ?? "-"} · ใบเบิก ${p.requisitionNo}`
+                  ? `เบิกแล้ว · ${p.warehouse ?? "-"} · ${requisitionLine(p)}`
                   : isFar
                     ? viewer === "admin"
                       ? `${p.warehouse} · ของอยู่คลังอื่น — ยังไม่ถึง`
@@ -11257,6 +11345,7 @@ const styles = StyleSheet.create({
   partCode: { fontSize: 13, lineHeight: 21, fontWeight: "700", color: colors.text },
   partName: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 20, color: colors.textMuted },
   partRequisition: { fontSize: 11, lineHeight: 19, color: colors.textFaint, paddingBottom: 3 },
+  partSent: { color: colors.successInk, fontWeight: "700" },
   stockPending: { fontSize: 11, lineHeight: 19, color: colors.textFaint },
   stockIn: { fontSize: 11, lineHeight: 19, color: colors.success, fontWeight: "700" },
   stockOut: { fontSize: 11, lineHeight: 19, color: colors.danger, fontWeight: "700" },

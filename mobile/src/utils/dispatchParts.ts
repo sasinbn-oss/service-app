@@ -18,6 +18,11 @@ export interface DispatchPart {
   inStock: boolean | null;
   warehouse: string | null;
   requisitionNo: string | null;
+  /**
+   * แอดมินเบิกคลัง 94 แล้วส่งของไปที่ร้านเอง (เจ้าของงานขอ พ.ย. 69) — ช่างไม่ต้องไปรับที่คลัง
+   * เซิร์ฟเวอร์ตอบ true เฉพาะชิ้นที่ยังมีเลขใบเบิกอยู่ · เซิร์ฟเวอร์รุ่นก่อนไม่ส่ง = รับที่คลังแบบเดิม
+   */
+  sentToCustomer?: boolean;
   /** หัวหน้าภาคแจ้งว่าหาได้ไหม จากที่ไหน (ของนอกสโตร์) — เซิร์ฟเวอร์รุ่นก่อน/ใบเก่าไม่มี = คำเดิม "หัวหน้าภาคจัดหา" */
   offFound?: boolean | null;
   offKind?: string | null;
@@ -31,12 +36,17 @@ export const qtyText = (p: DispatchPart) => `${p.quantity}${p.unit ? ` ${p.unit}
  * ไปรับของที่ไหน — บรรทัดเล็กใต้ชื่อในแอป
  * tone ให้สีตามความหมาย: ok = รับได้แล้ว · wait = ยังไม่พร้อม (ยังไม่เบิก/ยังไม่เช็ค) · off = ของนอกสโตร์ · out = หมด
  */
+/** คำเดียวกันทุกที่ที่บอกว่าชิ้นนี้ไม่ต้องไปรับที่คลัง — การ์ดช่าง หน้าใบงาน ข้อความไลน์ ประวัติ (เซิร์ฟเวอร์เขียนคำเดียวกัน) */
+export const SENT_TO_CUSTOMER = "ส่งให้ลูกค้าแล้ว";
+
 export function pickupOf(p: DispatchPart): { text: string; tone: "ok" | "wait" | "off" | "out" } {
   if (p.offCatalog) {
     const src = offSourceShort(p);
     return { text: src ? `ของนอกสโตร์ · ${src}` : "ของนอกสโตร์ · หัวหน้าภาคจัดหาให้", tone: "off" };
   }
   if (p.inStock === false) return { text: "ของหมด · รอของเข้า", tone: "out" };
+  // ส่งให้ลูกค้าแล้ว: แทนคำว่า "รับที่คลัง…" ไม่ใช่ต่อท้าย — คำว่ารับที่คลังคือสิ่งที่ทำให้ช่างแวะคลังทั้งที่ของอยู่ที่ร้านแล้ว
+  if (p.requisitionNo && p.sentToCustomer) return { text: `เบิกแล้ว ${p.requisitionNo} · ${SENT_TO_CUSTOMER}`, tone: "ok" };
   if (p.requisitionNo) return { text: `เบิกแล้ว ${p.requisitionNo}${p.warehouse ? ` · รับที่${p.warehouse}` : ""}`, tone: "ok" };
   if (p.inStock === true) return { text: `${p.warehouse ? `มีของที่${p.warehouse}` : "มีของ"} · ยังไม่เบิก`, tone: "wait" };
   return { text: "ยังไม่เช็คคลัง", tone: "wait" };
@@ -78,7 +88,10 @@ export function dispatchPartLines(parts: DispatchPart[]): string[] {
       continue;
     }
     const status = p.inStock === false ? "ของหมด" : p.requisitionNo ?? (p.inStock === true ? "ยังไม่เบิก" : "ยังไม่เช็คคลัง");
-    out.push(`(${[p.code, status, p.inStock === false ? null : p.warehouse].filter(Boolean).join(" · ")})`);
+    // ส่งให้ลูกค้าแล้ว = ไม่ใส่ชื่อคลัง (ในข้อความนี้ชื่อคลังแปลว่า "ไปรับที่นี่") — ใบที่ส่งครบทุกชิ้นจึงไม่มีคำไหนบอกให้ทีมแวะคลัง
+    const sent = !!p.requisitionNo && p.sentToCustomer === true;
+    const where = sent ? SENT_TO_CUSTOMER : p.inStock === false ? null : p.warehouse;
+    out.push(`(${[p.code, status, where].filter(Boolean).join(" · ")})`);
   }
   return out;
 }
