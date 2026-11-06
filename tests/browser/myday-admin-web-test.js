@@ -124,20 +124,20 @@ const APP = "http://localhost:8081";
     await page.screenshot({ path: path.join(DIR, "myday-admin-1-overview.png") });
 
     // ── ทุกหัวข้อเปิดได้ · จำนวนแถว = ตัวเลข · ใบทดสอบอยู่หัวข้อที่ถูก ──
-    const seen = {};
+    const rowsOf = {};
     for (const t of navTopics) {
       await lbl(`เมนูหัวข้อ ${t} ${navN[t]}`).first().click();
       await page.waitForTimeout(900);
       const view = lbl(`รายการหัวข้อ ${t}`).first();
       const rows = (await view.count()) ? await view.locator('[aria-label^="แถว"]').evaluateAll((ns) => ns.filter((n) => n.getClientRects().length).map((n) => n.getAttribute("aria-label").replace(/^แถว(รอจ่าย)? /, ""))) : null;
-      seen[t] = rows ?? [];
+      rowsOf[t] = rows ?? [];
       const mine = Object.keys(O).filter((k) => WANT[k] === t).map((k) => O[k].code);
       const sel = await lbl(`เมนูหัวข้อ ${t} ${navN[t]}`).first().getAttribute("aria-selected");
       rows && rows.length === navN[t] && mine.every((c) => rows.includes(c)) && sel === "true"
         ? pass(`หัวข้อ "${t}": ${rows.length} แถว = ตัวเลขเมนู${mine.length ? ` · มี ${mine.join(", ")}` : ""} · เมนูติด`)
         : fail(`หัวข้อ "${t}": แถว ${rows ? rows.length : "ไม่เปิด"} ต้อง ${navN[t]} · ${mine.join(",")} · ${sel}`);
     }
-    const itIn = Object.keys(seen).filter((t) => seen[t].includes(O.IT.code));
+    const itIn = Object.keys(rowsOf).filter((t) => rowsOf[t].includes(O.IT.code));
     JSON.stringify(itIn) === JSON.stringify(["งาน IT"])
       ? pass(`ใบ IT ${O.IT.code} อยู่หัวข้อ "งาน IT" หัวข้อเดียว (ไม่อยู่หัวข้อ "${WANT.QUO}")`) : fail(`ใบ IT อยู่หัวข้อ: ${itIn.join(", ")}`);
     // ชิปของหัวข้อนัดร้าน: ตรวจพรุ่งนี้
