@@ -2321,18 +2321,17 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       {order.rolledBack ? (
         <View style={styles.rbBanner} accessibilityLabel="กล่องย้อนขั้น">
           <View style={styles.rbIcon}>
-            <Ionicons name="arrow-undo" size={18} color="#fff" />
+            <Ionicons name="arrow-undo" size={16} color="#fff" />
           </View>
-          <View style={{ flex: 1, minWidth: 200 }}>
+          <View style={{ flex: 1, minWidth: 220, gap: 2 }}>
             <Text style={styles.rbTitle}>
-              ย้อนกลับมาขั้นที่ {path.current.no || "—"} แล้ว ({stageNow?.label ?? order.statusLabel})
-              {order.rolledBack.fromLabel ? ` · จาก “${order.rolledBack.fromLabel}”` : ""}
+              ย้อนกลับมาขั้นตอนที่ {path.current.no || "—"} เรียบร้อยแล้ว ({nowAt >= 0 ? path.rows[nowAt].label : stageNow?.label ?? order.statusLabel})
             </Text>
             <Text style={styles.rbText}>
-              {order.rolledBack.reason ? `เหตุผล: ${order.rolledBack.reason} · ` : ""}ทำโดย{" "}
-              <Text style={styles.rbStrong}>{order.rolledBack.byName ?? "—"}</Text> เมื่อ {formatDateTime(order.rolledBack.at)}
+              {order.rolledBack.reason ? `เนื่องจาก${order.rolledBack.reason} · ` : ""}ดำเนินการโดย{" "}
+              <Text style={styles.rbStrong}>{order.rolledBack.byName ?? "—"}</Text> เมื่อ {whenShort(order.rolledBack.at)}
+              {order.rolledBack.fromLabel ? ` · ย้อนจาก “${order.rolledBack.fromLabel}”` : ""}
             </Text>
-            {order.rollbackPrefill ? <Text style={styles.rbText}>ข้อมูลเดิมเก็บไว้ครบ — กดปุ่มขั้นนี้แล้วจะเห็นค่าเดิมเติมไว้ให้</Text> : null}
           </View>
           <View style={styles.rbStatus}>
             <Text style={styles.rbStatusText}>
@@ -2347,32 +2346,33 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
 
       <View style={[card, styles.stepsCard]}>
         <View style={styles.stepsHead}>
-          <Text style={[styles.stepsTitle, headingFont]}>ขั้นตอนใบงาน</Text>
-          {/* ระหว่างตรวจหน้างานยังไม่ถึงขั้นที่ 1 — บอกว่าอยู่รอบตรวจย่อยไหน ไม่ใช่ "ขั้นที่ 1" ซึ่งชวนให้คิดว่าระบุอะไหล่แล้ว */}
-          {path.current.sub || path.current.no > 0 ? (
-            <View style={[styles.stepPill, partsOut.length > 0 && styles.stepPillBad]}>
-              <Text style={[styles.stepPillText, partsOut.length > 0 && styles.stepPillTextBad]}>
-                {path.current.sub
-                  ? `ตรวจหน้างาน (ย่อย ${path.current.sub.no}/${path.current.sub.total}) ก่อนขั้นที่ 1`
-                  : `ขั้นที่ ${path.current.no} จาก ${path.current.total}`}
-              </Text>
+          <View style={{ flex: 1, minWidth: 200, gap: 2 }}>
+            <View style={styles.stepsTitleRow}>
+              <Text style={[styles.stepsTitle, headingFont]}>ขั้นตอนใบงาน</Text>
+              {/* ระหว่างตรวจหน้างานยังไม่ถึงขั้นที่ 1 — บอกว่าอยู่รอบตรวจย่อยไหน ไม่ใช่ "ขั้นที่ 1" ซึ่งชวนให้คิดว่าระบุอะไหล่แล้ว */}
+              {path.current.sub || path.current.no > 0 ? (
+                <View style={[styles.stepPill, (partsOut.length > 0 || !!order.rolledBack) && styles.stepPillBad]}>
+                  <Text style={[styles.stepPillText, (partsOut.length > 0 || !!order.rolledBack) && styles.stepPillTextBad]}>
+                    {path.current.sub
+                      ? `ตรวจหน้างาน (ย่อย ${path.current.sub.no}/${path.current.sub.total}) ก่อนขั้นที่ 1`
+                      : `ขั้นที่ ${path.current.no} จาก ${path.current.total}`}
+                  </Text>
+                </View>
+              ) : null}
             </View>
-          ) : null}
-          <View style={{ flex: 1 }} />
-          {path.track ? (
-            <TouchableOpacity style={styles.stepHist} onPress={goHistory} accessibilityLabel="ประวัติตรวจหน้างาน">
-              <Text style={styles.stepHistText}>ประวัติตรวจหน้างาน</Text>
+            {/* บรรทัดรองตามแบบ: อาการ (ประเภทงาน) */}
+            <Text style={styles.stepsSub} numberOfLines={1}>
+              {order.symptom?.trim() || order.title} ({order.jobTypeLabel})
+            </Text>
+          </View>
+          {order.rolledBack ? (
+            <TouchableOpacity style={[styles.stepHist, styles.stepHistBack]} onPress={goHistory} accessibilityLabel="ประวัติการย้อนขั้นตอน">
+              <Ionicons name="arrow-undo-outline" size={15} color={colors.warningInk} />
+              <Text style={[styles.stepHistText, { color: colors.warningInk }]}>ประวัติการย้อนขั้นตอน</Text>
             </TouchableOpacity>
           ) : null}
-          <TouchableOpacity
-            style={[styles.stepHist, order.rolledBack && styles.stepHistBack]}
-            onPress={goHistory}
-            accessibilityLabel={order.rolledBack ? "ประวัติการย้อนขั้นตอน" : "ประวัติขั้นตอน"}
-          >
-            <Ionicons name="time-outline" size={15} color={order.rolledBack ? colors.warningInk : colors.body} />
-            <Text style={[styles.stepHistText, order.rolledBack && { color: colors.warningInk }]}>
-              {order.rolledBack ? "ประวัติการย้อนขั้นตอน" : "ประวัติขั้นตอน"}
-            </Text>
+          <TouchableOpacity style={styles.stepHist} onPress={goHistory} accessibilityLabel={path.track ? "ประวัติตรวจหน้างาน" : "ประวัติขั้นตอน"}>
+            <Text style={styles.stepHistText}>{path.track ? "ประวัติตรวจหน้างาน" : "ประวัติขั้นตอน"}</Text>
           </TouchableOpacity>
           {canStepBack ? (
             <TouchableOpacity style={styles.stepBack} onPress={() => setStageBackOpen(true)} activeOpacity={0.7}>
@@ -2519,18 +2519,20 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                           state === "done" && styles.stepDotDone,
                           // วงขั้นปัจจุบันเป็นสีของคนที่ใบงานรอ ตรงกับป้ายสถานะในรายการ
                           state === "now" && [styles.stepDotNow, { backgroundColor: tone.fg, borderColor: tone.fg }],
-                          state === "now" && partsOut.length > 0 && styles.stepDotOut,
+                          state === "now" && partsOut.length > 0 && [styles.stepDotOut, styles.stepDotOutRing],
                           // ขั้น 1 ระหว่างตรวจหน้างาน — ยังไม่ได้ทำ ไม่ติ๊ก ไม่มีคลื่น แค่วงเส้นประสีคนที่ใบรอ
                           state === "loop" && [styles.stepDotLoop, { borderColor: tone.fg }],
                           // ขั้นที่ย้อนมาจาก — วงเส้นประสีส้ม คู่กับกล่อง "ย้อนขั้นมา" ข้างล่าง
                           fromHere && styles.stepDotFrom,
                         ]}
                       >
-                        {state === "now" ? <StepPulse size={30} color={partsOut.length ? colors.danger : tone.fg} /> : null}
+                        {state === "now" ? <StepPulse size={40} color={partsOut.length ? colors.danger : tone.fg} /> : null}
                         {state === "done" ? (
-                          <Ionicons name="checkmark" size={15} color="#fff" />
+                          <Ionicons name="checkmark" size={20} color="#fff" />
                         ) : state === "now" && partsOut.length ? (
                           <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
+                        ) : fromHere ? (
+                          <Ionicons name="arrow-undo" size={17} color={colors.rollbackInk} />
                         ) : state === "loop" ? (
                           <Text style={[styles.stepNum, headingFont, { color: tone.fg }]}>↻</Text>
                         ) : (
@@ -2545,6 +2547,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                             styles.stageLabel,
                             state === "now" && [styles.stageLabelNow, { color: partsOut.length ? colors.dangerInk : tone.fg }],
                             state === "future" && styles.stageLabelFuture,
+                            state === "done" && styles.stageLabelDone,
+                            fromHere && state === "future" && styles.stageLabelFrom,
                           ]}
                         >
                           {row.label}
@@ -2562,7 +2566,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                       */}
                       {fromHere ? (
                         <View style={styles.stepFromPill} accessibilityLabel="ขั้นที่ย้อนมา">
-                          <Text style={styles.stepFromPillText}>↩ ย้อนจากตรงนี้</Text>
+                          <Text style={styles.stepFromPillText}>ย้อนจากตรงนี้{row.actorLabel ? ` (${row.actorLabel})` : ""}</Text>
                         </View>
                       ) : null}
                       {state === "now" && order.workStatus === MANUAL_STATUS ? (
@@ -2587,7 +2591,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                         <View style={[styles.nowPill, { backgroundColor: tone.bg }]}>
                           <Text style={[styles.nowPillText, { color: tone.fg }]}>{row.actorLabel} (ปัจจุบัน)</Text>
                         </View>
-                      ) : showLabel && row.actorLabel && state !== "done" && state !== "skipped" ? (
+                      ) : showLabel && row.actorLabel && state !== "done" && state !== "skipped" && !fromHere ? (
                         <Text style={styles.stageActor}>{row.actorLabel}</Text>
                       ) : null}
                     </TouchableOpacity>
@@ -2651,15 +2655,15 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           <View style={styles.stepsFoot}>
             <View style={[styles.slaChip, partsOut.length ? styles.slaChipBad : urgent ? styles.slaChipBad : styles.slaChipOk]}>
               <Text style={[styles.slaChipText, { color: partsOut.length || urgent ? colors.dangerInk : colors.successInk }]}>
-                {partsOut.length ? "หยุดรออะไหล่ (อะไหล่หมด)" : order.priorityLabel}
+                {partsOut.length ? "หยุดรอจัดหาอะไหล่" : order.priorityLabel}
               </Text>
             </View>
             <Text style={styles.stepsFootText}>
-              อยู่ขั้นนี้มาแล้ว: <Text style={styles.stepsFootStrong}>{stayText(Date.now() - stageEnteredAt(order).getTime())}</Text>
+              ระยะเวลาสะสมในขั้นตอนนี้: <Text style={styles.stepsFootStrong}>{stayText(Date.now() - stageEnteredAt(order).getTime())}</Text>
             </Text>
             <View style={{ flex: 1 }} />
             <Text style={styles.stepsFootText}>
-              ผู้รับผิดชอบตอนนี้: <Text style={styles.stepsFootStrong}>{order.stageActor === "SUPERVISOR"
+              ผู้รับผิดชอบปัจจุบัน: <Text style={styles.stepsFootStrong}>{order.stageActor === "SUPERVISOR"
     ? `${order.supervisors?.map((x) => x.name).join(", ") || "ยังไม่มีคนรับ"} (หัวหน้าภาค)`
     : order.stageActor === "EMPLOYEE"
       ? `${order.assignedToName ?? (order.assignedTeam ? `ทีม${order.assignedTeam}` : "ช่าง")} (ช่าง)`
@@ -4087,6 +4091,13 @@ function stayText(ms: number) {
   if (d) return `${d} วัน${h ? ` ${h} ชม.` : ""}`;
   if (h) return `${h} ชม.${m % 60 ? ` ${m % 60} นาที` : ""}`;
   return `${m % 60} นาที`;
+}
+/** เวลาแบบสั้นในแถบย้อนขั้น — วันนี้ = "11:45 น. (วันนี้)" · วันอื่น = วันที่เต็ม */
+function whenShort(iso: string) {
+  const d = new Date(iso);
+  const day = (x: Date) => x.toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+  if (day(d) !== day(new Date())) return formatDateTime(iso);
+  return `${d.toLocaleTimeString("th-TH", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" })} น. (วันนี้)`;
 }
 /** เลื่อนไปการ์ดประวัติ (เว็บ) — ปุ่มประวัติขั้นตอน / ดูบันทึกเหตุผล */
 function goHistory() {
@@ -11754,19 +11765,19 @@ const styles = StyleSheet.create({
   // (บนเว็บเส้นที่วางแบบ absolute ลอยอยู่เหนือวงที่ไม่ได้ absolute zIndex ช่วยไม่ได้)
   stepLine: {
     position: "absolute",
-    top: 14,
+    top: 19,
     left: "-50%",
     right: "50%",
-    marginLeft: 19,
-    marginRight: 19,
+    marginLeft: 24,
+    marginRight: 24,
     height: 2,
     backgroundColor: colors.border,
   },
   stepLineDone: { backgroundColor: colors.success },
   stepDot: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 2,
     borderColor: colors.border,
     backgroundColor: colors.card,
@@ -11786,13 +11797,16 @@ const styles = StyleSheet.create({
     ...(Platform.OS === "web" ? ({ boxShadow: `0 0 0 4px ${colors.sky200}` } as object) : null),
   },
   stepDotSkipped: { borderStyle: "dashed" },
-  stepNum: { fontSize: 13, lineHeight: 18, fontWeight: "800", color: colors.textFaint },
+  stepNum: { fontSize: 15, lineHeight: 20, fontWeight: "800", color: colors.textFaint },
   stepNumNow: { color: "#fff" },
   stepDotOut: { backgroundColor: colors.danger, borderColor: colors.danger },
-  stepOutPill: { marginTop: 3, backgroundColor: colors.danger, borderRadius: radius.pill, paddingHorizontal: 8 },
-  stepOutPillText: { fontSize: 11, lineHeight: 18, fontWeight: "800", color: "#fff", textAlign: "center" },
+  stepDotOutRing: Platform.OS === "web" ? ({ boxShadow: `0 0 0 5px ${colors.dangerLine}` } as object) : {},
+  stepOutPill: { marginTop: 4, backgroundColor: colors.dangerSoft, borderWidth: 1, borderColor: colors.dangerLine, borderRadius: 6, paddingHorizontal: 7 },
+  stepOutPillText: { fontSize: 11.5, lineHeight: 18, fontWeight: "700", color: colors.dangerInk, textAlign: "center" },
   stepOutEta: { fontSize: 10.5, lineHeight: 15, fontWeight: "700", color: colors.dangerInk, textAlign: "center", marginTop: 2 },
-  stageLabel: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.text, textAlign: "center" },
+  stageLabel: { marginTop: 8, fontSize: 13, lineHeight: 19, color: colors.text, textAlign: "center" },
+  stageLabelDone: { fontWeight: "700", color: colors.text },
+  stageLabelFrom: { fontWeight: "700", color: colors.rollbackInk },
   stageLabelNow: { fontWeight: "800", color: colors.navy },
   stageLabelFuture: { color: colors.textFaint },
   // ขั้นที่ข้ามขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
@@ -11827,15 +11841,17 @@ const styles = StyleSheet.create({
     borderColor: colors.warningBorder,
     backgroundColor: colors.warningSoft,
   },
-  rbIcon: { width: 36, height: 36, borderRadius: 9, backgroundColor: colors.rollback, alignItems: "center", justifyContent: "center" },
-  rbTitle: { fontSize: 15, lineHeight: 22, fontWeight: "800", color: colors.warningInk },
+  rbIcon: { width: 32, height: 32, borderRadius: 8, backgroundColor: colors.warning, alignItems: "center", justifyContent: "center" },
+  rbTitle: { fontSize: 14.5, lineHeight: 21, fontWeight: "800", color: colors.warningInk },
   rbText: { fontSize: 13, lineHeight: 20, color: colors.warningInk },
   rbStrong: { fontWeight: "700" },
   rbStatus: { borderRadius: 8, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: colors.warningTint, paddingHorizontal: 10, paddingVertical: 4 },
   rbStatusText: { fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.warningInk },
   rbLink: { borderRadius: 8, borderWidth: 1, borderColor: colors.warningBorder, backgroundColor: colors.card, paddingHorizontal: 12, paddingVertical: 6 },
   rbLinkText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
-  stepsTitle: { fontSize: 18, lineHeight: 26, fontWeight: "800", color: colors.text },
+  stepsTitle: { fontSize: 20, lineHeight: 28, fontWeight: "800", color: colors.text },
+  stepsTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
+  stepsSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   stepPill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primaryLine },
   stepPillBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
   stepPillText: { fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.primaryInk },
@@ -12072,9 +12088,9 @@ const styles = StyleSheet.create({
   keepText: { fontSize: 12.5, color: colors.text },
   keepHint: { fontSize: 12, color: colors.textMuted },
   badgeBack: { backgroundColor: colors.rollback },
-  stepDotFrom: { borderStyle: "dashed", borderColor: colors.rollback, borderWidth: 2 },
-  stepFromPill: { marginTop: 3, borderRadius: 6, paddingHorizontal: 5, backgroundColor: colors.rollbackSoft },
-  stepFromPillText: { fontSize: 10.5, fontWeight: "700", color: colors.rollbackInk },
+  stepDotFrom: { borderStyle: "dashed", borderColor: colors.rollback, borderWidth: 2, backgroundColor: colors.warningSoft },
+  stepFromPill: { marginTop: 4, borderRadius: 6, paddingHorizontal: 7, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
+  stepFromPillText: { fontSize: 11.5, lineHeight: 18, fontWeight: "700", color: colors.rollbackInk },
   // ขั้น 1 ระหว่างตรวจหน้างาน — วงเส้นประสีคนที่ใบรอ ไม่ทึบ: ยังไม่ได้ทำ แต่ใบกำลังจะวนกลับมาที่นี่
   stepDotLoop: { borderStyle: "dashed", backgroundColor: colors.card },
   // ── รอบตรวจหน้างาน (เหนือแถบ) · ขั้นย่อยโอนคลังอื่น (ใต้แถบ) — แบบที่ตกลง ต.ค. 69 รอบสอง ──
