@@ -321,6 +321,11 @@ interface WorkOrder {
   crossTeam?: { ownTeam: string; assignedTeam: string; watchers: string[] } | null;
   /** คนเปิดเป็นหัวหน้าภาคของทีมที่รับงานข้ามทีมมา — ดูได้อย่างเดียว (เซิร์ฟเวอร์กันอีกชั้น) */
   viewOnly?: boolean;
+  /**
+   * หัวหน้าภาคของทีมที่รับงานข้ามทีม ปิดใบงานได้ตอนทีมอยู่หน้างาน (เจ้าของงานขอ 6 พ.ย. 69) — ปุ่มอื่นยังดูได้อย่างเดียว
+   * เซิร์ฟเวอร์ตัดสินขั้นเอง (CROSS_CLOSE_STAGES) หน้าจอไม่เดาซ้ำ
+   */
+  crossClose?: boolean;
   /** หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ — ยังไม่ตอบ / ตอบแล้วรอรับทราบ (ขั้นตอนไม่เปลี่ยน) */
   adminReview?: AdminReviewInfo | null;
   stageActorLabel: string | null;
@@ -1851,9 +1856,11 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
 
   // ทางจบใบงาน — หัวหน้าภาค/แอดมินเท่านั้น (Admin Spare Part ถูกตัด user ทิ้งแล้ว · ดูในฐานะ ไม่ขึ้น)
   const canEnd =
-    (user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
-    !user?.viewAs &&
-    !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status);
+    ((user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
+      !user?.viewAs &&
+      !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status)) ||
+    // ทีมที่รับงานข้ามทีม: หน้าจอนี้เป็นแบบดูอย่างเดียว (user = null) แต่ปุ่มปิดใบงานต้องขึ้น — ใช้ me ตรง ๆ
+    (!!order.crossClose && me?.role === "SUPERVISOR" && !me?.viewAs);
   /**
    * ใบ IT ที่แก้จากระยะไกลได้ — แอดมิน และหัวหน้าภาคที่ดูแลงาน IT · ขั้นตามที่เซิร์ฟเวอร์ส่งมา (ยังไม่มีช่างถือใบ ไม่มีของ/เงินเดิน)
    * ใบที่เบิกของออกจากคลังแล้วเซิร์ฟเวอร์ตอบเหตุผลเองตอนกด (ปุ่มไม่ซ่อน — คนกดจะได้รู้ว่าต้องคืนคลังก่อน)
@@ -2655,12 +2662,14 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                 {order.viewOnly
                   ? `ทีมที่คุณดูแลรับงานนี้มา — ใบยังเป็นของหัวหน้าภาค${
                       order.supervisors?.length ? ` ${order.supervisors.map((s) => s.name).join(", ")}` : "เจ้าของพื้นที่"
-                    } (ปล่อยงาน/แก้ไข) คุณดูได้อย่างเดียว`
+                    } (ปล่อยงาน/แก้ไข) คุณดูได้อย่างเดียว${
+                      order.crossClose ? " · ปิดใบงานได้ที่ “เครื่องมือเพิ่มเติม” (ตอนทีมคุณอยู่หน้างาน)" : ""
+                    }`
                   : `ช่างปิดงานได้ทั้ง ${order.crossTeam.assignedTeam} และ ${order.crossTeam.ownTeam}`}
               </Text>
               {!order.viewOnly && order.crossTeam.watchers.length ? (
                 <Text style={styles.sentBackMeta}>
-                  หัวหน้าภาค {order.crossTeam.watchers.join(", ")} (ดูแล {order.crossTeam.assignedTeam}) เห็นใบนี้ด้วย ดูได้อย่างเดียว
+                  หัวหน้าภาค {order.crossTeam.watchers.join(", ")} (ดูแล {order.crossTeam.assignedTeam}) เห็นใบนี้ด้วย · ปิดใบงานได้ตอนทีมนั้นอยู่หน้างาน
                 </Text>
               ) : null}
             </View>
