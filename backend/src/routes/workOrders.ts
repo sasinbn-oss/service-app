@@ -8354,7 +8354,9 @@ export async function arriveByCheckIn(userId: number, branchId: number, note: st
       logs: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30, select: { action: true } },
     },
   });
-  const mine = open.filter((w) => canTouch(w, { coverage, id: userId }) && !onSiteOf(w.logs));
+  // ใบที่ "ทีมของคนรายงานตัว" รับไว้เท่านั้น — ไม่ใช้ canTouch ตรง ๆ เพราะทีมประจำสาขาปิดใบที่จ่ายข้ามให้ทีมอื่นได้ด้วย
+  // ช่างทีมประจำมายืนที่ร้านไม่ได้แปลว่าทีมที่รับงานถึงแล้ว (เทสต์ arrive-split ข้อใบทีมอื่น)
+  const mine = open.filter((w) => (w.assignedToId === userId || covers(coverage, w.assignedTeam)) && !onSiteOf(w.logs));
   const done: string[] = [];
   for (const w of mine) {
     const ok = await prisma.$transaction(async (tx) => {
