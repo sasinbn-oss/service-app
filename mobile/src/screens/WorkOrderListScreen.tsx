@@ -664,7 +664,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const table = width >= 1024;
   const [rows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
-  // ตัวเลขแท็บรอลูกค้าจ่ายเงินจากเซิร์ฟเวอร์ (ทุกใบในขอบเขต) — ป้ายบนแท็บและแถบบรรทัดเดียวในกล่องงาน
+  // ตัวเลขแท็บรอลูกค้าจ่ายเงินจากเซิร์ฟเวอร์ (ทุกใบในขอบเขต) — ป้ายบนแท็บกับชิป "รอจ่ายเกิน 3 วัน" ในกล่องงาน
   const [payTab, setPayTab] = useState<PayTabSummary | null>(null);
   // นาฬิกาเซิร์ฟเวอร์ + เวลาปิดนัดของคำตอบที่อยู่บนจอ — ป้ายเวลาปิดนัดในแถวและแถบบนสุดของกล่องงานเดินต่อจากค่านี้
   const [clock, setClock] = useState<{ serverNow?: string; cutoff?: Cutoff }>({});
@@ -1064,7 +1064,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       navigation.setParams({ payment: undefined, ...(next === "INBOX" ? { inbox: true } : {}) });
     }
   }
-  /** ไปแท็บรอลูกค้าจ่ายเงินที่ชิปหนึ่ง — แถบในกล่องงาน ("ดูในแท็บ") และชิปต้องรีบดู "รอจ่ายเกิน 3 วัน" */
+  /** ไปแท็บรอลูกค้าจ่ายเงินที่ชิปหนึ่ง — ชิปต้องรีบดู "รอจ่ายเกิน 3 วัน" ในกล่องงาน */
   function goPayTab(chip: PayChip) {
     chooseFilter("AWAITING_PAYMENT");
     setPayChip(chip);
@@ -1560,8 +1560,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           cutoff={clock.cutoff}
           role={user?.role ?? null}
           adminCut={adminCut}
-          payTab={payTabOn ? payTab : null}
-          onGoPay={() => goPayTab("all")}
           onOpen={(id) => navigation.navigate("WorkOrderDetail", { id })}
         />
       ) : null}
@@ -2477,8 +2475,6 @@ function InboxAttention({
   cutoff,
   role,
   adminCut,
-  payTab,
-  onGoPay,
   onOpen,
 }: {
   /** ใบที่เห็นอยู่ในแท็บ/ตัวกรองนี้ — หัวข้อของแอดมิน (ไม่มีคนรับ · เลยนัด) */
@@ -2490,9 +2486,6 @@ function InboxAttention({
   role: string | null;
   /** แอดมินที่ไม่ใช่ Admin Spare Part ในกล่องงาน — หัวข้อ "ขอนัดด่วน" ของแอดมิน */
   adminCut: boolean;
-  /** ตัวเลขแท็บรอลูกค้าจ่ายเงิน (คนที่มีแท็บ) — แถบบรรทัดเดียว · null = ไม่มีแถบ */
-  payTab: PayTabSummary | null;
-  onGoPay: () => void;
   onOpen: (id: number) => void;
 }) {
   // ตั้งต้นย่อทุกหัวข้อ — ดู openAttn · state แค่ให้วาดใหม่ตอนกด ค่าจริงอยู่ที่ openAttn
@@ -2540,18 +2533,10 @@ function InboxAttention({
       });
   }
   /**
-   * รอลูกค้าจ่ายเงิน — แถบบรรทัดเดียว + ปุ่มไปแท็บ "รอลูกค้าจ่ายเงิน" (เจ้าของงานเลือก 5 พ.ย. 69 · ตัวอย่าง paytab ข้อ 2)
-   * เดิมเป็นหัวข้อที่มีแถวทุกใบ (หลายสิบใบดันใบอื่นลงไปพ้นจอ) — รายการเต็มพร้อมปุ่มตามลูกค้าอยู่ที่แท็บแล้ว
-   * ตัวเลขชุดเดียวกับป้ายบนแท็บ (payTab ของเซิร์ฟเวอร์ ทั้งขอบเขต ไม่ตามคำค้น/ตัวกรอง) · บรรทัดเดียวจึงไม่มีปุ่มย่อ/ขยาย
-   * แบบ "ไม่มีคนรับ"/"เลยนัด" (ไม่มีแถวให้ย่อ) · ใบยังอยู่ในรายการข้างล่างตามปกติ แบบหัวข้ออื่นของกล่องงาน
+   * รอลูกค้าจ่ายเงินไม่มีหัวข้อในกล่องงาน (เจ้าของงานเอาออก 6 พ.ย. 69) — ตัวเลขชุดเดียวกันอยู่บนแท็บ "รอลูกค้าจ่ายเงิน"
+   * กับชิป "รอจ่ายเกิน 3 วัน" ในหน้าเดียวกันแล้ว แถบที่สามบอกเลขซ้ำแค่ดันรายการลง · ใบยังอยู่ในรายการข้างล่างตามปกติ
    */
-  const pay = payTab && payTab.total > 0 ? payTab : null;
-  const payTitle = pay
-    ? [`รอลูกค้าจ่ายเงิน ${pay.total}`, pay.over ? `เกิน ${pay.alertDays} วัน ${pay.over}` : null, pay.never ? `ยังไม่เคยตาม ${pay.never}` : null]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
-  if (!groups.length && !sup.length && !asks && !pay) return null;
+  if (!groups.length && !sup.length && !asks) return null;
   return (
     <View style={{ gap: spacing.sm, marginTop: spacing.sm, marginHorizontal: spacing.lg }}>
       {sup.length ? <CutoffBanners groups={sup} withRows onOpen={onOpen} /> : null}
@@ -2607,17 +2592,6 @@ function InboxAttention({
         </View>
         );
       })}
-      {pay ? (
-        <View style={[styles.attn, styles.attnPay, styles.payBar]} accessibilityLabel={`หัวข้อ ${payTitle}`}>
-          <View style={{ flex: 1, minWidth: 220, gap: 2 }}>
-            <Text style={[styles.attnTitle, styles.attnTitlePay]}>{payTitle}</Text>
-            <Text style={styles.attnHint}>รายการเต็มย้ายไปอยู่แท็บด้านบนแล้ว กล่องงานจะได้ไม่ยาว</Text>
-          </View>
-          <TouchableOpacity style={styles.payGo} onPress={onGoPay} accessibilityLabel="ดูในแท็บ รอลูกค้าจ่ายเงิน">
-            <Text style={styles.payGoText}>ดูในแท็บ รอลูกค้าจ่ายเงิน ›</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -2717,12 +2691,6 @@ const styles = StyleSheet.create({
   attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
   attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
   attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
-  // รอลูกค้าจ่ายเงิน — ส้มแบบป้าย "รอคนนอก" (ไม่ใช่แดงของปัญหา) · แถวที่เกินเส้นแดงในตัว
-  attnPay: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
-  attnTitlePay: { color: colors.warningInk },
-  payBar: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.md },
-  payGo: { minHeight: 42, paddingHorizontal: 16, borderRadius: 10, backgroundColor: colors.navyFill, alignItems: "center", justifyContent: "center" },
-  payGoText: { color: "#fff", fontSize: 13.5, fontWeight: "700" },
   payHead: { paddingHorizontal: spacing.md },
   payMark: { paddingHorizontal: spacing.md, paddingBottom: 6 },
   payChips: { paddingTop: spacing.md, marginHorizontal: spacing.lg, gap: 4 },
