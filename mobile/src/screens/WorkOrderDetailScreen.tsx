@@ -2531,7 +2531,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                         ) : state === "now" && partsOut.length ? (
                           <Text style={[styles.stepNum, headingFont, styles.stepNumNow]}>!</Text>
                         ) : fromHere ? (
-                          <Ionicons name="arrow-undo" size={17} color={colors.rollbackInk} />
+                          // สัญลักษณ์ย้อนขั้นตามแบบที่เจ้าของงานเลือก (พ.ย. 69): ลูกศรย้อนเส้นบางสีเหลืองในวงเส้นประเหลือง
+                          <Ionicons name="return-up-back-outline" size={19} color={colors.warning} />
                         ) : state === "loop" ? (
                           <Text style={[styles.stepNum, headingFont, { color: tone.fg }]}>↻</Text>
                         ) : (
@@ -11837,7 +11838,7 @@ const styles = StyleSheet.create({
   stepOutEta: { fontSize: 10.5, lineHeight: 15, fontWeight: "700", color: colors.dangerInk, textAlign: "center", marginTop: 2 },
   stageLabel: { marginTop: 8, fontSize: 13, lineHeight: 19, color: colors.text, textAlign: "center" },
   stageLabelDone: { fontWeight: "700", color: colors.text },
-  stageLabelFrom: { fontWeight: "700", color: colors.rollbackInk },
+  stageLabelFrom: { fontWeight: "600", color: colors.text },
   stageLabelNow: { fontWeight: "800", color: colors.navy },
   stageLabelFuture: { color: colors.textFaint },
   // ขั้นที่ข้ามขีดฆ่าชื่อ ให้แยกจาก "ยังไม่ถึง" ได้ — เทสต์ stageorder อ่านเส้นนี้ด้วย
@@ -12133,9 +12134,9 @@ const styles = StyleSheet.create({
   keepText: { fontSize: 12.5, color: colors.text },
   keepHint: { fontSize: 12, color: colors.textMuted },
   badgeBack: { backgroundColor: colors.rollback },
-  stepDotFrom: { borderStyle: "dashed", borderColor: colors.rollback, borderWidth: 2, backgroundColor: colors.warningSoft },
-  stepFromPill: { marginTop: 4, borderRadius: 6, paddingHorizontal: 7, backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: colors.warningBorder },
-  stepFromPillText: { fontSize: 11.5, lineHeight: 18, fontWeight: "700", color: colors.rollbackInk },
+  stepDotFrom: { borderStyle: "dashed", borderColor: colors.warning, borderWidth: 2, backgroundColor: colors.warningSoft },
+  stepFromPill: { marginTop: 4, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 1, backgroundColor: colors.warningTint },
+  stepFromPillText: { fontSize: 11.5, lineHeight: 18, fontWeight: "700", color: colors.warningInk },
   // ขั้น 1 ระหว่างตรวจหน้างาน — วงเส้นประสีคนที่ใบรอ ไม่ทึบ: ยังไม่ได้ทำ แต่ใบกำลังจะวนกลับมาที่นี่
   stepDotLoop: { borderStyle: "dashed", backgroundColor: colors.card },
   // ── รอบตรวจหน้างาน (เหนือแถบ) · ขั้นย่อยโอนคลังอื่น (ใต้แถบ) — แบบที่ตกลง ต.ค. 69 รอบสอง ──
