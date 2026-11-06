@@ -3106,6 +3106,7 @@ async function bellItems(req: AuthRequest) {
       status: true,
       priority: true,
       createdAt: true,
+      holdUntil: true,
       branch: { select: { code: true, name: true } },
       seens: { where: { userId: me }, select: { seenAt: true } },
     },
@@ -3118,8 +3119,11 @@ async function bellItems(req: AuthRequest) {
       })
     : [];
   const since = new Map(moves.map((m) => [m.workOrderId, m._max.createdAt]));
+  // ใบที่พ้นระงับชั่วคราวกลับเข้ากล่องงานโดยไม่มีการเดินขั้น — นับวันที่กลับมาเป็นวันที่เข้ากล่อง ไม่งั้นกระดิ่งไม่บอก
+  const cameBack = (r: (typeof rows)[number]) => (r.holdUntil && r.holdUntil <= new Date() ? r.holdUntil : null);
+  const latest = (a: Date, b: Date | null) => (b && b > a ? b : a);
   return rows
-    .map((r) => ({ r, at: since.get(r.id) ?? r.createdAt, seen: r.seens[0]?.seenAt ?? null }))
+    .map((r) => ({ r, at: latest(since.get(r.id) ?? r.createdAt, cameBack(r)), seen: r.seens[0]?.seenAt ?? null }))
     .filter((x) => x.at > bellSince && (!x.seen || x.seen < x.at))
     .sort((a, b) => b.at.getTime() - a.at.getTime())
     .map(({ r, at }) => ({
@@ -3141,16 +3145,13 @@ router.get("/bell", requireAuth, async (req: AuthRequest, res) => {
 router.post("/bell/seen-all", requireAuth, async (req: AuthRequest, res) => {
   if (req.auth!.viewAs) return res.status(403).json({ error: "กำลังดูในฐานะคนอื่น — ทำเครื่องหมายแทนไม่ได้" });
   const items = await bellItems(req);
-  const now = new Date();
-  await prisma.$transaction(
-    items.map((it) =>
-      prisma.workOrderSeen.upsert({
-        where: { workOrderId_userId: { workOrderId: it.id, userId: req.auth!.userId } },
-        create: { workOrderId: it.id, userId: req.auth!.userId, seenAt: now },
-        update: { seenAt: now },
-      })
-    )
-  );
+  const me = req.auth!.userId;
+  const ids = items.map((it) => it.id);
+  // ลบแล้วสร้างใหม่สองคำสั่ง แทน upsert ทีละใบ — กล่องงานแอดมินมีได้เป็นร้อยใบ ทีละใบคือร้อยรอบไปกลับข้าม region
+  await prisma.$transaction([
+    prisma.workOrderSeen.deleteMany({ where: { userId: me, workOrderId: { in: ids } } }),
+    prisma.workOrderSeen.createMany({ data: ids.map((workOrderId) => ({ workOrderId, userId: me })) }),
+  ]);
   res.json({ count: 0, items: [] });
 });
 
@@ -4374,12 +4375,16 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   if (d.row.deletedAt) return res.status(404).json({ error: TRASHED_TEXT, trashed: true });
   if (await blockedForViewer(req, res, d.row, viewer)) return;
   // เปิดดูแล้ว — กระดิ่งงานเข้าใหม่ไม่นับใบนี้จนกว่าจะเข้าขั้นถัดไป (ตัวอย่าง พ.ย. 69) · ดูในฐานะคนอื่นไม่นับว่าคนนั้นเปิดดู
+  // ไม่รอผล — ฐานข้อมูลอยู่คนละ region การเขียนนี้เพิ่มเวลาเปิดทุกใบอีกหนึ่งรอบ ทั้งที่หน้าใบงานไม่ได้ใช้ค่านี้
+  // พลาดก็แค่กระดิ่งยังนับใบนี้ (เปิดอีกครั้งก็หาย) ไม่ใช่เหตุให้เปิดใบงานไม่ได้
   if (!req.auth!.viewAs) {
-    await prisma.workOrderSeen.upsert({
-      where: { workOrderId_userId: { workOrderId: id, userId: req.auth!.userId } },
-      create: { workOrderId: id, userId: req.auth!.userId },
-      update: { seenAt: new Date() },
-    });
+    prisma.workOrderSeen
+      .upsert({
+        where: { workOrderId_userId: { workOrderId: id, userId: req.auth!.userId } },
+        create: { workOrderId: id, userId: req.auth!.userId },
+        update: { seenAt: new Date() },
+      })
+      .catch((e) => console.error("[bell] บันทึกการเปิดดูไม่ได้", id, e));
   }
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
   const body = detailBody(d, { phones: req.auth!.role === "ADMIN" });
