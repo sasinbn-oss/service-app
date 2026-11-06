@@ -1535,6 +1535,9 @@ function listShape(
      * ขั้นของหัวหน้าภาคอยู่ใน waitingOnSupervisors อยู่แล้ว · null = ใบไม่ใช่ IT หรือยังไม่ได้เลือกคน
      */
     itLead: itLead ? { id: itLead.id, name: itLead.name } : null,
+    // ประเภทงาน + ภาคของสาขา — กล่องงานแยก "งาน CM | งาน IT" และชิปภาคในส่วนงาน IT (หัวหน้า IT · แอดมิน) กรองที่หน้าจอ
+    jobType: w.jobType,
+    branchRegion: w.branch.region,
     adminReview: reviewShape(w.adminReviews[0]),
     // จ่ายข้ามทีม — ทีมประจำสาขาที่ถูกข้าม (รายการติด "ข้ามทีม" ต่อชื่อทีม) · ไม่ข้าม = null
     crossFrom: isCrossTeam(w) ? ownTeamOf(w) : null,

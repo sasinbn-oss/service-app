@@ -235,7 +235,11 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
       else if (isAdmin && r.adminReview && !r.adminReview.answered) pin(REVIEW_GROUP, "review", r);
       else if (!isAdmin && r.adminReview?.answered && r.stageActor !== "SUPERVISOR") pin(ANSWER_GROUP, "answer", r);
       else {
-        const k = stageName(r.statusLabel);
+        /**
+         * หัวหน้าภาคที่ดูแลงาน IT: ใบ IT แยกกลุ่ม "งาน IT · <ขั้น>" ไม่ปนกับงาน CM ของภาคตัวเองในขั้นเดียวกัน
+         * ใบ IT ขั้นของแอดมิน (ทำแทนได้) ก็อยู่ในกลุ่มแบบนี้ ปุ่มบนการ์ดเปิดฟอร์มของขั้นนั้นเหมือนแอดมิน
+         */
+        const k = user?.itLead && !isAdmin && r.jobType === "IT" ? `งาน IT · ${stageName(r.statusLabel)}` : stageName(r.statusLabel);
         by.set(k, [...(by.get(k) ?? []), r]);
       }
     }
@@ -284,7 +288,7 @@ export default function MyQueue({ onOpen, onSearchAll }: Props) {
         }))
         .sort((a, b) => Math.max(...b.list.map(score)) - Math.max(...a.list.map(score))),
     ];
-  }, [rows, isAdmin, cut]);
+  }, [rows, isAdmin, cut, user?.itLead]);
   /**
    * แถบบนสุดของหัวหน้าภาค ("รอนัดวัน" ช่วง 3 ชม. ก่อนปิด · "ออกงานวันนี้") — ตัวสร้างเดียวกับกล่องงาน สองหน้าจึงนับตรงกันทุกตัวอักษร
    * นับทุกใบในกล่อง ไม่ตามคำค้น: ค้นหาใบหนึ่งอยู่ไม่ได้แปลว่าใบรอนัดอื่นหายไป
@@ -795,7 +799,9 @@ const TONE: Record<ChipTone, { bg: string; fg: string }> = {
 const flagsOf = (t: Topic) => t.chips.filter((c) => c.flag && c.n > 0);
 /** หัวข้อที่มีเรื่องแดงทึบ (ขอนัดด่วน · รอจ่ายเกินกำหนด) — การ์ดขอบแดง ตัวเลขแดง */
 const hotTopic = (t: Topic) => t.chips.some((c) => c.tone === "red" && c.n > 0);
-const stepLabel = (t: Topic) => (t.id === "first" ? "ก่อนทุกขั้น" : t.step ? `ขั้นที่ ${t.step} ของแอดมิน` : "นอกขั้นข้างบน");
+// งาน IT ไม่ใช่ขั้นเดียว — เป็นใบ IT ทุกขั้นของแอดมินรวมกัน (แยกจากงาน CM · เจ้าของงานแก้ 6 พ.ย. 69)
+const stepLabel = (t: Topic) =>
+  t.id === "first" ? "ก่อนทุกขั้น" : t.id === "it" ? "ใบงาน IT ทุกขั้น" : t.step ? `ขั้นที่ ${t.step} ของแอดมิน` : "นอกขั้นข้างบน";
 const stuckText = (r: WorkOrderRow) => {
   const d = rowDays(r);
   return d < 1 ? "เข้าขั้นนี้วันนี้" : `ค้าง ${d} วัน`;
@@ -879,8 +885,9 @@ function AdminTopics(p: AdminTopicsProps) {
   const onFollowed = (id: number, pw: WorkOrderRow["payWait"]) =>
     p.setRows((rs) => (rs ? rs.map((r) => (r.id === id ? { ...r, payWait: pw } : r)) : rs));
 
+  // ใบ IT ที่รอลูกค้าจ่ายเงินในหัวข้องาน IT ได้แถวรอเงินแบบเดียวกัน (ปุ่มตามลูกค้า/แนบบิล)
   const rowOf = (t: Topic, r: WorkOrderRow, wide: boolean) =>
-    t.id === "AWAITING_PAYMENT" && r.payWait ? (
+    (t.id === "AWAITING_PAYMENT" || (t.id === "it" && r.status === "AWAITING_PAYMENT")) && r.payWait ? (
       <PaymentRow
         key={r.id}
         row={r as PayRow}
@@ -972,7 +979,7 @@ function AdminTopics(p: AdminTopicsProps) {
               accessibilityLabel={`หัวข้อ ${t.name} ${t.rows.length} ใบ`}
             >
               <View style={ad.cardTop}>
-                <Text style={ad.cardStep}>{t.step ? `ขั้น ${t.step}` : "อื่น ๆ"}</Text>
+                <Text style={ad.cardStep}>{t.id === "it" ? "ทุกขั้น" : t.step ? `ขั้น ${t.step}` : "อื่น ๆ"}</Text>
                 <View style={{ flex: 1 }} />
                 <Text style={[ad.cardN, headingFont, hot && { color: colors.dangerInk }]}>{t.rows.length}</Text>
               </View>

@@ -24,7 +24,7 @@ export const TOPIC_STAGES = ["INSPECT_CONFIRM", "PARTS_SOURCING", "AWAITING_QUOT
 /** ขั้นที่มีวันนัด/วันตรวจอยู่แล้ว — เรียงวันใกล้สุดก่อน (ร้านที่รอพรุ่งนี้ต้องได้โทรก่อน) ไม่ใช่ด่วน/ค้างนาน */
 const DATE_STAGES = ["INSPECT_CONFIRM", "PARTS_REQUESTED", "AWAITING_CONFIRM"];
 
-export type TopicId = "first" | "review" | (typeof TOPIC_STAGES)[number] | "other";
+export type TopicId = "first" | "review" | (typeof TOPIC_STAGES)[number] | "it" | "other";
 /** ชนิดของแถวในหัวข้อ "ต้องทำก่อนวันนี้" — ปุ่มบนแถวต่างกัน (ขอนัดด่วน: ตอบกลับ/แก้เป็นงานด่วน · เลยนัด: เลื่อนวันนัด) */
 export type RowKind = "ask" | "past" | "review" | "stage";
 export type ChipTone = "red" | "redSoft" | "amber" | "plain";
@@ -98,6 +98,12 @@ export function buildTopics(rows: WorkOrderRow[], cut: AdminCutoffGroups | null,
   const review: WorkOrderRow[] = [];
   const byStage = new Map<string, WorkOrderRow[]>();
   const other: WorkOrderRow[] = [];
+  /**
+   * ใบงาน IT แยกหัวข้อของตัวเอง (เจ้าของงานแก้ 6 พ.ย. 69 — "แยกหัวข้อในงานของ admin") ไม่ปนกับขั้นของงาน CM
+   * ยกเว้น "ต้องทำก่อนวันนี้" ที่ยังนับทุกใบ (ขอนัดด่วน/เลยนัดต้องเห็นก่อนเสมอ ไม่ว่าเป็นงานอะไร)
+   * ใบ IT ยังอยู่ในกล่องแอดมินครบ — แอดมินยังทำขั้นของตัวเองได้ หัวหน้าภาคที่ดูแลงาน IT ก็ทำได้ด้วย
+   */
+  const it: WorkOrderRow[] = [];
   for (const r of rows) {
     if (askRank.has(r.id)) {
       kind.set(r.id, "ask");
@@ -105,6 +111,10 @@ export function buildTopics(rows: WorkOrderRow[], cut: AdminCutoffGroups | null,
     } else if (pastIds.has(r.id)) {
       kind.set(r.id, "past");
       first.push(r);
+    } else if (r.jobType === "IT") {
+      // คำขอตรวจสอบของใบ IT ยังได้ปุ่มตอบกลับ (kind review) แค่อยู่หัวข้องาน IT
+      if (r.adminReview && !r.adminReview.answered) kind.set(r.id, "review");
+      it.push(r);
     } else if (r.adminReview && !r.adminReview.answered) {
       kind.set(r.id, "review");
       review.push(r);
@@ -270,6 +280,34 @@ export function buildTopics(rows: WorkOrderRow[], cut: AdminCutoffGroups | null,
         rows: t.list,
         chips: [chip("today", "นัดวันนี้", "redSoft", true, onDay(today)), chip("tmr", "นัดพรุ่งนี้", "amber", true, onDay(tomorrow))],
         oldest: nearest(t.list, "นัดใกล้สุด:"),
+      })
+    );
+  }
+  // งาน IT — หลังขั้นของสายงาน ก่อน "อื่น ๆ" · ชิปตามขั้นที่มีใบ IT (ป้ายขั้นเดียวกับทุกที่) · ขึ้นเฉพาะตอนมีใบ แบบ "อื่น ๆ"
+  if (it.length) {
+    const order = (s: string) => {
+      const i = TOPIC_STAGES.indexOf(s as (typeof TOPIC_STAGES)[number]);
+      return i < 0 ? TOPIC_STAGES.length : i;
+    };
+    it.sort((a, b) => order(a.status) - order(b.status) || byUrgentOld(a, b));
+    const stages = [...new Set(it.map((r) => r.status))];
+    topics.push(
+      make({
+        id: "it",
+        step: "IT",
+        name: "งาน IT",
+        what: "ใบงาน IT ทุกขั้นที่รอแอดมิน — หัวหน้าภาคที่ดูแลงาน IT ทำขั้นเหล่านี้ได้ด้วย",
+        infoHead: "ขั้นที่ค้าง",
+        sortText: "ตามลำดับขั้น แล้วด่วน/ค้างนานสุด",
+        rows: it,
+        chips: [
+          ...stages.map((st) =>
+            chip(`st:${st}`, nameOf(st) || stageNameOf(it.find((r) => r.status === st)?.statusLabel), "plain", false, (r) => r.status === st)
+          ),
+          chip("orphan", "ไม่มีคนรับ", "amber", true, (r) => !!r.orphan),
+          chip("stale", `ค้างเกิน ${STALE_DAYS} วัน`, "amber", true, stale),
+        ],
+        oldest: longest(it),
       })
     );
   }

@@ -1182,6 +1182,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
      * ดูในฐานะ/Admin Spare Part ไม่มี user ในหน้านี้ จึงไม่เปิดอะไร
      */
     else if (want === "stage" && user?.role === "ADMIN" && ADMIN_FORM_STAGES.includes(order.status) && myTurn(order)) setStageOpen(true);
+    // หัวหน้าภาคที่ดูแลงาน IT กดปุ่มขั้นของแอดมินบนการ์ดใบ IT — เปิดฟอร์มของขั้นนั้นเลยเหมือนแอดมิน
+    else if (want === "stage" && itLeadActs(user, order) && ADMIN_FORM_STAGES.includes(order.status)) setStageOpen(true);
     else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
     else if (want === "reschedule" && reschedulable(order)) openReschedule();
   }, [order]);
