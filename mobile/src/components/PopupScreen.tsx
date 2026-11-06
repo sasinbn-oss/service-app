@@ -80,6 +80,7 @@ export default function PopupScreen({
   instant = false,
   head,
   foot,
+  overlay,
   children,
 }: {
   title: React.ReactNode;
@@ -91,6 +92,8 @@ export default function PopupScreen({
   head?: React.ReactNode;
   /** แถบท้ายหน้าต่างที่อยู่กับที่ ไม่เลื่อนตามเนื้อหา — ปุ่มของขั้นปัจจุบันเห็นได้ตลอดไม่ต้องเลื่อนหา */
   foot?: React.ReactNode;
+  /** ลอยทับมุมกรอบ ไม่เลื่อนตามเนื้อหา — ปุ่ม/หน้าต่างแชทใบงาน (พ.ย. 69) */
+  overlay?: React.ReactNode;
   right?: React.ReactNode;
   backLabel?: string;
   width?: number;
@@ -297,6 +300,7 @@ export default function PopupScreen({
                 />
               ) : null}
             </Animated.View>
+            {overlay}
             {panes.map((p) => (
               <PaneView key={p.key} pane={p} width={cardW} onGone={remove} onSwiped={markGone} />
             ))}

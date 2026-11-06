@@ -165,6 +165,7 @@ import {
   uploadObject,
   SIGNED_URL_TTL_SECONDS,
 } from "../storage/fileStore";
+import { imageUpload, storeImage, thumbnailUrl } from "../storage/imageUpload";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
@@ -2441,6 +2442,181 @@ function payTabSummary(waits: { over: boolean; follows: number; alertDays: numbe
     alertDays: PAYMENT_WAIT_ALERT_DAYS,
   };
 }
+
+/**
+ * แชทในใบงาน (พ.ย. 69 · เจ้าของงานขอ "ช่างหรือหัวหน้าภาคสงสัยในใบงานนั้น เปิดแชทผ่านใบงานได้เลย แอดมินตอบได้เลย")
+ *
+ * คุยได้ทุกคนที่เปิดใบนั้นได้ (blockedForViewer — กติกาเดียวกับหน้าใบงาน) · ข้อความไม่ใช่การเดินขั้น จึงไม่ลงประวัติ
+ * ตัวเลขยังไม่อ่าน = ข้อความของคนอื่นที่ใหม่กว่าที่ตัวเองอ่านล่าสุด (WorkOrderChatRead) — เปิดแชทแล้วนับว่าอ่าน
+ */
+const chatSchema = z.object({ body: z.string().trim().max(2000, "ข้อความยาวเกิน 2,000 ตัวอักษร").default("") });
+/** ลบข้อความของตัวเองได้ภายในเท่านี้หลังส่ง (เจ้าของงานเลือก 5 นาที) — นานกว่านี้อีกฝั่งอ่านแล้ว ลบทีหลังทำให้คุยกันไม่รู้เรื่อง */
+const CHAT_DELETE_MS = 5 * 60_000;
+/** ใบปิด/ยกเลิกแล้ว — อ่านแชทย้อนหลังได้ ส่งไม่ได้ (เจ้าของงานเลือก: มีเรื่องต่อให้เปิดใบใหม่) */
+const CHAT_CLOSED = ["DONE", "CANCELLED"];
+
+type ChatMsg = {
+  id: number;
+  body: string;
+  createdAt: Date;
+  userId: number;
+  imageKey: string | null;
+  imageThumb?: Uint8Array | null;
+  deletedAt: Date | null;
+  user: { name: string; role: string };
+};
+const CHAT_SELECT = {
+  id: true,
+  body: true,
+  createdAt: true,
+  userId: true,
+  imageKey: true,
+  deletedAt: true,
+  user: { select: { name: true, role: true } },
+} as const;
+
+/** แถวส่งให้แอป — ข้อความที่ลบแล้วไม่ส่งเนื้อหา/รูปออกไป · รูปเปิดผ่านลิงก์ชั่วคราว 2 ชม. (ถังไม่เปิดสาธารณะ) */
+async function chatRow(m: ChatMsg, withImage = false) {
+  const gone = !!m.deletedAt;
+  return {
+    id: m.id,
+    body: gone ? "" : m.body,
+    createdAt: m.createdAt,
+    userId: m.userId,
+    byName: m.user.name,
+    byRole: ROLE_LABELS[m.user.role] ?? m.user.role,
+    deleted: gone,
+    hasImage: !gone && !!m.imageKey,
+    imageUrl: withImage && !gone && m.imageKey ? await getDownloadUrl(m.imageKey, { inline: true }) : null,
+    thumb: withImage && !gone ? thumbnailUrl(m.imageThumb) : null,
+  };
+}
+
+/** markRead = false ตอนดูในฐานะคนอื่น — เปิดแชทแทนเขาไม่ใช่เขาอ่าน (ตัวเลขยังไม่อ่านของเขาต้องอยู่) */
+async function chatThread(id: number, me: number, markRead = true) {
+  const rows = await prisma.workOrderMessage.findMany({
+    where: { workOrderId: id },
+    orderBy: { id: "desc" },
+    take: 200,
+    select: { ...CHAT_SELECT, imageThumb: true },
+  });
+  const last = rows[0]?.id ?? 0;
+  if (last && markRead) {
+    await prisma.workOrderChatRead.upsert({
+      where: { workOrderId_userId: { workOrderId: id, userId: me } },
+      create: { workOrderId: id, userId: me, lastReadId: last },
+      update: { lastReadId: last },
+    });
+  }
+  return Promise.all(rows.reverse().map((m) => chatRow(m, true)));
+}
+
+/** รายการห้องแชท (ใบที่มีข้อความ) ของคนนี้ — ใหม่สุดก่อน · ใบนอกขอบเขตไม่ขึ้น */
+router.get("/chats", requireAuth, async (req: AuthRequest, res) => {
+  const me = req.auth!.userId;
+  const scope = await scopeFor(req);
+  // ห้องที่มีข้อความล่าสุดก่อน — หาจากข้อความ (เรียงตามข้อความล่าสุดของแต่ละใบ) ไม่ใช่จากใบงาน ไม่งั้น 60 ห้องแรกเป็นห้องเก่า
+  const latest = await prisma.workOrderMessage.groupBy({
+    by: ["workOrderId"],
+    where: { workOrder: scope },
+    _max: { id: true },
+    orderBy: { _max: { id: "desc" } },
+    take: 60,
+  });
+  const orders = await prisma.workOrder.findMany({
+    where: { id: { in: latest.map((l) => l.workOrderId) } },
+    select: {
+      id: true,
+      code: true,
+      title: true,
+      symptom: true,
+      status: true,
+      branch: { select: { code: true, name: true } },
+      messages: { orderBy: { id: "desc" }, take: 1, select: CHAT_SELECT },
+      chatReads: { where: { userId: me }, select: { lastReadId: true } },
+    },
+  });
+  const ids = orders.map((o) => o.id);
+  const others = ids.length
+    ? await prisma.workOrderMessage.findMany({ where: { workOrderId: { in: ids }, userId: { not: me } }, select: { workOrderId: true, id: true } })
+    : [];
+  const threads = (
+    await Promise.all(
+    orders.map(async (o) => {
+      const read = o.chatReads[0]?.lastReadId ?? 0;
+      return {
+        id: o.id,
+        code: o.code,
+        title: (o.symptom ?? "").split("\n")[0].trim() || o.title,
+        branch: `${o.branch.code} ${o.branch.name}`,
+        statusLabel: statusLabelOf(o.status),
+        last: await chatRow(o.messages[0]),
+        unread: others.filter((m) => m.workOrderId === o.id && m.id > read).length,
+      };
+    })
+    )
+  ).sort((a, b) => b.last.id - a.last.id);
+  res.json({ threads, unread: threads.filter((t) => t.unread > 0).length });
+});
+
+router.get("/:id/chat", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { deletedAt: true, status: true, ...VIEW_SELECT } });
+  if (!wo || wo.deletedAt) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, wo)) return;
+  res.json({ messages: await chatThread(id, req.auth!.userId, !req.auth!.viewAs), readOnly: CHAT_CLOSED.includes(wo.status) });
+});
+
+/** ส่งข้อความ และ/หรือรูปหนึ่งรูป (multipart: body · file · thumbnail — แบบเดียวกับรูปงานรถ) */
+router.post("/:id/chat", requireAuth, imageUpload, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+  const parsed = chatSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อความไม่ถูกต้อง" });
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const hasFile = !!files?.file?.[0];
+  if (!parsed.data.body && !hasFile) return res.status(400).json({ error: "พิมพ์ข้อความหรือเลือกรูปก่อนส่ง" });
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { deletedAt: true, code: true, status: true, ...VIEW_SELECT } });
+  if (!wo || wo.deletedAt) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
+  if (await blockedForViewer(req, res, wo)) return;
+  // ดูในฐานะคนอื่นอยู่ — ส่งข้อความในนามคนนั้นไม่ได้ (ดูอย่างเดียว)
+  if (req.auth!.viewAs) return res.status(403).json({ error: "กำลังดูในฐานะคนอื่น — ส่งข้อความไม่ได้" });
+  if (CHAT_CLOSED.includes(wo.status)) {
+    return res.status(409).json({ error: `${wo.code} ปิดแล้ว — อ่านแชทย้อนหลังได้อย่างเดียว ถ้ามีเรื่องต่อให้เปิดใบงานใหม่` });
+  }
+  const image = hasFile ? await storeImage(req, res, `chat/${wo.code}`) : null;
+  if (hasFile && !image) return; // storeImage ตอบ error ให้แล้ว
+  await prisma.workOrderMessage.create({
+    data: {
+      workOrderId: id,
+      userId: req.auth!.userId,
+      body: parsed.data.body,
+      imageKey: image?.objectKey ?? null,
+      imageThumb: image?.thumbnail ?? null,
+    },
+  });
+  res.json({ messages: await chatThread(id, req.auth!.userId), readOnly: false });
+});
+
+/** ลบข้อความของตัวเองภายใน 5 นาที — แถวยังอยู่ ขึ้นว่า "ลบข้อความแล้ว" · รูปลบออกจากถังด้วย */
+router.delete("/:id/chat/:messageId", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const messageId = Number(req.params.messageId);
+  if (!Number.isInteger(id) || !Number.isInteger(messageId)) return res.status(400).json({ error: "รหัสไม่ถูกต้อง" });
+  const m = await prisma.workOrderMessage.findUnique({ where: { id: messageId } });
+  if (!m || m.workOrderId !== id || m.deletedAt) return res.status(404).json({ error: "ไม่พบข้อความนี้" });
+  if (m.userId !== req.auth!.userId || req.auth!.viewAs) return res.status(403).json({ error: "ลบได้เฉพาะข้อความของตัวเอง" });
+  // ใบปิดแล้วแชทเป็นบันทึกย้อนหลัง — ลบไม่ได้แม้ยังไม่ครบ 5 นาที (ปิดใบระหว่างนั้นพอดี)
+  const wo = await prisma.workOrder.findUnique({ where: { id }, select: { status: true, code: true } });
+  if (wo && CHAT_CLOSED.includes(wo.status)) return res.status(409).json({ error: `${wo.code} ปิดแล้ว — ลบข้อความไม่ได้` });
+  if (Date.now() - m.createdAt.getTime() > CHAT_DELETE_MS) {
+    return res.status(409).json({ error: "ลบได้ภายใน 5 นาทีหลังส่ง — ข้อความนี้เลยเวลาแล้ว" });
+  }
+  await prisma.workOrderMessage.update({ where: { id: messageId }, data: { deletedAt: new Date(), imageThumb: null } });
+  if (m.imageKey) await deleteObject(m.imageKey).catch((e) => console.error("[chat] ลบรูปจากถังไม่สำเร็จ", e));
+  res.json({ messages: await chatThread(id, req.auth!.userId), readOnly: false });
+});
 
 /**
  * ช่องค้นหาบนสุด — ค้นทั้งระบบในช่องเดียว (ตัวอย่าง พ.ย. 69 · เจ้าของงานขอ "ค้นหาอะไรก็ได้ทั้งระบบ")

@@ -76,6 +76,7 @@ import HowToButton from "../components/HowToButton";
 import { CreateOrderButton, ProfileMenu } from "../components/TopNav";
 import GlobalSearch from "../components/GlobalSearch";
 import NotificationBell from "../components/NotificationBell";
+import { ChatInbox } from "../components/WorkOrderChat";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -181,6 +182,8 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
       {/* ค้นหาทั้งระบบ + กระดิ่งงานเข้าใหม่บนมือถือด้วย (เจ้าของงานเลือก พ.ย. 69) — แว่นขยายเปิดหน้าค้นหาเต็มจอ */}
       <GlobalSearch compact />
       <NotificationBell />
+      {/* แชทใบงาน — ช่างรู้ว่าแอดมินตอบแล้วโดยไม่ต้องเปิดใบทีละใบ */}
+      <ChatInbox />
       <ViewAsButton compact />
       {/* คนออนไลน์: จอแคบกว่า 420 ไม่พอ (ชื่อหน้าหาย) — ดูได้ที่หน้าการใช้งานในเมนูหลังบ้าน */}
       {width >= 420 ? <UsageButton compact /> : null}
@@ -321,6 +324,8 @@ function AppTopBar() {
       <View style={styles.headerRight}>
         {/* กระดิ่งงานเข้าใหม่ (พ.ย. 69) — ใบที่เพิ่งเข้ากล่องงานและยังไม่ได้เปิดดู */}
         <NotificationBell />
+        {/* แชทใบงาน (พ.ย. 69) — ตัวเลข = ห้องที่ยังไม่อ่าน · แอดมินตอบได้จากตรงนี้ทุกหน้า */}
+        <ChatInbox />
         <HowToButton compact />
         <RefreshButton iconOnly />
       </View>

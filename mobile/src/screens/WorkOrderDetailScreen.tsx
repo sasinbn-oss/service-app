@@ -37,6 +37,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
 import { currentPosition } from "../utils/position";
+import { ChatBubble } from "../components/WorkOrderChat";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, {
@@ -2119,6 +2120,16 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       backLabel={`ใบงาน ${order.code}`}
       startMaximized
       instant={instant}
+      // แชทใบงาน (พ.ย. 69) — มาจากรายการแชทบนแถบหัว (open: "chat") = เปิดหน้าต่างแชทเลย
+      overlay={
+        <ChatBubble
+          key={order.id}
+          orderId={order.id}
+          code={order.code}
+          branch={`${order.branchCode} ${order.branchName}`}
+          startOpen={route.params.open === "chat"}
+        />
+      }
       right={
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           {user?.superAdmin ? (

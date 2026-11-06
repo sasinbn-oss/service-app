@@ -114,6 +114,8 @@ model User {
   trashedWorkOrders    WorkOrder[]           @relation("TrashedWorkOrders")
   workOrderLogs        WorkOrderLog[]
   workOrderSeens       WorkOrderSeen[]
+  workOrderMessages    WorkOrderMessage[]
+  workOrderChatReads   WorkOrderChatRead[]
   adminReviewsSent     AdminReview[]         @relation("AdminReviewsSent")
   adminReviewsAnswered AdminReview[]         @relation("AdminReviewsAnswered")
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
@@ -866,6 +868,8 @@ model WorkOrder {
   services     WorkOrderService[]
   logs         WorkOrderLog[]
   seens        WorkOrderSeen[]
+  messages     WorkOrderMessage[]
+  chatReads    WorkOrderChatRead[]
   attachments  WorkOrderAttachment[]
   claims       PartClaim[]
   workers      WorkOrderWorker[]
@@ -995,10 +999,6 @@ model WorkOrderService {
   @@index([workOrderId])
 }
 
-// ประวัติทุกครั้งที่ใบงานเปลี่ยนมือหรือเปลี่ยนสถานะ
-//
-// เหมือน OutageNoteLog — ช่องบนใบงานบอกได้แค่สภาพล่าสุด พอมีคนแก้ทับ
-// ก็ไม่เหลือร่องรอยว่าใครทำอะไรไว้ก่อนหน้า
 // เปิดดูใบงานล่าสุดเมื่อไร (ต่อคน ต่อใบ) — กระดิ่ง "งานเข้าใหม่" นับใบในกล่องงานที่เข้าขั้นหลังจากเปิดดูครั้งล่าสุด (พ.ย. 69)
 model WorkOrderSeen {
   workOrderId Int
@@ -1010,6 +1010,41 @@ model WorkOrderSeen {
   @@id([workOrderId, userId])
 }
 
+// แชทในใบงาน (พ.ย. 69) — ช่าง/หัวหน้าภาคถามเรื่องใบนั้น แอดมินตอบในที่เดียวกัน
+// แยกจากประวัติ (WorkOrderLog): ข้อความคุยไม่ใช่การเดินขั้น และมีจำนวนมากกว่าประวัติหลายเท่า
+model WorkOrderMessage {
+  id          Int       @id @default(autoincrement())
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id])
+  body        String    @default("")
+  // รูปในแชท — ถังเดียวกับรูปหน้างาน (ไม่เปิดสาธารณะ) · รูปย่อเก็บในฐานข้อมูลไว้โชว์ในฟองแชท
+  imageKey    String?
+  imageThumb  Bytes?
+  // ลบได้ภายใน 5 นาทีหลังส่ง (เจ้าของงานเลือก) — แถวยังอยู่ ขึ้นว่า "ลบข้อความแล้ว"
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([workOrderId, id])
+}
+
+// อ่านถึงข้อความไหนแล้ว (ต่อคน ต่อใบ) — ป้ายตัวเลขแชทที่ยังไม่อ่าน
+model WorkOrderChatRead {
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadId  Int       @default(0)
+  updatedAt   DateTime  @updatedAt
+
+  @@id([workOrderId, userId])
+}
+
+// ประวัติทุกครั้งที่ใบงานเปลี่ยนมือหรือเปลี่ยนสถานะ
+//
+// เหมือน OutageNoteLog — ช่องบนใบงานบอกได้แค่สภาพล่าสุด พอมีคนแก้ทับ
+// ก็ไม่เหลือร่องรอยว่าใครทำอะไรไว้ก่อนหน้า
 model WorkOrderLog {
   id           Int       @id @default(autoincrement())
   workOrderId  Int
