@@ -17,6 +17,7 @@ import { documentPath, saveDocument } from "../documents/store";
 import ExcelJS from "exceljs";
 import { deleteObject } from "../storage/fileStore";
 import { HOWTO_NEW, HOWTO_TOUR_ID, howtoOf, markHowto } from "../utils/howto";
+import { IT_LEAD_TITLE, itLeadChanged } from "../utils/itLead";
 
 const router = Router();
 
@@ -126,6 +127,8 @@ router.post("/login", async (req, res) => {
       // ทีมที่เห็นงานจริงหลังแตกทีมรวมแล้ว (Senior = ทุกอันรวมกัน) — แอปใช้ตัดสินว่าใบงานของทีมไหนเป็นงานของช่างคนนี้ (ปุ่มของขั้นตอน)
       teamCoverage: await coverageOfUser(user),
       supervisedTeams: user.supervisedTeams,
+      // หัวหน้าภาคที่ดูแลงาน IT — แอปตัดสินปุ่มขั้นของแอดมินในใบ IT และแท็บ "งาน IT ทุกภาค" จากตรงนี้ (ต้องมาพร้อมล็อกอิน แบบทีม)
+      itLead: user.role === "SUPERVISOR" && user.itLead,
       mustChangePassword: user.mustChangePassword,
       // ต้องมาพร้อมล็อกอิน ไม่ใช่รอ /auth/me — แอปตัดสินจากตรงนี้ว่าจะขึ้นกล่องต้อนรับ/ข้อความสั้น (utils/howto.ts)
       howto: howtoOf(user.howtoSeen),
@@ -150,6 +153,8 @@ async function meOf(user: MeUser, auth?: AuthRequest["auth"]) {
     teams: teamsOf(user),
     teamCoverage: await coverageOfUser(user),
     supervisedTeams: user.supervisedTeams,
+    // หัวหน้าภาคที่ดูแลงาน IT — อ่านสดทุกครั้งที่แอปถาม /me (ถูกเปลี่ยนคนแล้วแอปรู้ตอนโหลดหน้าใหม่ · เซิร์ฟเวอร์ตัดสินสดอยู่แล้ว)
+    itLead: user.role === "SUPERVISOR" && user.itLead,
     // ระหว่างดูในฐานะ ไม่บังคับเปลี่ยนรหัสแทนเจ้าของบัญชี — Super Admin แค่มาดูหน้าจอ
     mustChangePassword: viewAs ? false : user.mustChangePassword,
     // ระหว่างดูในฐานะ = ของคนที่ถูกดู (ผู้สอนเห็นว่าเขาดูหน้าไหนแล้ว) — แอปไม่ขึ้นกล่องเองและไม่บันทึกเพราะมี viewAs
@@ -264,6 +269,8 @@ const MANAGED_USER_SELECT = {
   team: true,
   extraTeams: true,
   supervisedTeams: true,
+  // ป้าย "ดูแลงาน IT" บนการ์ด + สวิตช์ในฟอร์มแก้หัวหน้าภาค
+  itLead: true,
   mustChangePassword: true,
   createdAt: true,
   maidBranches: { select: { branch: { select: { code: true, name: true } } }, orderBy: { branch: { code: "asc" } } },
@@ -703,6 +710,13 @@ const userUpdateSchema = z.object({
   teams: TEAM_LIST.optional(),
   // ทีมช่างที่หัวหน้าภาคดูแล (หลายทีมได้) — ดู User.supervisedTeams
   supervisedTeams: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+  /**
+   * หัวหน้าภาคที่ดูแลงาน IT ทุกภาค (เจ้าของงานตัดสิน 6 พ.ย. 69) — ได้คนเดียว
+   * มีคนอื่นถืออยู่แล้วตอบ 409 พร้อมชื่อคนนั้น · ส่ง replaceItLead: true มาด้วย = ย้ายจากคนเดิมมาคนนี้ในธุรกรรมเดียว
+   * ไม่ย้ายให้เงียบ ๆ เพราะย้าย = ใบ IT ทั้งบริษัทหายจากกล่องของคนเดิมทันที แอดมินต้องรู้ว่ากำลังเอาออกจากใคร
+   */
+  itLead: z.boolean().optional(),
+  replaceItLead: z.boolean().optional(),
   // รายละเอียดบัญชี — ปุ่ม "แก้ไขรายละเอียด" ในหน้าสิทธิ์ผู้ใช้
   // "~" สงวนไว้ให้รหัสของบัญชีที่ถูกลบ (รหัสเดิม~ลบ<id>) จะได้ไม่ชนกัน
   employeeCode: z
@@ -810,8 +824,31 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     }
   }
 
-  const updated = await prisma.$transaction(
+  /**
+   * หัวหน้าภาคที่ดูแลงาน IT — ตั้งได้เฉพาะหัวหน้าภาค · มีคนอื่นถืออยู่ต้องยืนยันการย้ายก่อน (409 บอกชื่อ)
+   * นับเฉพาะคนที่ยังเป็นหัวหน้าภาคและยังไม่ถูกลบ — ค่าค้างบนแถวอื่น (แก้ฐานข้อมูลตรง ๆ) ถูกล้างในธุรกรรมโดยไม่ต้องถาม
+   */
+  const setItLead = body.itLead === true;
+  if (setItLead) {
+    if (finalRole !== "SUPERVISOR") return res.status(400).json({ error: `${IT_LEAD_TITLE}ต้องเป็นหัวหน้าภาค` });
+    const holder = await prisma.user.findFirst({
+      where: { itLead: true, role: "SUPERVISOR", deletedAt: null, id: { not: id } },
+      select: { id: true, name: true },
+    });
+    if (holder && !body.replaceItLead) {
+      return res.status(409).json({
+        error: `${holder.name} เป็น${IT_LEAD_TITLE}อยู่ — ได้คนเดียว ยืนยันเพื่อย้ายมาที่คนนี้ (ใบงาน IT ทั้งหมดจะย้ายตาม)`,
+        itLeadHolder: holder,
+      });
+    }
+  }
+  // เปลี่ยนเป็นบทบาทอื่น = ถอดหน้าที่ดูแลงาน IT ด้วย (ค้างไว้ = ตั้งกลับเป็นหัวหน้าภาคทีหลังได้ใบ IT ทั้งบริษัทติดมา)
+  const dropItLead = body.itLead === false || (body.role !== undefined && body.role !== "SUPERVISOR");
+
+  const run = () => prisma.$transaction(
     async (tx) => {
+      // ย้ายในธุรกรรมเดียว: ถอดคนเดิมก่อนแล้วค่อยตั้ง — ดัชนี "ได้คนเดียว" (migration it_lead) ไม่ยอมให้มีสองแถวแม้ชั่วขณะ
+      if (setItLead) await tx.user.updateMany({ where: { itLead: true, id: { not: id } }, data: { itLead: false } });
       if (maidIds !== null || clearMaid) await tx.cocoMaidBranch.deleteMany({ where: { userId: id } });
       if (maidIds?.length) await tx.cocoMaidBranch.createMany({ data: maidIds.map((branchId) => ({ userId: id, branchId })) });
       const u = await tx.user.update({
@@ -839,6 +876,7 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
           ...(body.employeeCode !== undefined ? { employeeCode: body.employeeCode } : {}),
           ...(body.name !== undefined ? { name: body.name } : {}),
           ...(body.phone !== undefined ? { phone: body.phone || null } : {}),
+          ...(setItLead ? { itLead: true } : dropItLead ? { itLead: false } : {}),
         },
         select: MANAGED_USER_SELECT,
       });
@@ -851,7 +889,19 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
     },
     { timeout: 30_000, maxWait: 15_000 }
   );
+  let updated: Awaited<ReturnType<typeof run>>;
+  try {
+    updated = await run();
+  } catch (e) {
+    // อีกคนตั้งหัวหน้า IT ไปพร้อมกันพอดี (ดัชนีได้คนเดียวปฏิเสธ) — ให้กดใหม่แล้วจะได้ 409 พร้อมชื่อคนที่ถืออยู่
+    if (setItLead && (e as { code?: string }).code === "P2002") {
+      return res.status(409).json({ error: `มีคนเพิ่งตั้ง${IT_LEAD_TITLE}ไปพร้อมกัน — ลองใหม่อีกครั้ง` });
+    }
+    throw e;
+  }
   rememberUser(updated.id, updated.role as Role);
+  // ใบ IT ย้ายเจ้าของทันที — ชุด "ไม่มีคนรับ" ที่จำไว้ของกล่องงานแอดมินต้องคิดใหม่ (ดู utils/itLead.ts)
+  if (body.itLead !== undefined || body.role !== undefined) itLeadChanged();
   res.json(managedUser(updated));
 });
 
@@ -939,6 +989,7 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
     const photos = await prisma.vehicleLogPhoto.findMany({ where: { uploadedById: id }, select: { objectKey: true } });
     await prisma.user.delete({ where: { id } });
     forgetUser(id);
+    itLeadChanged();
     for (const p of photos) deleteObject(p.objectKey).catch((e) => console.error("photo delete failed", e));
     return res.json({ ok: true, mode: "deleted" });
   }
@@ -958,6 +1009,8 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
           extraTeams: [],
           region: null,
           extraRegions: [],
+          // คนที่ไม่อยู่แล้วถือใบ IT ทั้งบริษัทไม่ได้ — ใบ IT กลับไป "ไม่มีคนรับ" ของแอดมินจนกว่าจะเลือกคนใหม่
+          itLead: false,
         },
       });
       // ถอดออกจากแผนทีมวันนี้เป็นต้นไป ส่วนแผนวันที่ผ่านมาแล้วเก็บไว้เป็นประวัติ
@@ -966,6 +1019,7 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
     { timeout: 30_000, maxWait: 15_000 }
   );
   forgetUser(id);
+  itLeadChanged();
   res.json({ ok: true, mode: "deactivated" });
 });
 
