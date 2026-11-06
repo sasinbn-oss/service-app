@@ -75,6 +75,7 @@ import AreaOnlyGate from "../components/AreaOnlyGate";
 import HowToButton from "../components/HowToButton";
 import { CreateOrderButton, ProfileMenu } from "../components/TopNav";
 import GlobalSearch from "../components/GlobalSearch";
+import NotificationBell from "../components/NotificationBell";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -165,6 +166,7 @@ function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps
 function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { width } = useWindowDimensions();
   return (
     <View style={[styles.pageHeadNarrow, { paddingTop: (user?.viewAs ? 0 : insets.top) + spacing.sm }]}>
       <MenuButton />
@@ -176,8 +178,12 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
       </View>
       {/* มีระบบรุ่นใหม่ — กดเองเมื่อสะดวก ไม่โหลดหน้าใหม่ให้เอง (เจ้าของงานขอ ต.ค. 69) */}
       <UpdateButton compact />
+      {/* ค้นหาทั้งระบบ + กระดิ่งงานเข้าใหม่บนมือถือด้วย (เจ้าของงานเลือก พ.ย. 69) — แว่นขยายเปิดหน้าค้นหาเต็มจอ */}
+      <GlobalSearch compact />
+      <NotificationBell />
       <ViewAsButton compact />
-      <UsageButton compact />
+      {/* คนออนไลน์: จอแคบกว่า 420 ไม่พอ (ชื่อหน้าหาย) — ดูได้ที่หน้าการใช้งานในเมนูหลังบ้าน */}
+      {width >= 420 ? <UsageButton compact /> : null}
       {/* วิธีใช้หน้านี้ — ข้างปุ่มรีเฟรช (เจ้าของงานเลือก) · แถบของแอดมินเต็มแล้ว ปุ่มของแอดมินจอแคบไปอยู่ในเมนูข้าง */}
       {user?.role === "ADMIN" ? null : <HowToButton compact />}
       <RefreshButton />
@@ -313,6 +319,8 @@ function AppTopBar() {
       <UsageButton compact={width < 1700} />
       <CreateOrderButton />
       <View style={styles.headerRight}>
+        {/* กระดิ่งงานเข้าใหม่ (พ.ย. 69) — ใบที่เพิ่งเข้ากล่องงานและยังไม่ได้เปิดดู */}
+        <NotificationBell />
         <HowToButton compact />
         <RefreshButton iconOnly />
       </View>

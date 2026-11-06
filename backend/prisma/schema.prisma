@@ -97,6 +97,9 @@ model User {
   // บัญชีที่ตั้งค่านี้แล้วเข้าระบบไม่ได้ ไม่โผล่ในรายชื่อ แต่ชื่อยังขึ้นในประวัติเดิม
   // employeeCode ถูกเปลี่ยนเป็น "รหัสเดิม~ลบ<id>" เพื่อคืนรหัสให้สร้างบัญชีใหม่ได้
   deletedAt            DateTime?
+  // กระดิ่งงานเข้าใหม่นับเฉพาะใบที่เข้ากล่องหลังเวลานี้ (เจ้าของงานเลือก — วันแรกเริ่มจากศูนย์ ไม่ใช่ทุกใบที่ค้างอยู่แล้ว)
+  // คนที่มีอยู่ตอนเพิ่มคอลัมน์ได้เวลาที่รัน migration · คนที่เพิ่มทีหลังได้เวลาที่สร้างบัญชี
+  bellSince            DateTime              @default(now())
   vehicleLogs          VehicleLog[]
   branchCheckIns       BranchCheckIn[]
   workLogs             WorkLog[]
@@ -110,6 +113,7 @@ model User {
   // ใบงานที่คนนี้ย้ายไปถังขยะ — นับเป็นประวัติตอนลบผู้ใช้ ไม่งั้นลบจริงแล้วหน้าถังขยะไม่รู้ว่าใครลบ
   trashedWorkOrders    WorkOrder[]           @relation("TrashedWorkOrders")
   workOrderLogs        WorkOrderLog[]
+  workOrderSeens       WorkOrderSeen[]
   adminReviewsSent     AdminReview[]         @relation("AdminReviewsSent")
   adminReviewsAnswered AdminReview[]         @relation("AdminReviewsAnswered")
   checkedParts         WorkOrderPart[]       @relation("CheckedWorkOrderParts")
@@ -861,6 +865,7 @@ model WorkOrder {
   parts        WorkOrderPart[]
   services     WorkOrderService[]
   logs         WorkOrderLog[]
+  seens        WorkOrderSeen[]
   attachments  WorkOrderAttachment[]
   claims       PartClaim[]
   workers      WorkOrderWorker[]
@@ -994,6 +999,17 @@ model WorkOrderService {
 //
 // เหมือน OutageNoteLog — ช่องบนใบงานบอกได้แค่สภาพล่าสุด พอมีคนแก้ทับ
 // ก็ไม่เหลือร่องรอยว่าใครทำอะไรไว้ก่อนหน้า
+// เปิดดูใบงานล่าสุดเมื่อไร (ต่อคน ต่อใบ) — กระดิ่ง "งานเข้าใหม่" นับใบในกล่องงานที่เข้าขั้นหลังจากเปิดดูครั้งล่าสุด (พ.ย. 69)
+model WorkOrderSeen {
+  workOrderId Int
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seenAt      DateTime  @default(now())
+
+  @@id([workOrderId, userId])
+}
+
 model WorkOrderLog {
   id           Int       @id @default(autoincrement())
   workOrderId  Int

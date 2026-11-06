@@ -133,8 +133,12 @@ export function ViewAsButton({ compact }: { compact?: boolean }) {
         // สอนการใช้งาน (แอดมิน "งานของฉันวันนี้") ชี้ปุ่มนี้ — ชื่อคงที่ ปุ่มย้ายที่บนแถบหัวแล้ววิธีใช้ยังหาเจอ
         {...howtoTarget("app.viewAs")}
       >
-        <Ionicons name="eye-outline" size={18} color={colors.navy} />
-        {compact ? null : <Text style={styles.openText}>ดูในฐานะ…</Text>}
+        {/* ไอคอนคนสองคน (ทอง · กรมท่า) ตามแบบที่เจ้าของงานส่งมา พ.ย. 69 — เดิมเป็นรูปตา อ่านเหมือน "ดูสถานะ" */}
+        <View style={styles.twoPeople} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+          <Ionicons name="person" size={17} color={colors.warning} style={styles.personBack} />
+          <Ionicons name="person" size={17} color={colors.navy} style={styles.personFront} />
+        </View>
+        {compact ? null : <Text style={styles.openText}>มุมมองผู้ใช้งาน</Text>}
       </TouchableOpacity>
       {open ? <ViewAsPicker onClose={() => setOpen(false)} /> : null}
     </>
@@ -356,6 +360,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sky50,
   },
   openBtnCompact: { width: 40, paddingHorizontal: 0, justifyContent: "center" },
+  twoPeople: { width: 26, height: 20 },
+  personBack: { position: "absolute", left: 0, top: 1 },
+  personFront: { position: "absolute", left: 9, top: 3 },
   openText: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.navy },
   tabs: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   tab: {

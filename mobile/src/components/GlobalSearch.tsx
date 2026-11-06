@@ -6,7 +6,7 @@
  * กล่องผลเป็นแผ่นที่กางในที่ ไม่ใช่ Modal — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (ดู CLAUDE.md)
  */
 import React, { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import { api } from "../api/client";
@@ -93,7 +93,11 @@ function hitsOf(r: Result): { title: string; hits: Hit[] }[] {
   ].filter((g) => g.hits.length > 0);
 }
 
-export default function GlobalSearch() {
+/**
+ * compact = มือถือ/จอแคบ: ปุ่มแว่นขยายบนแถบหัว กดแล้วเปิดช่องค้นหาเต็มจอ (เจ้าของงานเลือก พ.ย. 69) — ผลชุดเดียวกับจอคอม
+ * บนเว็บเป็นแผ่นเต็มจอ (fixed) ไม่ใช่ Modal — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (CLAUDE.md) · แอปมือถือใช้ Modal ได้
+ */
+export default function GlobalSearch({ compact }: { compact?: boolean } = {}) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [res, setRes] = useState<Result | null>(null);
@@ -147,6 +151,90 @@ export default function GlobalSearch() {
   };
   const term = q.trim();
 
+  const results = (
+    <>
+    {groups.length === 0 ? (
+      <Text style={styles.empty}>{busy ? "กำลังค้นหา…" : `ไม่พบ “${term}” ในระบบ`}</Text>
+    ) : (
+      groups.map((g) => (
+        <View key={g.title} style={styles.group}>
+          <Text style={styles.groupTitle}>{g.title}</Text>
+          {g.hits.map((h) => (
+            <TouchableOpacity key={h.key} style={[styles.hit, h === first && styles.hitFirst]} onPress={() => pick(h)} activeOpacity={0.7} accessibilityLabel={`${g.title} ${h.main}`}>
+              <View style={styles.hitIcon}>
+                <Ionicons name={h.icon} size={18} color={colors.primaryInk} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.hitMain} numberOfLines={1}>
+                  {h.main}
+                </Text>
+                <Text style={styles.hitSub} numberOfLines={1}>
+                  {h.sub}
+                </Text>
+              </View>
+              {h.tag ? (
+                <View style={styles.tag}>
+                  <Text style={styles.tagText} numberOfLines={1}>
+                    {h.tag}
+                  </Text>
+                </View>
+              ) : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      ))
+    )}
+    <TouchableOpacity
+      style={styles.all}
+      onPress={() => {
+        openList(term);
+        setOpen(false);
+      }}
+      accessibilityLabel={`ดูใบงานทั้งหมดที่ตรง ${term}`}
+    >
+      <Text style={styles.allText}>ดูใบงานทั้งหมดที่ตรง “{term}” →</Text>
+      <Text style={styles.allHint}>Enter = เปิดรายการแรก · Esc = ปิด</Text>
+    </TouchableOpacity>
+    </>
+  );
+
+  if (compact) {
+    const sheetBody = (
+      <View style={[styles.sheet, Platform.OS === "web" ? ({ position: "fixed" } as object) : null]} accessibilityLabel="หน้าค้นหาทั้งระบบ">
+        <View style={styles.sheetHead}>
+          <TouchableOpacity onPress={() => setOpen(false)} style={styles.sheetBack} accessibilityLabel="ปิดหน้าค้นหา">
+            <Ionicons name="arrow-back" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <View style={[styles.box, styles.boxOn, { flex: 1 }]}>
+            <Ionicons name="search" size={18} color={colors.textMuted} />
+            <TextInput
+              ref={input}
+              value={q}
+              onChangeText={setQ}
+              autoFocus
+              onSubmitEditing={() => (first ? pick(first) : term ? (openList(term), setOpen(false)) : undefined)}
+              placeholder="ค้นหาเลขที่ใบงาน, สาขา, ช่าง, อาการ…"
+              placeholderTextColor={colors.textFaint}
+              style={[styles.input, Platform.OS === "web" ? ({ outlineStyle: "none" } as object) : null]}
+              accessibilityLabel="ค้นหาทั้งระบบ"
+            />
+          </View>
+        </View>
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+          {term.length >= 2 ? results : <Text style={styles.empty}>พิมพ์อย่างน้อย 2 ตัวอักษร — เลขใบงาน · สาขา · ชื่อช่าง · เครื่อง · อะไหล่</Text>}
+        </ScrollView>
+      </View>
+    );
+    return (
+      <>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => setOpen(true)} accessibilityLabel="เปิดช่องค้นหาทั้งระบบ">
+          <Ionicons name="search" size={20} color={colors.primaryInk} />
+        </TouchableOpacity>
+        {open ? (Platform.OS === "web" ? sheetBody : <Modal visible animationType="slide" onRequestClose={() => setOpen(false)}>{sheetBody}</Modal>) : null}
+      </>
+    );
+  }
+
   return (
     <View style={styles.wrap}>
       <View style={[styles.box, open && styles.boxOn]}>
@@ -179,48 +267,7 @@ export default function GlobalSearch() {
         <>
           <Pressable style={[styles.scrim, Platform.OS === "web" ? ({ position: "fixed" } as object) : null]} onPress={() => setOpen(false)} />
           <View style={styles.panel} accessibilityLabel="ผลค้นหาทั้งระบบ">
-            {groups.length === 0 ? (
-              <Text style={styles.empty}>{busy ? "กำลังค้นหา…" : `ไม่พบ “${term}” ในระบบ`}</Text>
-            ) : (
-              groups.map((g) => (
-                <View key={g.title} style={styles.group}>
-                  <Text style={styles.groupTitle}>{g.title}</Text>
-                  {g.hits.map((h) => (
-                    <TouchableOpacity key={h.key} style={[styles.hit, h === first && styles.hitFirst]} onPress={() => pick(h)} activeOpacity={0.7} accessibilityLabel={`${g.title} ${h.main}`}>
-                      <View style={styles.hitIcon}>
-                        <Ionicons name={h.icon} size={18} color={colors.primaryInk} />
-                      </View>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.hitMain} numberOfLines={1}>
-                          {h.main}
-                        </Text>
-                        <Text style={styles.hitSub} numberOfLines={1}>
-                          {h.sub}
-                        </Text>
-                      </View>
-                      {h.tag ? (
-                        <View style={styles.tag}>
-                          <Text style={styles.tagText} numberOfLines={1}>
-                            {h.tag}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ))
-            )}
-            <TouchableOpacity
-              style={styles.all}
-              onPress={() => {
-                openList(term);
-                setOpen(false);
-              }}
-              accessibilityLabel={`ดูใบงานทั้งหมดที่ตรง ${term}`}
-            >
-              <Text style={styles.allText}>ดูใบงานทั้งหมดที่ตรง “{term}” →</Text>
-              <Text style={styles.allHint}>Enter = เปิดรายการแรก · Esc = ปิด</Text>
-            </TouchableOpacity>
+            {results}
           </View>
         </>
       ) : null}
@@ -247,6 +294,10 @@ const styles = StyleSheet.create({
   input: { flex: 1, minWidth: 0, height: 38, fontSize: 14, color: colors.text },
   kbd: { paddingHorizontal: 7, height: 24, borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, justifyContent: "center" },
   kbdText: { fontSize: 11.5, fontWeight: "700", color: colors.textMuted },
+  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.sky50, alignItems: "center", justifyContent: "center" },
+  sheet: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000, backgroundColor: colors.card },
+  sheetHead: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+  sheetBack: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   scrim: { position: "absolute", top: -2000, left: -4000, right: -4000, bottom: -4000, zIndex: 1 },
   panel: {
     position: "absolute",
