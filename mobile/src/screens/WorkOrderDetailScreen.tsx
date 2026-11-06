@@ -26,7 +26,7 @@ import { UrgentBadge, UrgentGlow } from "../components/Urgent";
 import ImageViewer from "../components/ImageViewer";
 import AppModal, { ModalRow } from "../components/AppModal";
 import CancelOrderModal from "../components/CancelOrderModal";
-import { PAY_GO_LABEL, PaymentWaitBox, PayWaitButtons, PayWaitForms, payChipText, type DeclineReason, type PayWaitDetail } from "../components/PaymentWait";
+import { PAY_GO_LABEL, PaymentWaitBox, PayWaitButtons, PayWaitForms, payChipText, rememberDeclineReasons, type DeclineReason, type PayWaitDetail } from "../components/PaymentWait";
 import TrashOrderModal from "../components/TrashOrderModal";
 import TrashedOrderNote, { trashedInfoOf, type TrashedInfo } from "../components/TrashedOrderNote";
 import { workOrderCode } from "../navigation/linking";
@@ -1316,6 +1316,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       setTeams(options.data.teams ?? []);
       if (options.data.rescheduleStages) setRescheduleStages(options.data.rescheduleStages);
       setDeclineReasons(options.data.quoteDeclineReasons ?? []);
+      // ฝากไว้ให้ "ลูกค้าไม่ซ่อม" ในแถวของแท็บรอเงินใช้ต่อ ไม่ต้องถาม options ซ้ำ (DeclineInline)
+      rememberDeclineReasons(options.data.quoteDeclineReasons);
       // ปุ่มยี่ห้อเครื่องในช่องเลือกอะไหล่/ชีตแก้ยี่ห้อใช้รายการเดียวกับฟอร์มเปิดใบงาน (เซิร์ฟเวอร์เพิ่มยี่ห้อแล้วตามทัน)
       rememberMachineModels(options.data.machineModels);
       optionsLoaded.current = true;

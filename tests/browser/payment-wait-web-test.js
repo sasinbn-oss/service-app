@@ -109,7 +109,7 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
     // ── ตามลูกค้าแล้ว ──
     await page.locator('[aria-label="ตามลูกค้าแล้ว"]').locator("visible=true").first().click();
     await page.waitForTimeout(700);
-    await page.locator('[aria-label="หมายเหตุการตามลูกค้า"]').locator("visible=true").fill("ลูกค้าบอกโอนวันศุกร์");
+    await page.locator('[aria-label="ลูกค้าว่ายังไง"]').locator("visible=true").fill("ลูกค้าบอกโอนวันศุกร์");
     await page.locator('[aria-label="บันทึกการตามลูกค้า"]').locator("visible=true").click();
     await page.waitForTimeout(3500);
     const fu = fx.sql(`select "userId"||'|'||status||'|'||note from "WorkOrderLog" where "workOrderId"=${a.id} and action='PAYMENT_FOLLOWUP' order by id desc limit 1`);
@@ -117,7 +117,7 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
     const boxText2 = await page.locator('[aria-label="กล่องรอลูกค้าจ่ายเงิน"]').locator("visible=true").first().innerText();
     boxText2.includes("(1 ครั้ง)") && boxText2.includes("ลูกค้าบอกโอนวันศุกร์") && st(a.id) === "AWAITING_PAYMENT"
       ? pass("การ์ดขึ้นการตาม 1 ครั้งพร้อมหมายเหตุ · ใบอยู่ขั้นเดิม") : fail(`หลังตาม: ${boxText2}`);
-    (await page.locator('[aria-label="หมายเหตุการตามลูกค้า"]').locator("visible=true").count()) === 0
+    (await page.locator('[aria-label="ลูกค้าว่ายังไง"]').locator("visible=true").count()) === 0
       ? pass("บันทึกแล้วฟอร์มพับ") : fail("ฟอร์มยังกางอยู่");
 
     // ── ถอยเวลา 5 วัน — เกิน 3 วัน ──
@@ -148,7 +148,8 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
       const ia = g.indexOf(a.code), ib = g.indexOf(b.code);
       ia >= 0 && ib > ia ? pass("หัวข้อรอลูกค้าจ่ายเงิน: ใบที่รอนานกว่า (5 วัน) ขึ้นก่อน") : fail(`ลำดับในหัวข้อ: ${g}`);
       // การตามถูกถอยไป 1 วัน — วันที่ขึ้นเป็นวันจริง (เช่น "4 พ.ย.") ไม่ใช่ "วันนี้"
-      g.includes("รอมาแล้ว 5 วัน") && /ตามล่าสุด \d+ \S+ · ลูกค้าบอกโอนวันศุกร์/.test(g) && g.includes("ยังไม่เคยตาม")
+      // แถวตัวเดียวกับแท็บรอเงิน (6 พ.ย. 69): "ตามล่าสุด 4 พ.ย. 13:21 · ชื่อ" แล้วหมายเหตุบรรทัดถัดไป
+      g.includes("รอมาแล้ว 5 วัน") && /ตามล่าสุด \d+ \S+ \d{1,2}:\d{2} · .+\n\s*ลูกค้าบอกโอนวันศุกร์/.test(g) && g.includes("ยังไม่เคยตาม")
         ? pass("แถว: รอมาแล้ว 5 วัน · ตามล่าสุด … ลูกค้าบอกโอนวันศุกร์ · อีกใบ \"ยังไม่เคยตาม\"") : fail(`แถวในหัวข้อ: ${g}`);
       (await group.locator('[aria-label^="ลูกค้าจ่ายแล้ว · แนบบิล "]').count()) >= 2 ? pass("ปุ่มบนแถว \"ลูกค้าจ่ายแล้ว · แนบบิล\"") : fail("ปุ่มบนแถวไม่ใช่ลูกค้าจ่ายแล้ว");
       const lateChip = group.locator('[aria-label="ชิปหัวข้อ เกิน 3 วัน 1"]');

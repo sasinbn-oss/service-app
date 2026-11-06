@@ -196,10 +196,13 @@ export default function DateField({
   closed,
   dayTags,
   invalid,
+  accessibilityLabel,
 }: {
   value: string;
   onChange: (next: string) => void;
   label: string;
+  /** ชื่อช่องสำหรับโปรแกรมอ่านจอ/เทสต์ เมื่อชื่อที่เห็นซ้ำกันหลายช่องบนจอเดียว (ฟอร์มตามลูกค้าในแถวต่อท้ายเลขใบงาน) · ไม่ใส่ = label */
+  accessibilityLabel?: string;
   /** วันแรกที่เลือกได้ (ดู Calendar) */
   min?: string;
   /** วันที่ปิด — ขีดฆ่า กดไม่ได้ (ดู Calendar) */
@@ -227,8 +230,10 @@ export default function DateField({
           style={[styles.field, open && styles.fieldOpen, invalid && styles.fieldInvalid]}
           onPress={() => setOpen((v) => !v)}
           activeOpacity={0.7}
-          accessibilityLabel={label || "วันที่"}
+          accessibilityLabel={accessibilityLabel || label || "วันที่"}
           accessibilityState={{ expanded: open }}
+          // เว็บไม่แปลง accessibilityState เป็น aria-expanded (CLAUDE.md) — เทสต์เบราว์เซอร์อ่านว่าปฏิทินกางอยู่ไหมจากตรงนี้
+          aria-expanded={open}
         >
           <Ionicons name="calendar-outline" size={17} color={colors.primaryInk} />
           <Text style={[styles.value, !has && styles.placeholder]}>
