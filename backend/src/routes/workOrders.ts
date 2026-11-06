@@ -4086,6 +4086,8 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
     ...(isAreaTeam(req.auth) ? stripPickForArea(body) : body),
     ...(repeats ? { claimRepeats: repeats } : {}),
     ...(viewer.scope && !coversWorkOrder(viewer.scope, d.row) ? { viewOnly: true } : {}),
+    // หัวหน้าภาคของทีมที่รับงานข้ามทีม — ดูอย่างเดียวแต่ปิดใบงานได้ตอนทีมอยู่หน้างาน (ดู CROSS_CLOSE_STAGES)
+    ...(viewer.scope && (await receiverMayClose(viewer.scope, d.row)) ? { crossClose: true } : {}),
   });
 });
 
@@ -11547,6 +11549,24 @@ const supervisorCloseSchema = z.object({
   crossBrandOk: crossBrandOkInput,
 });
 
+/**
+ * จ่ายข้ามทีม: หัวหน้าภาคของทีมที่รับงานปิดใบงานได้ด้วย (เจ้าของงานขอ 6 พ.ย. 69 — "จ่ายให้ทีม OPL หัวหน้าภาค OPL ก็ปิดงานได้")
+ * ได้เฉพาะตอนทีมของเขาอยู่หน้างานแล้ว (ตรวจหน้างาน · เข้างาน/ปิดงาน) — ช่างทีมนั้นทำเสร็จแต่ไม่ได้ปิดในแอป คนที่รู้เรื่องคือหัวหน้าของทีมนั้น
+ * ขั้นก่อนหน้า (นัดวัน · ปล่อยงาน · แก้ใบ) ยังเป็นของหัวหน้าภาคเจ้าของพื้นที่ ทีมที่รับยังไม่ได้ลงมือ จึงไม่มีอะไรให้ปิด
+ * ปุ่มอื่นของทีมที่รับยังดูได้อย่างเดียวเหมือนเดิม — เปิดแค่ปิดใบงาน ไม่ใช่ทำแทนเจ้าของพื้นที่ทุกขั้น
+ */
+const CROSS_CLOSE_STAGES: readonly string[] = ["INSPECTING", "IN_PROGRESS"];
+
+/** หัวหน้าภาคคนนี้เป็นหัวหน้าของทีมที่รับงานข้ามทีมของใบนี้ และใบอยู่ในขั้นที่ปิดได้ (ดู CROSS_CLOSE_STAGES) */
+async function receiverMayClose(
+  scope: SupervisorScope,
+  wo: { status: string; jobType: string; assignedTeam: string | null; branch: { region: string | null; zone: string | null; pmTeam: string | null } }
+) {
+  if (!CROSS_CLOSE_STAGES.includes(wo.status) || coversWorkOrder(scope, wo)) return false;
+  // seesWorkOrder ไม่นับใบ IT (เป็นของหัวหน้าภาคที่ดูแลงาน IT คนเดียว) — ทีมที่รับใบ IT จึงไม่ได้สิทธิ์ปิดไปด้วย
+  return seesWorkOrder(scope, await teamsForSupervisor(scope), wo);
+}
+
 router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
@@ -11578,7 +11598,10 @@ router.post("/:id/supervisor-close", requireAuth, async (req: AuthRequest, res) 
     },
   });
   if (!wo) return res.status(404).json({ error: "ไม่พบใบงานนี้" });
-  if (role === "SUPERVISOR" && (await blockedForSupervisor(req, res, wo))) return;
+  if (role === "SUPERVISOR") {
+    const scope = await supervisorScope(req.auth!.userId);
+    if (!(await receiverMayClose(scope, wo)) && (await blockedForSupervisor(req, res, wo, scope))) return;
+  }
   if (wo.status === "DONE") return res.status(400).json({ error: `${wo.code} ปิดไปแล้ว` });
   if (wo.status === "CANCELLED") return res.status(400).json({ error: `${wo.code} ถูกยกเลิกไปแล้ว` });
   if (wo.status === "CLAIM_REVIEW") {

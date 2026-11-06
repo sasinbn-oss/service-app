@@ -4,6 +4,7 @@
 #   · จ่ายได้ทุกทีม · ช่องทีมแยกทีมของตัวเองกับทีมของคนอื่น (บอกชื่อคนดูแล)
 #   · ใบยังเป็นของคนจ่าย (กล่องงาน · ปล่อยงาน) · หัวหน้าภาคของทีมที่รับเห็นใบแต่ดูอย่างเดียว
 #   · ช่างปิดงานได้ทั้งทีมที่รับและทีมประจำสาขา · ทีมประจำสาขาไม่ได้งานนี้เข้ากล่องงาน/งานวันนี้
+#   · หัวหน้าภาคของทีมที่รับปิดใบงานได้ตอนทีมอยู่หน้างาน (เจ้าของงานขอ 6 พ.ย. 69) — ก่อนปล่อยงานยังดูได้อย่างเดียว
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 cd "$(dirname "$0")/.."
 J() { node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); eval(process.argv[1])' "$1"; }
@@ -41,7 +42,7 @@ NID=$(mkuser "XN$SUF" "ช่างไม่มีทีมทดสอบข้
 PATCH $A "auth/users/$T1ID" '{"team":"กระบี่"}' >/dev/null
 Z=$(login "XR$SUF" temp12345); K=$(login "XK$SUF" temp12345); N=$(login "XN$SUF" temp12345); T=$(login T001)
 cleanup() {
-  purge_orders "$A" $W1 $W2
+  purge_orders "$A" $W1 $W2 $W3
   DB "delete from \"User\" where id in ($ZID,$KID,$NID)" >/dev/null
   PATCH $A "auth/users/$T1ID" "{\"team\":$( [ -n "$T1TEAM" ] && echo "\"$T1TEAM\"" || echo null )}" >/dev/null
 }
@@ -131,5 +132,26 @@ photos $T $W2
 R=$(POST $T "work-orders/$W2/close" "{\"result\":\"FIXED\",\"note\":\"ทีมประจำสาขาปิดแทน\",\"workerIds\":[$T1ID]}")
 [ "$(DB "select status||'|'||\"assignedTeam\" from \"WorkOrder\" where id=$W2")" = "DONE|กรุงเทพ" ] \
   && pass "ทีมประจำสาขาปิดงานที่จ่ายข้ามไปได้ (ทีมที่รับยังเป็นกรุงเทพ)" || fail "ทีมประจำสาขาปิดไม่ได้: $(echo "$R" | head -c 200)"
+
+echo
+echo "═══ ใบที่ 3: หัวหน้าภาคของทีมที่รับปิดใบงาน (เจ้าของงานขอ 6 พ.ย. 69)"
+W3=$(open_order W4)
+POST $S "work-orders/$W3/assign" "{\"team\":\"กรุงเทพ\",\"scheduledAt\":\"$VISIT\"}" >/dev/null
+POST $A "work-orders/$W3/confirm-appointment" '{}' >/dev/null
+CLOSE_BODY='{"reason":"PHONE","note":"ทีมกรุงเทพแจ้งว่าแก้ทางโทรศัพท์ให้ร้านแล้ว"}'
+R=$(POST $Z "work-orders/$W3/supervisor-close" "$CLOSE_BODY")
+[ "$(GET $Z "work-orders/$W3" | J 'String(d.crossClose)')" = "undefined" ] && [ "$(DB "select status from \"WorkOrder\" where id=$W3")" = "ASSIGNED" ] \
+  && echo "$R" | grep -q "ดูได้อย่างเดียว" \
+  && pass "ก่อนปล่อยงาน: ทีมที่รับไม่มีสิทธิ์ปิด (ไม่มี crossClose · ปิดแล้วได้ดูได้อย่างเดียว · ฐานข้อมูลไม่เปลี่ยน)" \
+  || fail "ก่อนปล่อยงาน: $(echo "$R" | head -c 160) · $(DB "select status from \"WorkOrder\" where id=$W3")"
+POST $S "work-orders/$W3/dispatch" '{}' >/dev/null
+[ "$(GET $Z "work-orders/$W3" | J '[d.viewOnly, d.crossClose].join("|")')" = "true|true" ] \
+  && pass "ทีมเข้างานแล้ว: หน้าใบงานของหัวหน้าภาคทีมที่รับ ดูอย่างเดียว + crossClose" \
+  || fail "detail ตอนเข้างาน: $(GET $Z "work-orders/$W3" | J 'JSON.stringify([d.status,d.viewOnly,d.crossClose])')"
+R=$(POST $Z "work-orders/$W3/supervisor-close" "$CLOSE_BODY")
+[ "$(DB "select status||'|'||\"closeResult\"||'|'||\"closedById\" from \"WorkOrder\" where id=$W3")" = "DONE|SUPERVISOR_CLOSED|$ZID" ] \
+  && [ "$(DB "select action||'|'||\"userId\" from \"WorkOrderLog\" where \"workOrderId\"=$W3 order by id desc limit 1")" = "SUPERVISOR_CLOSED|$ZID" ] \
+  && pass "หัวหน้าภาคทีมที่รับปิดใบงานได้ (ฐานข้อมูล: ปิดงาน · SUPERVISOR_CLOSED · คนปิด + ประวัติ)" \
+  || fail "ทีมที่รับปิด: $(echo "$R" | head -c 200) · $(DB "select status, \"closeResult\", \"closedById\" from \"WorkOrder\" where id=$W3")"
 
 [ -z "$FAILED" ] && echo "── ผ่านทั้งหมด ──" || echo "── มีข้อที่ไม่ผ่าน ──"

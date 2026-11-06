@@ -3,6 +3,7 @@
 //   · จ่ายผ่านหน้าจอได้ (ฐานข้อมูล) · หน้าใบงานมีกล่องจ่ายข้ามทีม · รายการติด "ข้ามทีม"
 //   · หัวหน้าภาคของทีมที่รับเปิดใบได้ แต่ไม่มีปุ่ม (ดูได้อย่างเดียว)
 //   · ช่างทีมประจำสาขาและทีมที่รับเห็นปุ่มปิดงานทั้งคู่
+//   · ทีมเข้างานแล้ว: หัวหน้าภาคของทีมที่รับเห็นปุ่ม "ปิดใบงาน" (เจ้าของงานขอ 6 พ.ย. 69) — ปุ่มอื่นยังไม่มี
 const { chromium } = require("playwright");
 const { purgeOrders } = require("./purge"); // ล้างใบงานของเทสต์ — DELETE ย้ายไปถังขยะแล้ว (tests/lib/purge-orders.sh)
 const { execSync } = require("child_process");
@@ -162,6 +163,22 @@ const login = async (code, password = "test1234") =>
       await page.waitForTimeout(3000);
       (await vis("ปิดงาน").count()) > 0 ? pass(`ช่าง${who} เห็นปุ่มปิดงาน`) : fail(`ช่าง${who} ไม่มีปุ่มปิดงาน`);
       if (user === "T001") await page.screenshot({ path: path.join(DIR, "cross-team-home-tech.png") });
+      await ctx.close();
+    }
+
+    // ════ หัวหน้าภาคของทีมที่รับ ตอนทีมเข้างานแล้ว — ปิดใบงานได้ (เจ้าของงานขอ 6 พ.ย. 69) ════
+    {
+      const { ctx, page, vis, lbl, openOrder } = await session(`WR${suf}`, "temp12345");
+      await openOrder();
+      await vis(code).last().click();
+      await page.waitForTimeout(3000);
+      const box = (await lbl("กล่องจ่ายข้ามทีม").count()) ? await lbl("กล่องจ่ายข้ามทีม").first().innerText() : "";
+      const closeBtn = await page.locator('[aria-label="ปิดใบงาน"]').locator("visible=true").count();
+      const others = (await vis("แก้ไข").count()) + (await vis("ย้อนขั้นตอน").count());
+      box.includes("ปิดใบงานได้") && closeBtn > 0 && others === 0
+        ? pass("ทีมเข้างานแล้ว: หัวหน้าภาคทีมที่รับเห็นปุ่ม \"ปิดใบงาน\" (กล่องบอกว่าปิดได้) · ปุ่มแก้ไข/ย้อนขั้นยังไม่มี")
+        : fail(`ทีมที่รับตอนเข้างาน: กล่อง="${box}" ปุ่มปิด=${closeBtn} ปุ่มอื่น=${others}`);
+      await page.screenshot({ path: path.join(DIR, "cross-team-receiver-close.png") });
       await ctx.close();
     }
     errors.length ? fail(`error บนหน้า: ${errors.join(" | ")}`) : pass("ไม่มี error บนหน้า");
