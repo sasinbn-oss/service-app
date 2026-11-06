@@ -319,6 +319,12 @@ const DIR = __dirname;
     await page.screenshot({ path: path.join(DIR, "cap-error.png") }).catch(() => {});
     fail(`ทดสอบพัง: ${e.message}`);
   } finally {
+    // ใบที่เปิดจากฟอร์มปกติ (ช่องขนาดเครื่อง) ไม่ผูกกับเคส — เดิมค้างในฐานข้อมูลทุกรอบที่รัน
+    try {
+      await purgeOrders(fx.A, fx.sql(`select id from "WorkOrder" where symptom='น้ำไม่เข้า ทดสอบขนาด'`).split("\n").filter(Boolean));
+    } catch (e) {
+      fail(`ลบใบทดสอบขนาดไม่ได้: ${e.message}`);
+    }
     // ใบงานที่เปิดจากกระดานลบผ่าน API (ลบรูป/ประวัติให้ครบ) ก่อนลบเคส — ลบเคสก่อน ใบงานหลุดจากเคสแล้วหาไม่เจอ
     if (outageId) {
       try {
