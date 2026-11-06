@@ -255,7 +255,12 @@ export function inspectDispatched(o: { logs: PathLog[] }) {
  * ใบที่หัวหน้าภาคปิดเอง (SUPERVISOR_CLOSED และ RECOVERED ของใบเก่า) — ขั้นที่ใบรออยู่และขั้นที่ยังไปไม่ถึง
  * ตอนปิดไม่มีใครทำ ต้องขึ้นว่าข้าม ไม่ใช่ติ๊กว่าทำแล้ว · ขั้นตอนปิดอ่านจากประวัติแถวสุดท้ายก่อนปิด
  */
-const SUPERVISOR_CLOSES: Record<string, string> = { RECOVERED: "RECOVERED_CLOSED", SUPERVISOR_CLOSED: "SUPERVISOR_CLOSED" };
+// ใบ IT ที่แก้จากระยะไกล (REMOTE_FIXED) ก็เหมือนกัน — ปิดจากออฟฟิศ ขั้นที่เหลือไม่มีใครทำ
+const SUPERVISOR_CLOSES: Record<string, string> = {
+  RECOVERED: "RECOVERED_CLOSED",
+  SUPERVISOR_CLOSED: "SUPERVISOR_CLOSED",
+  REMOTE_FIXED: "REMOTE_CLOSED",
+};
 export function recoveredFrom(o: { closeResult?: string | null; logs: PathLog[] }): string | null {
   const action = o.closeResult ? SUPERVISOR_CLOSES[o.closeResult] : undefined;
   if (!action) return null;

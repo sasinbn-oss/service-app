@@ -2302,7 +2302,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <RolledBackBadge row={row} />
         <AdminReviewTag review={row.adminReview} />
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
-        {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
+        {row.closeResult === "SUPERVISOR_CLOSED" || row.closeResult === "REMOTE_FIXED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
         {row.stageActor ? <StuckText row={row} style={styles.td2} /> : null}
         {row.payWait ? <PayFollowLine p={row.payWait} style={styles.td2} /> : null}
         <PartsEta row={row} />
