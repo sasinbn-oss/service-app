@@ -136,6 +136,12 @@ export interface WorkOrderRow {
   claimStatus?: "PENDING" | "APPROVED" | "REJECTED" | "DECLINED" | null;
   /** ขั้นนี้เป็นของบทบาทไหน — ว่าง = ปิด/ยกเลิกแล้ว */
   stageActor: Role | null;
+  /** ประเภทงาน (CM · PM · IT …) — กล่องงานแยก "งาน CM | งาน IT" · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = นับเป็น CM */
+  jobType?: string;
+  /** ภาคของสาขา — ชิปภาคในส่วนงาน IT */
+  branchRegion?: string | null;
+  /** ใบ IT: หัวหน้าภาคที่ดูแลงาน IT (ขั้นของแอดมินในใบนี้คนนี้กดได้ด้วย) · null = ไม่ใช่ใบ IT หรือยังไม่ได้เลือกคน */
+  itLead?: { id: number; name: string } | null;
   /** รอหัวหน้าภาคแต่ไม่มีใครดูแลภาค/ทีมนี้ — กล่องงานแอดมินหัวข้อ "ไม่มีคนรับ" */
   orphan?: boolean;
   /** ทำไมไม่มีคนรับ: สาขายังไม่มีภาค/ทีม หรือภาค/ทีมนี้ยังไม่มีหัวหน้าภาค */
@@ -386,6 +392,89 @@ function stuckDays(iso: string) {
 }
 function outsourceLate(r: WorkOrderRow) {
   return !!r.outsource && r.status === "IN_PROGRESS" && stuckDays(r.stageSince) >= OUTSOURCE_LATE_DAYS;
+}
+
+/** ใบงาน IT — แยกส่วนในกล่องงาน (ดู segOn) */
+function isItRow(r: { jobType?: string }) {
+  return r.jobType === "IT";
+}
+
+/**
+ * สวิตช์ "งาน CM | งาน IT" ของกล่องงาน + ชิปภาคในส่วน IT (ทุกภาค + ภาคที่มีใบ พร้อมจำนวน)
+ * aria-selected ใส่เอง — เว็บไม่แปลง accessibilityState (เทสต์เบราว์เซอร์อ่านสถานะจากตรงนี้ · ดู FilterBar)
+ */
+function InboxSegments({
+  seg,
+  onSeg,
+  cmLabel,
+  itLabel,
+  cm,
+  it,
+  regions,
+  region,
+  onRegion,
+}: {
+  seg: "cm" | "it";
+  onSeg: (s: "cm" | "it") => void;
+  cmLabel: string;
+  itLabel: string;
+  cm: number;
+  it: number;
+  regions: [string, number][];
+  region: string;
+  onRegion: (r: string) => void;
+}) {
+  const segBtn = (value: "cm" | "it", label: string, n: number) => {
+    const on = seg === value;
+    return (
+      <TouchableOpacity
+        key={value}
+        style={[styles.segBtn, on && styles.segBtnOn]}
+        onPress={() => onSeg(value)}
+        accessibilityLabel={`${label} ${n} ใบ`}
+        accessibilityState={{ selected: on }}
+        {...({ "aria-selected": on } as object)}
+      >
+        <Text style={[styles.segText, on && styles.segTextOn]} numberOfLines={1}>
+          {label}
+        </Text>
+        <View style={[styles.segCount, on && styles.segCountOn]}>
+          <Text style={[styles.segCountText, on && styles.segCountTextOn]}>{n.toLocaleString("th-TH")}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+  const chip = (value: string, label: string, n: number) => {
+    const on = region === value;
+    return (
+      <TouchableOpacity
+        key={`r:${value}`}
+        style={[styles.regionChip, on && styles.regionChipOn]}
+        onPress={() => onRegion(value)}
+        accessibilityLabel={`ภาค ${label} ${n} ใบ`}
+        accessibilityState={{ selected: on }}
+        {...({ "aria-selected": on } as object)}
+      >
+        <Text style={[styles.regionChipText, on && styles.regionChipTextOn]}>
+          {label} {n.toLocaleString("th-TH")}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+  return (
+    <View style={styles.segWrap}>
+      <View style={styles.segRow}>
+        {segBtn("cm", cmLabel, cm)}
+        {segBtn("it", itLabel, it)}
+      </View>
+      {regions.length ? (
+        <View style={styles.regionRow}>
+          {chip("", "ทุกภาค", regions.reduce((a, [, n]) => a + n, 0))}
+          {regions.map(([r, n]) => chip(r, r || "ไม่มีภาค", n))}
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 function whoKeys(row: WorkOrderRow): Who[] {
@@ -662,7 +751,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const { width } = useWindowDimensions();
   // 1024 ไม่ใช่ 900 — ตั้งแต่มีคอลัมน์ "เปิดโดย" จอ 900–1000 เหลือที่ไม่พอ รหัสใบงานกับชื่อทีมหักบรรทัด
   const table = width >= 1024;
-  const [rows, setRows] = useState<WorkOrderRow[]>([]);
+  // ทุกแถวที่เซิร์ฟเวอร์ส่งมา — กล่องงานที่แยก "งาน CM | งาน IT" กรองต่อเป็น rows (ดูข้างล่าง)
+  const [allRows, setRows] = useState<WorkOrderRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   // ตัวเลขแท็บรอลูกค้าจ่ายเงินจากเซิร์ฟเวอร์ (ทุกใบในขอบเขต) — ป้ายบนแท็บกับชิป "รอจ่ายเกิน 3 วัน" ในกล่องงาน
   const [payTab, setPayTab] = useState<PayTabSummary | null>(null);
@@ -747,7 +837,34 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
    * กดสลับตัวกรองจึงเปลี่ยนทันทีโดยไม่ต้องรอเน็ต ตัวเลขบนปุ่มแต่ละแถวนับโดยใช้ตัวกรองของแถวอื่น
    * (เลือก DODO แล้วตัวเลขของ "หัวหน้าภาค" คือใบ DODO ที่รอหัวหน้าภาค)
    */
-  const supTabs = filter === "INBOX" && user?.role === "SUPERVISOR";
+  /**
+   * กล่องงานแยก "งาน CM | งาน IT" (เจ้าของงานตัดสิน 6 พ.ย. 69) — แอดมินทั่วไป และหัวหน้าภาคที่ดูแลงาน IT
+   * ใบ IT ยังอยู่ในกล่องของแอดมินครบ (แอดมินยังทำขั้นของตัวเองได้) แค่แยกออกจากใบ CM ไม่ให้ปนกัน
+   * CM = ทุกประเภทที่ไม่ใช่ IT · หัวข้อในกล่อง (ไม่มีคนรับ · เลยนัด · ขอนัดด่วน · รอนัดวัน) ตามส่วนที่เลือก เพราะนับจาก rows
+   * ส่วน IT มีชิปภาค (ทุกภาค + ภาคที่มีใบ) — งาน IT ไม่ตามภาคแล้ว หัวหน้า IT ดูทีละภาคได้
+   */
+  const segOn = filter === "INBOX" && ((user?.role === "ADMIN" && !user?.partsAdmin) || (user?.role === "SUPERVISOR" && !!user?.itLead));
+  const [seg, setSeg] = useState<"cm" | "it">("cm");
+  const [itRegion, setItRegion] = useState("");
+  const itRows = useMemo(() => (segOn ? allRows.filter(isItRow) : []), [segOn, allRows]);
+  const itRegions = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of itRows) m.set(r.branchRegion ?? "", (m.get(r.branchRegion ?? "") ?? 0) + 1);
+    return [...m].sort((a, b) => a[0].localeCompare(b[0], "th"));
+  }, [itRows]);
+  // ภาคที่เลือกไว้ไม่มีใบเหลือแล้ว (ทำเสร็จหมด) — กลับไปทุกภาค ไม่งั้นส่วน IT ว่างทั้งที่ภาคอื่นยังมีใบ
+  const region = itRegions.some(([r]) => r === itRegion) ? itRegion : "";
+  const rows = useMemo(
+    () =>
+      !segOn
+        ? allRows
+        : seg === "it"
+          ? itRows.filter((r) => !region || (r.branchRegion ?? "") === region)
+          : allRows.filter((r) => !isItRow(r)),
+    [segOn, seg, allRows, itRows, region]
+  );
+  // ส่วน IT ของหัวหน้า IT ไม่แบ่งแท็บงานแจ้งซ่อม/จ่ายงาน/SUB — ใบ IT มีทั้งขั้นของหัวหน้าภาคและของแอดมิน ดูรวมกันทีเดียว
+  const supTabs = filter === "INBOX" && user?.role === "SUPERVISOR" && !(segOn && seg === "it");
   // แอดมิน (ไม่ใช่ Admin Spare Part) ในกล่องงาน — หัวข้อปักของแอดมิน
   const adminCut = filter === "INBOX" && user?.role === "ADMIN" && !user?.partsAdmin;
   /**
@@ -960,7 +1077,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const pendingGone = useRef<string[]>([]);
   const [flash, setFlash] = useState<Set<string | number>>(new Set());
   const rowsRef = useRef<WorkOrderRow[]>([]);
-  rowsRef.current = rows;
+  rowsRef.current = allRows;
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearPending = () => {
     pendingRef.current = null;
@@ -1480,6 +1597,19 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         right={compact || isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
         testID={howtoTarget("orders.tabs").testID}
       />
+      {segOn && !loading && !error ? (
+        <InboxSegments
+          seg={seg}
+          onSeg={setSeg}
+          cmLabel={user?.role === "SUPERVISOR" ? `งาน CM ภาค${regionsOf(user).join(" · ") || " —"}` : "งาน CM"}
+          itLabel={user?.role === "SUPERVISOR" ? "งาน IT ทุกภาค" : "งาน IT"}
+          cm={allRows.length - itRows.length}
+          it={itRows.length}
+          regions={seg === "it" ? itRegions : []}
+          region={region}
+          onRegion={setItRegion}
+        />
+      ) : null}
       {supTabs && !loading && !error ? (
         <View style={styles.supTabs} {...howtoTarget("orders.supTabs")}>
           {SUP_TABS.map((t) => {
@@ -2302,7 +2432,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <RolledBackBadge row={row} />
         <AdminReviewTag review={row.adminReview} />
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
-        {row.closeResult === "SUPERVISOR_CLOSED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
+        {row.closeResult === "SUPERVISOR_CLOSED" || row.closeResult === "REMOTE_FIXED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
         {row.stageActor ? <StuckText row={row} style={styles.td2} /> : null}
         {row.payWait ? <PayFollowLine p={row.payWait} style={styles.td2} /> : null}
         <PartsEta row={row} />
@@ -2661,6 +2791,40 @@ const styles = StyleSheet.create({
   tbSep: { width: 1, height: 26, backgroundColor: colors.border, marginHorizontal: 2 },
   quickWrap: { paddingTop: spacing.md },
   activeWrap: { paddingTop: spacing.sm },
+  // สวิตช์ "งาน CM | งาน IT" — กล่องแบ่งสองช่องเต็มแถว อยู่เหนือแท็บย่อย (ชั้นบนสุดของกล่องงาน)
+  segWrap: { marginTop: spacing.sm, marginHorizontal: spacing.lg, gap: spacing.sm },
+  segRow: { flexDirection: "row", borderRadius: radius.md, backgroundColor: colors.tile, padding: 3, gap: 3 },
+  segBtn: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: radius.md - 2,
+    paddingHorizontal: spacing.sm,
+  },
+  segBtnOn: { backgroundColor: colors.card, ...shadow.raised },
+  segText: { flexShrink: 1, fontSize: 14, lineHeight: 21, fontWeight: "700", color: colors.textMuted },
+  segTextOn: { color: colors.primaryDark },
+  segCount: { borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.card },
+  segCountOn: { backgroundColor: colors.primarySoft },
+  segCountText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
+  segCountTextOn: { color: colors.primaryDark },
+  regionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  regionChip: {
+    minHeight: 32,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  regionChipOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  regionChipText: { fontSize: 13, lineHeight: 19, fontWeight: "600", color: colors.textMuted },
+  regionChipTextOn: { color: colors.primaryDark },
   // แท็บแบบขีดเส้นใต้ ไม่ใช่ปุ่มกลม — หน้าตาต่างจากชิปข้างล่าง ให้เห็นว่าเป็นชั้นบนสุดของกล่องงาน
   supTabs: {
     flexDirection: "row",

@@ -7,6 +7,8 @@
 //     · ทุกหัวข้อเปิดได้ จำนวนแถว = ตัวเลขบนเมนู = ตัวเลขบนการ์ดภาพรวม · ใบทดสอบอยู่หัวข้อที่ถูกและอยู่หัวข้อเดียว (ค้นด้วยรหัส)
 //     · ชิป "ตรวจพรุ่งนี้" กรองถูก (aria-selected) · ปุ่มน้ำเงิน "ส่งใบเสนอราคา" เปิดใบพร้อมฟอร์มของขั้น · รอเงิน "ลูกค้าจ่ายแล้ว · แนบบิล"
 //       เปิดฟอร์มแนบบิล · "ตามลูกค้าแล้ว" ในแถว → ฐานข้อมูลมี PAYMENT_FOLLOWUP · ค้นทุกหัวข้อ แยกตามหัวข้อ "x จาก y"
+//   · ใบงาน IT (เจ้าของงานแก้ 6 พ.ย. 69 — แยกหัวข้อในงานของแอดมิน): ใบ IT ขั้นส่งใบเสนอราคาอยู่หัวข้อ "งาน IT" หัวข้อเดียว
+//     (ไม่อยู่หัวข้อส่งใบเสนอราคา) · หัวข้อ "งาน IT" อยู่หลังขั้นของสายงาน · ผลรวมทุกหัวข้อยังเท่า /inbox-count
 //   · มือถือ 390: ภาพรวมเป็นรายการ → แตะหัวข้อ → รายการของหัวข้อ → "‹ ภาพรวม" กลับ · ช่องค้นหา "พบ x จาก y ใบ" · ไม่ล้นจอ
 //   · หัวหน้าภาค · ช่าง · Admin Spare Part: หน้าเดิม (ไม่มีเมนูหัวข้อ/แถบต้องทำก่อนวันนี้)
 // ต้องมี DATABASE_URL
@@ -59,6 +61,9 @@ const APP = "http://localhost:8081";
     // ตอบหัวหน้าภาค — ใบรอหัวหน้าภาคระบุอะไหล่ที่หัวหน้าภาคส่งให้แอดมินตรวจสอบ (ทาง API ของหัวหน้าภาค)
     O.REV = await fx.workOrder("C0006", null);
     const rv = await call(fx.supervisor(), "POST", `/work-orders/${O.REV.id}/admin-review`, { reason: "SYMPTOM", note: "อาการไม่ชัด ขอข้อมูลเพิ่มจากร้าน (ทดสอบหัวข้อ)" });
+    // ใบงาน IT ขั้นของแอดมิน — ต้องอยู่หัวข้อ "งาน IT" ไม่ใช่หัวข้อส่งใบเสนอราคา
+    O.IT = await at("AWAITING_QUOTE")();
+    sql(`update "WorkOrder" set "jobType"='IT' where id=${O.IT.id}`);
     const states = sql(`select string_agg(code||'='||status, ' ' order by id) from "WorkOrder" where id in (${Object.values(O).map((o) => o.id).join(",")})`);
     sql(`select status from "WorkOrder" where id=${O.PAY.id}`) === "AWAITING_PAYMENT" && !rv.error
       ? pass(`เตรียมใบ: ${states}`) : fail(`เตรียมใบไม่ครบ: ${states} · คำขอตรวจสอบ ${JSON.stringify(rv).slice(0, 120)}`);
@@ -68,6 +73,7 @@ const APP = "http://localhost:8081";
     const WANT = {
       INS: nameOf("INSPECT_CONFIRM"), SRC: nameOf("PARTS_SOURCING"), QUO: nameOf("AWAITING_QUOTE"), PAY: nameOf("AWAITING_PAYMENT"),
       REQ: nameOf("PARTS_REQUESTED"), CON: nameOf("AWAITING_CONFIRM"), PAST: "ต้องทำก่อนวันนี้", REV: "ตอบหัวหน้าภาค",
+      IT: "งาน IT",
     };
     const ORDER = ["ต้องทำก่อนวันนี้", "ตอบหัวหน้าภาค", WANT.INS, WANT.SRC, WANT.QUO, WANT.PAY, WANT.REQ, WANT.CON];
     const inbox = (await call(A, "GET", "/work-orders?status=INBOX")).rows;
@@ -101,7 +107,8 @@ const APP = "http://localhost:8081";
     const nav = await pre("เมนูหัวข้อ ").evaluateAll((ns) => ns.map((n) => n.getAttribute("aria-label").replace(/^เมนูหัวข้อ /, "")));
     const navTopics = nav.slice(1).map((x) => x.replace(/ \d+$/, ""));
     const navN = Object.fromEntries(nav.map((x) => [x.replace(/ \d+$/, ""), Number(x.match(/ (\d+)$/)[1])]));
-    JSON.stringify(navTopics.slice(0, 8)) === JSON.stringify(ORDER) && (navTopics.length === 8 || navTopics[8] === "อื่น ๆ")
+    // หลังขั้นของสายงาน: "งาน IT" (มีใบ IT อยู่ในกล่อง) แล้ว "อื่น ๆ" (ถ้ามี)
+    JSON.stringify(navTopics.slice(0, 8)) === JSON.stringify(ORDER) && navTopics[8] === "งาน IT" && (navTopics.length === 9 || navTopics[9] === "อื่น ๆ")
       ? pass(`เมนูซ้ายเรียงตามลำดับงาน: ${navTopics.join(" → ")} (ชื่อจากป้ายขั้นของเซิร์ฟเวอร์)`) : fail(`เมนูซ้าย: ${navTopics.join(" | ")} ต้องเป็น ${ORDER.join(" | ")}`);
     const sum = navTopics.reduce((n, t) => n + navN[t], 0);
     const totalTile = Number((await page.getByText("รอทำทั้งหมด", { exact: true }).locator("visible=true").first().evaluate((n) => n.parentElement.innerText)).match(/\d+/)[0]);
@@ -117,17 +124,22 @@ const APP = "http://localhost:8081";
     await page.screenshot({ path: path.join(DIR, "myday-admin-1-overview.png") });
 
     // ── ทุกหัวข้อเปิดได้ · จำนวนแถว = ตัวเลข · ใบทดสอบอยู่หัวข้อที่ถูก ──
+    const rowsOf = {};
     for (const t of navTopics) {
       await lbl(`เมนูหัวข้อ ${t} ${navN[t]}`).first().click();
       await page.waitForTimeout(900);
       const view = lbl(`รายการหัวข้อ ${t}`).first();
       const rows = (await view.count()) ? await view.locator('[aria-label^="แถว"]').evaluateAll((ns) => ns.filter((n) => n.getClientRects().length).map((n) => n.getAttribute("aria-label").replace(/^แถว(รอจ่าย)? /, ""))) : null;
+      rowsOf[t] = rows ?? [];
       const mine = Object.keys(O).filter((k) => WANT[k] === t).map((k) => O[k].code);
       const sel = await lbl(`เมนูหัวข้อ ${t} ${navN[t]}`).first().getAttribute("aria-selected");
       rows && rows.length === navN[t] && mine.every((c) => rows.includes(c)) && sel === "true"
         ? pass(`หัวข้อ "${t}": ${rows.length} แถว = ตัวเลขเมนู${mine.length ? ` · มี ${mine.join(", ")}` : ""} · เมนูติด`)
         : fail(`หัวข้อ "${t}": แถว ${rows ? rows.length : "ไม่เปิด"} ต้อง ${navN[t]} · ${mine.join(",")} · ${sel}`);
     }
+    const itIn = Object.keys(rowsOf).filter((t) => rowsOf[t].includes(O.IT.code));
+    JSON.stringify(itIn) === JSON.stringify(["งาน IT"])
+      ? pass(`ใบ IT ${O.IT.code} อยู่หัวข้อ "งาน IT" หัวข้อเดียว (ไม่อยู่หัวข้อ "${WANT.QUO}")`) : fail(`ใบ IT อยู่หัวข้อ: ${itIn.join(", ")}`);
     // ชิปของหัวข้อนัดร้าน: ตรวจพรุ่งนี้
     await lbl(`เมนูหัวข้อ ${WANT.INS} ${navN[WANT.INS]}`).first().click();
     await page.waitForTimeout(800);

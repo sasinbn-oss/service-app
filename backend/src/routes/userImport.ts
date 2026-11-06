@@ -6,6 +6,7 @@
  * commit รับรายชื่อจากหน้าตัวอย่าง (ไม่อ่านไฟล์ซ้ำ) เพราะแอดมินแก้คู่ทีมไปแล้วในหน้านั้น
  * แต่ตรวจทุกค่าซ้ำที่นี่ — ชื่อทีมต้องมีจริง และตั้งได้แค่สิทธิ์ช่าง/หัวหน้าภาค
  */
+import { itLeadChanged } from "../utils/itLead";
 import { Router } from "express";
 import crypto from "crypto";
 import ExcelJS from "exceljs";
@@ -244,6 +245,8 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
                   supervisedTeams: p.role === "SUPERVISOR" ? [...new Set([...u.supervisedTeams, ...supTeams])] : [],
                   // ไม่ใช่หัวหน้าภาคแล้ว = ล้างทุกภาค · ยังเป็นหัวหน้าภาค = คงภาคเดิม (ไฟล์รายชื่อไม่มีคอลัมน์ภาค)
                   ...(p.role !== "SUPERVISOR" ? { region: null, extraRegions: [] } : {}),
+                  // ไม่ใช่หัวหน้าภาคแล้ว = ไม่ได้ถือใบ IT ทั้งบริษัทต่อ (ดู User.itLead) — ใบ IT กลับไป "ไม่มีคนรับ" ของแอดมิน
+                  ...(p.role !== "SUPERVISOR" ? { itLead: false } : {}),
                 }),
           },
         });
@@ -269,6 +272,8 @@ router.post("/commit", requireAuth, requireAdmin, async (req: AuthRequest, res) 
   });
   // คนที่เข้าระบบไว้แล้วถูกตั้งเป็นหัวหน้าภาค ต้องใช้สิทธิ์ใหม่ได้ทันที ไม่ใช่หลังเข้าระบบใหม่
   staleUsers();
+  // บทบาทเปลี่ยนจากไฟล์ได้ (หัวหน้าภาค → ช่าง ถอดหน้าที่ดูแลงาน IT ด้วย) — ชุด "ไม่มีคนรับ" ที่จำไว้ต้องคิดใหม่
+  itLeadChanged();
   await recordImport({
     kind: "USER_ROSTER",
     userId: req.auth!.userId,

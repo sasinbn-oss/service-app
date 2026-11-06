@@ -74,6 +74,7 @@ import HowToButton from "../components/HowToButton";
 import { howtoTarget, useHowToAction } from "../utils/howto";
 import BackfillCloseModal from "../components/BackfillCloseModal";
 import SupervisorCloseModal from "../components/SupervisorCloseModal";
+import RemoteCloseModal from "../components/RemoteCloseModal";
 import WorkOrderAttachments, { Attachment } from "../components/WorkOrderAttachments";
 import { linkFor, prefetchAttachments } from "../utils/attachmentCache";
 import { AdminReplyModal, AdminReviewBox, ackAdminReview, cancelAdminReview, type AdminReviewInfo } from "../components/AdminReview";
@@ -309,6 +310,10 @@ interface WorkOrder {
    * phone มีเฉพาะ GET ใบงานของแอดมิน (หน้าต่างแก้เป็นงานด่วน: "ยังไม่ได้บอก — โทรถาม <ชื่อ> <เบอร์>") · ก้อนที่ปุ่มบันทึกคืนมาไม่มี
    */
   supervisors?: { id: number; name: string; phone?: string | null }[];
+  /** ใบ IT: หัวหน้าภาคที่ดูแลงาน IT (กดขั้นของแอดมินในใบนี้ได้ด้วย) · null = ไม่ใช่ใบ IT หรือยังไม่ได้เลือกคน */
+  itLead?: { id: number; name: string } | null;
+  /** ขั้นที่ปิดแบบ "แก้จากระยะไกลแล้ว" ได้ (ใบ IT เท่านั้น — ว่าง = ใบอื่น) · เซิร์ฟเวอร์ตัดสินซ้ำตอนกด */
+  remoteCloseStages?: string[];
   /**
    * จ่ายข้ามทีม (เจ้าของงานขอ ต.ค. 69) — ทีมที่รับไม่ใช่ทีมประจำสาขา · ช่างปิดงานได้ทั้งสองทีม
    * watchers = หัวหน้าภาคของทีมที่รับ เห็นใบแต่ดูได้อย่างเดียว
@@ -1083,6 +1088,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [supClosing, setSupClosing] = useState(false);
+  // "แก้จากระยะไกลแล้ว · ปิดงาน" (ใบ IT) — ฟอร์มบันทึกสิ่งที่แก้ + ภาพหน้าจอหลักฐาน
+  const [remoteClosing, setRemoteClosing] = useState(false);
   // ชีตแก้ยี่ห้อเครื่อง (ข้อ 23) — เปิดจากหน้าใบงาน ไม่ใช่จากในฟอร์มขั้นตอน (Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ)
   const [brandFixOpen, setBrandFixOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -1147,7 +1154,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
    * ตั้งแต่มีวันนัดจนช่างกดถึงหน้างาน (เซิร์ฟเวอร์กันซ้ำ) — ช่างถึงแล้วเลื่อนไม่ได้ ใช้ "แจ้งปัญหาหน้างาน" ของช่าง
    */
   const reschedulable = (o: WorkOrder) =>
-    canMoveDates(user) &&
+    (canMoveDates(user) || (itLeadOf(user) && o.jobType === "IT")) &&
     !!o.scheduledAt &&
     rescheduleStages.includes(o.status) &&
     !(RECALL_STAGES.includes(o.status) && techArrived(o));
@@ -1175,6 +1182,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
      * ดูในฐานะ/Admin Spare Part ไม่มี user ในหน้านี้ จึงไม่เปิดอะไร
      */
     else if (want === "stage" && user?.role === "ADMIN" && ADMIN_FORM_STAGES.includes(order.status) && myTurn(order)) setStageOpen(true);
+    // หัวหน้าภาคที่ดูแลงาน IT กดปุ่มขั้นของแอดมินบนการ์ดใบ IT — เปิดฟอร์มของขั้นนั้นเลยเหมือนแอดมิน
+    else if (want === "stage" && itLeadActs(user, order) && ADMIN_FORM_STAGES.includes(order.status)) setStageOpen(true);
     else if (want === "problem" && order.status === "IN_PROGRESS") setRollbackOpen(true);
     else if (want === "reschedule" && reschedulable(order)) openReschedule();
   }, [order]);
@@ -1623,6 +1632,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     if (!user) return false;
     // เบิกคลังอื่นเป็นสิทธิ์ของหัวหน้าภาค — แอดมินทำแทนได้ทุกขั้นยกเว้นขั้นนี้ (เซิร์ฟเวอร์กันซ้ำ)
     if (user.role === "ADMIN") return !["PARTS_TRANSFER", "PARTS_IN_TRANSIT", "PARTS_PICKUP"].includes(o.status);
+    // หัวหน้าภาคที่ดูแลงาน IT ทำขั้นของแอดมินในใบ IT ได้ ("ทำได้ทั้งหมด" ยกเว้นตรวจเคลม — เซิร์ฟเวอร์กันซ้ำ)
+    if (itLeadActs(user, o)) return true;
     // ทีม outsource ไม่มีบัญชีในแอป — หัวหน้าภาคปิดงาน/แจ้งปัญหาแทน (เจ้าของงานเลือก ต.ค. 69)
     if (o.status === "IN_PROGRESS" && o.assignedOutsource && user.role === "SUPERVISOR") return true;
     // ผลตรวจหน้างาน หัวหน้าภาคบันทึกแทนได้ เผื่อช่างโทรมาเล่าแทนการกรอกเอง
@@ -1843,6 +1854,16 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
     (user?.role === "SUPERVISOR" || user?.role === "ADMIN") &&
     !user?.viewAs &&
     !["DONE", "CANCELLED", "CLAIM_REVIEW"].includes(order.status);
+  /**
+   * ใบ IT ที่แก้จากระยะไกลได้ — แอดมิน และหัวหน้าภาคที่ดูแลงาน IT · ขั้นตามที่เซิร์ฟเวอร์ส่งมา (ยังไม่มีช่างถือใบ ไม่มีของ/เงินเดิน)
+   * ใบที่เบิกของออกจากคลังแล้วเซิร์ฟเวอร์ตอบเหตุผลเองตอนกด (ปุ่มไม่ซ่อน — คนกดจะได้รู้ว่าต้องคืนคลังก่อน)
+   */
+  const canRemoteClose =
+    !!user &&
+    !user.viewAs &&
+    order.jobType === "IT" &&
+    ((user.role === "ADMIN" && !user.partsAdmin) || itLeadOf(user)) &&
+    (order.remoteCloseStages ?? []).includes(order.status);
 
   const tone = statusTone(order.status);
   /**
@@ -1986,6 +2007,17 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
               ? `เครื่อง ${order.machineCode}: ${brand} · ยี่ห้อนี้มาจากรายงานเครื่อง — แก้ในไฟล์รายงานด้วย ไม่งั้นนำเข้าครั้งหน้าทับกลับ`
               : `เครื่อง ${order.machineCode}: ${brand}`
           );
+        }}
+      />
+    ) : null}
+    {remoteClosing ? (
+      <RemoteCloseModal
+        order={order}
+        onClose={() => setRemoteClosing(false)}
+        onDone={async () => {
+          setRemoteClosing(false);
+          setFilesKey((k) => k + 1);
+          await reloadWithNotice("ปิดงานแล้ว (แก้จากระยะไกล)");
         }}
       />
     ) : null}
@@ -2808,7 +2840,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     const eta = out ? (
                       etaDay ? (
                         <Text style={[styles.ptEtaText, etaLate && { color: colors.dangerInk }]}>{thaiDate(etaDay)}</Text>
-                      ) : user?.role === "ADMIN" ? (
+                      ) : user?.role === "ADMIN" || (itLeadOf(user) && order.jobType === "IT") ? (
                         <TouchableOpacity style={styles.ptEtaBtn} onPress={() => setEtaOpen(true)} accessibilityLabel={`ใส่วันคาดว่าเข้า ${partTitle(part)}`}>
                           <Ionicons name="calendar-outline" size={14} color={colors.navy} />
                           <Text style={styles.ptEtaBtnText}>ใส่วันที่</Text>
@@ -3069,7 +3101,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
             <View style={[styles.summaryBox, closedOk && styles.summaryBoxDone]}>
               {/* หัวหน้าภาคปิดเองไม่มีงานที่ทำ — สิ่งที่บันทึกไว้คือเหตุผล เรียกให้ตรง */}
               <Text style={styles.summaryLabel}>
-                {order.closeResult === "SUPERVISOR_CLOSED" ? "เหตุผลที่หัวหน้าภาคปิด" : "สรุปงานที่ทำ"}
+                {order.closeResult === "SUPERVISOR_CLOSED" ? "เหตุผลที่หัวหน้าภาคปิด" : order.closeResult === "REMOTE_FIXED" ? "สิ่งที่แก้จากระยะไกล" : "สรุปงานที่ทำ"}
               </Text>
               <Text style={styles.summaryText}>{order.closeNote}</Text>
             </View>
@@ -3373,6 +3405,16 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       {canFollowUp || canEnd || user?.role === "ADMIN" ? (
         <View style={[card, styles.toolsCard]}>
           <Text style={styles.toolsTitle}>เครื่องมือเพิ่มเติม</Text>
+          {canRemoteClose ? (
+            <TouchableOpacity
+              style={styles.toolsClose}
+              onPress={() => setRemoteClosing(true)}
+              accessibilityLabel="แก้จากระยะไกลแล้ว · ปิดงาน"
+            >
+              <Ionicons name="desktop-outline" size={18} color={colors.navy} />
+              <Text style={styles.toolsCloseText}>แก้จากระยะไกลแล้ว · ปิดงาน</Text>
+            </TouchableOpacity>
+          ) : null}
           {canEnd && !recovered ? (
             <TouchableOpacity style={styles.toolsClose} onPress={() => setSupClosing(true)} accessibilityLabel="ปิดใบงาน">
               <Ionicons name="checkmark-done-circle-outline" size={18} color={colors.navy} />
@@ -5268,6 +5310,19 @@ function useScrollTarget(scrollRef: React.RefObject<ScrollView | null>) {
     if (top !== null) scrollRef.current?.scrollTo({ y: Math.max(0, top - 16), animated: true });
   };
   return { bind, go };
+}
+
+/** ผู้ใช้คนนี้เป็นหัวหน้าภาคที่ดูแลงาน IT (ไม่ใช่ตอนดูในฐานะ — ดูได้อย่างเดียว) */
+function itLeadOf(u: { role?: string; itLead?: boolean; viewAs?: unknown } | null | undefined) {
+  return !!u && u.role === "SUPERVISOR" && !!u.itLead && !u.viewAs;
+}
+/**
+ * ขั้นของแอดมินที่หัวหน้าภาคที่ดูแลงาน IT กดได้ในใบ IT — ตรงกับ IT_LEAD_ADMIN_STAGES ฝั่งเซิร์ฟเวอร์ (utils/itLead.ts)
+ * ตรวจเคลมไม่อยู่ในรายการ (เป็นของ Admin Spare Part)
+ */
+const IT_LEAD_ADMIN_STAGES = ["INSPECT_CONFIRM", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "PARTS_REQUESTED", "AWAITING_CONFIRM"];
+function itLeadActs(u: Parameters<typeof itLeadOf>[0], o: { jobType: string; status: string }) {
+  return itLeadOf(u) && o.jobType === "IT" && IT_LEAD_ADMIN_STAGES.includes(o.status);
 }
 
 function StageModal({
