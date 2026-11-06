@@ -73,7 +73,8 @@ import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/S
 import { pageEnterLayout } from "../components/PageEnter";
 import AreaOnlyGate from "../components/AreaOnlyGate";
 import HowToButton from "../components/HowToButton";
-import { CreateOrderButton, ProfileMenu, QueueSwitch, TopTabs } from "../components/TopNav";
+import { CreateOrderButton, ProfileMenu, QueueSwitch } from "../components/TopNav";
+import GlobalSearch from "../components/GlobalSearch";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -301,11 +302,15 @@ function AppTopBar() {
       <Brand subtitle="ระบบงานช่างซ่อม" compact={width < 480} />
       {/*
         แถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา — components/TopNav.tsx)
-        จอกว้างพอค่อยขึ้นแท็บลัด/สลับงานของฉัน ไม่งั้นชื่อผู้ใช้ถูกบีบหาย
+        ซ้ายบนเป็นช่องค้นหาทั้งระบบแทนแท็บลัด (เจ้าของงานเลือก — แท็บลัดซ้ำกับเมนูข้าง)
+        สลับงานของฉัน/ภาพรวมขึ้นเมื่อจอกว้างพอ ไม่งั้นชื่อผู้ใช้ถูกบีบหาย
       */}
-      {width >= 1280 ? <TopTabs /> : null}
+      <GlobalSearch />
       <View style={{ flex: 1 }} />
       <UpdateButton compact={!wide} />
+      {/* ดูในฐานะ · คนออนไลน์ กลับมาอยู่บนแถบ (เจ้าของงานขอ) — จอไม่ถึง 1700 เหลือไอคอน ให้ช่องค้นหาไม่ถูกบีบ */}
+      <ViewAsButton compact={width < 1700} />
+      <UsageButton compact={width < 1700} />
       {width >= 1100 ? <QueueSwitch /> : null}
       <CreateOrderButton />
       <View style={styles.headerRight}>

@@ -2442,6 +2442,96 @@ function payTabSummary(waits: { over: boolean; follows: number; alertDays: numbe
   };
 }
 
+/**
+ * ช่องค้นหาบนสุด — ค้นทั้งระบบในช่องเดียว (ตัวอย่าง พ.ย. 69 · เจ้าของงานขอ "ค้นหาอะไรก็ได้ทั้งระบบ")
+ *
+ * ใบงานใช้ขอบเขตเดียวกับรายการ (scopeFor) — ช่องค้นหาต้องไม่เปิดใบที่คนนั้นเปิดในรายการไม่ได้
+ * คนในระบบให้เฉพาะแอดมินกับหัวหน้าภาค (ช่างหาเบอร์เพื่อนในผังผู้รับผิดชอบได้อยู่แล้ว) · อย่างละไม่เกิน 5 รายการ
+ * ค้นเลขใบแบบตัวเลขล้วนด้วย ("4324" เจอ WO-04324) — คนจำแค่ตัวเลขท้าย
+ */
+router.get("/search-all", requireAuth, async (req: AuthRequest, res) => {
+  const q = String(req.query.q ?? "").trim().slice(0, 80);
+  if (q.length < 2) return res.json({ q, workOrders: [], branches: [], people: [], machines: [], parts: [] });
+  const like = { contains: q, mode: "insensitive" as const };
+  const scope = await scopeFor(req);
+  const role = req.auth!.role;
+  const seePeople = role === "ADMIN" || role === "SUPERVISOR";
+  const [orders, branches, people, machines, parts] = await Promise.all([
+    prisma.workOrder.findMany({
+      where: {
+        AND: [
+          scope,
+          {
+            OR: [
+              { code: like },
+              { title: like },
+              { symptom: like },
+              { branch: { code: like } },
+              { branch: { name: like } },
+              { machine: { code: like } },
+              { assignedTeam: like },
+              { assignedTo: { name: like } },
+              { createdBy: { name: like } },
+            ],
+          },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: {
+        id: true,
+        code: true,
+        title: true,
+        symptom: true,
+        status: true,
+        branch: { select: { code: true, name: true } },
+        machine: { select: { code: true } },
+      },
+    }),
+    prisma.branch.findMany({
+      where: { OR: [{ code: like }, { name: like }] },
+      orderBy: { code: "asc" },
+      take: 5,
+      select: { id: true, code: true, name: true, region: true },
+    }),
+    seePeople
+      ? prisma.user.findMany({
+          where: { deletedAt: null, OR: [{ name: like }, { employeeCode: like }, { team: like }] },
+          orderBy: { name: "asc" },
+          take: 5,
+          select: { id: true, name: true, employeeCode: true, role: true, team: true, region: true },
+        })
+      : Promise.resolve([]),
+    prisma.machine.findMany({
+      where: { code: like },
+      orderBy: { code: "asc" },
+      take: 5,
+      select: { id: true, code: true, brand: true, branch: { select: { code: true, name: true } } },
+    }),
+    prisma.sparePart.findMany({
+      where: { offCatalog: false, OR: [{ partCode: like }, { name: like }] },
+      orderBy: { partCode: "asc" },
+      take: 5,
+      select: { id: true, partCode: true, name: true, brand: true },
+    }),
+  ]);
+  res.json({
+    q,
+    workOrders: orders.map((o) => ({
+      id: o.id,
+      code: o.code,
+      title: (o.symptom ?? "").split("\n")[0].trim() || o.title,
+      branch: `${o.branch.code} ${o.branch.name}`,
+      machine: o.machine?.code ?? null,
+      statusLabel: statusLabelOf(o.status),
+    })),
+    branches,
+    people: people.map((p) => ({ ...p, roleLabel: ROLE_LABELS[p.role] ?? p.role })),
+    machines: machines.map((m) => ({ id: m.id, code: m.code, brand: m.brand, branch: `${m.branch.code} ${m.branch.name}` })),
+    parts,
+  });
+});
+
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });

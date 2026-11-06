@@ -5,7 +5,7 @@
  * ปรับให้เข้ากับระบบเรา:
  * - แท็บลัดหยิบจากเมนูข้าง (แผนงาน · ใบงานซ่อม · ติดตามเครื่องเสีย · รายงาน) — คนที่ไม่เห็นเมนูไหนก็ไม่เห็นแท็บนั้น
  * - "งานของฉัน" = กล่องงานของฉัน (ตัวเลขเดียวกับป้ายในเมนูข้าง) · "ภาพรวม" = หน้าหลัก
- * - ปุ่มที่เคยเรียงบนแถบ (ดูในฐานะ · การใช้งาน · โหมดมืด · ออกจากระบบ) ย้ายเข้าเมนูใต้ชื่อผู้ใช้ — แถบเหลือแค่ที่ใช้ทุกวัน
+ * - โหมดมืดกับออกจากระบบย้ายเข้าเมนูใต้ชื่อผู้ใช้ · ดูในฐานะ/คนออนไลน์ยังอยู่บนแถบ (เจ้าของงานขอเอากลับ — ใช้บ่อย)
  * - รีเฟรชยังอยู่บนแถบเป็นไอคอนคู่กับ ? (ใช้บ่อย) · กระดิ่งยังไม่ใส่ เพราะระบบยังไม่มีการแจ้งเตือน (ถามเจ้าของงานแล้ว)
  *
  * เมนูใต้ชื่อเป็นแผ่นที่กางในที่ ไม่ใช่ Modal — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (ดู CLAUDE.md)
@@ -16,8 +16,6 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import ThemeToggle from "./ThemeToggle";
 import { activeMenuKey, menuItemsFor, openMenuKey } from "./SideMenu";
-import { canViewUsage, openUsage, useOnlineCount } from "./UsageButton";
-import { ViewAsPicker, canViewAs } from "./ViewAs";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
 import { navigationRef } from "../navigation/navigationRef";
@@ -120,13 +118,10 @@ export function CreateOrderButton() {
   );
 }
 
-/** รูป (ตัวอักษรแรก) + ชื่อ + ตำแหน่ง — กดแล้วกางเมนู: ดูในฐานะ · การใช้งาน · โหมดมืด · ออกจากระบบ */
+/** รูป (ตัวอักษรแรก) + ชื่อ + ตำแหน่ง — กดแล้วกางเมนู: โหมดมืด · ออกจากระบบ */
 export function ProfileMenu({ showName }: { showName: boolean }) {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const usage = canViewUsage(user);
-  const online = useOnlineCount(usage);
   if (!user) return null;
   const close = () => setOpen(false);
   return (
@@ -162,27 +157,6 @@ export function ProfileMenu({ showName }: { showName: boolean }) {
               <Text style={styles.panelName}>{user.name}</Text>
               <Text style={styles.panelRole}>{sessionRoleLabel(user)}</Text>
             </View>
-            {canViewAs(user) ? (
-              <Row
-                icon="eye-outline"
-                label="ดูในฐานะ…"
-                onPress={() => {
-                  close();
-                  setPicking(true);
-                }}
-              />
-            ) : null}
-            {usage ? (
-              <Row
-                icon="pulse-outline"
-                label={`การใช้งาน · ${online ?? "–"} คนออนไลน์`}
-                dot
-                onPress={() => {
-                  close();
-                  openUsage();
-                }}
-              />
-            ) : null}
             {Platform.OS === "web" ? (
               <View style={styles.row}>
                 <Ionicons name="moon-outline" size={18} color={colors.body} />
@@ -207,7 +181,6 @@ export function ProfileMenu({ showName }: { showName: boolean }) {
           </View>
         </>
       ) : null}
-      {picking ? <ViewAsPicker onClose={() => setPicking(false)} /> : null}
     </View>
   );
 }
@@ -217,18 +190,15 @@ function Row({
   label,
   onPress,
   danger,
-  dot,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
   danger?: boolean;
-  dot?: boolean;
 }) {
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7} accessibilityLabel={label}>
       <Ionicons name={icon} size={18} color={danger ? colors.dangerInk : colors.body} />
-      {dot ? <View style={styles.onlineDot} /> : null}
       <Text style={[styles.rowText, danger && { color: colors.dangerInk }]}>{label}</Text>
     </TouchableOpacity>
   );
