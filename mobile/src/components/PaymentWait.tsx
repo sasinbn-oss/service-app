@@ -17,6 +17,7 @@ import Spinner from "./Spinner";
 import DateField, { thaiDateLong, todayBkk } from "./DateField";
 import { api, apiErrorMessage } from "../api/client";
 import { showAlert } from "../utils/alert";
+import { itLeadActs } from "../utils/itLead";
 import { hhmm, shortDay } from "./claims/ClaimTrail";
 import { colors, radius, spacing } from "../theme";
 
@@ -68,11 +69,16 @@ export interface DeclineReason {
 }
 
 /**
- * กด "ตามลูกค้าแล้ว" / "ลูกค้าไม่ซ่อม" ในแถวได้ไหม — กติกาเดียวกับหน้าใบงาน: ขั้นนี้ถึงคิวแอดมิน (myTurn) · Admin Spare Part ดูอย่างเดียว
- * (viewOnly) · ดูในฐานะไม่มีปุ่ม · ปุ่มในแถวต้องไม่กว้างกว่าหน้าใบงาน (เจ้าของงานกำชับ 6 พ.ย. 69) — เซิร์ฟเวอร์กันอีกชั้นด้วย guardStage
+ * กด "ตามลูกค้าแล้ว" / "ลูกค้าไม่ซ่อม" ในแถวได้ไหม — กติกาเดียวกับหน้าใบงาน (myTurn ของขั้นรอเงิน + ไม่ใช่ดูในฐานะ):
+ * แอดมินทุกใบ (Admin Spare Part ดูอย่างเดียว — viewOnly) · หัวหน้าภาคที่ดูแลงาน IT เฉพาะใบ IT (itLeadActs ตัวเดียวกับหน้าใบงาน)
+ * ปุ่มในแถวต้องไม่กว้างกว่าหน้าใบงาน (เจ้าของงานกำชับ 6 พ.ย. 69) — เซิร์ฟเวอร์กันอีกชั้นด้วย guardStage
  */
-export function canActOnPayment(u: { role?: string; partsAdmin?: boolean; viewAs?: unknown } | null | undefined) {
-  return !!u && u.role === "ADMIN" && !u.partsAdmin && !u.viewAs;
+export function canActOnPayment(
+  u: { role?: string; partsAdmin?: boolean; itLead?: boolean; viewAs?: unknown } | null | undefined,
+  o: { jobType?: string | null; status: string }
+) {
+  if (!u || u.viewAs) return false;
+  return (u.role === "ADMIN" && !u.partsAdmin) || itLeadActs(u, o);
 }
 
 /** "รอมาแล้ว 4 วัน" · วันแรกยังไม่ครบวัน — "เริ่มรอวันนี้" (ไม่ใช่ "รอมาแล้ว 0 วัน") */

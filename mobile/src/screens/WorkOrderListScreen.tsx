@@ -1859,8 +1859,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                   row={item as PayRow}
                   variant="tab"
                   wide={table}
-                  // กติกาเดียวกับหน้าใบงาน (canActOnPayment) — ไม่ใช่แค่ "มีแท็บ": ดูในฐานะแอดมินเห็นแท็บแต่กดไม่ได้
-                  canAct={canActOnPayment(me)}
+                  // กติกาเดียวกับหน้าใบงาน (canActOnPayment) — ไม่ใช่แค่ "มีแท็บ": ดูในฐานะเห็นแท็บแต่กดไม่ได้ · หัวหน้า IT เฉพาะใบ IT
+                  canAct={canActOnPayment(me, item)}
                   onOpen={() => {
                     unmark(item.id);
                     navigation.navigate("WorkOrderDetail", { id: item.id });

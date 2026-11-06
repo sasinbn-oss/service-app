@@ -900,7 +900,7 @@ function AdminTopics(p: AdminTopicsProps) {
         variant="queue"
         wide={wide}
         // กติกาเดียวกับหน้าใบงาน (canActOnPayment) — หน้านี้ขึ้นเฉพาะแอดมินทั่วไป/Super Admin อยู่แล้ว เหลือกันดูในฐานะ
-        canAct={canActOnPayment(user)}
+        canAct={canActOnPayment(user, r)}
         onOpen={() => p.onOpen(r.id)}
         // ปุ่มหลักของขั้นนี้: เปิดใบพร้อมฟอร์มแนบบิล (open: "stage") — ชื่อเดียวกับปุ่มในหน้าใบงาน
         onAttach={() => p.onOpen(r.id, "stage")}

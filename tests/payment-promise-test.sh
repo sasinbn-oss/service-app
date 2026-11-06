@@ -9,6 +9,7 @@
 #   · ลูกค้าไม่ซ่อมจากแถว (เปิดฟอร์ม = GET ใบงานเพื่อดูของที่ออกจากคลัง → POST /quote-declined ตัวเดียวกับหน้าใบงาน)
 #     ได้ผลในฐานข้อมูลเหมือนกดจากหน้าใบงานทุกช่อง · ใบหลุดจากแท็บ · payTab ลดตามจริง
 #   · ไม่รับ: วันที่ผ่านมาแล้ว · วันที่ไม่มีจริง/รูปแบบผิด/ไม่ใช่ข้อความ · ไกลเกิน 1 ปี (ปี พ.ศ.) · หัวหน้าภาค/ช่าง/Admin Spare Part 403
+#   · หัวหน้าภาคที่ดูแลงาน IT (สิทธิ์เดียวกับหน้าใบงาน): ใบ IT จดวันนัด + ลูกค้าไม่ซ่อมได้ (ฐานข้อมูล) · ใบ CM 403
 # ทุกข้อเช็คที่ฐานข้อมูลด้วย ไม่เชื่อคำตอบของ API อย่างเดียว
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/purge-orders.sh"  # purge_orders: ล้างใบงานของเทสต์ (DELETE = ย้ายไปถังขยะแล้ว)
 SP="$(cd "$(dirname "$0")" && pwd)"
@@ -48,6 +49,8 @@ AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 ANAME=$(DB "select name from \"User\" where \"employeeCode\"='A001'")
 SID=$(DB "select id from \"User\" where \"employeeCode\"='S001'")
 OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
+# หัวหน้า IT ได้คนเดียว (ดัชนีในฐานข้อมูล) — เทสต์ยืมตำแหน่งชั่วคราว แล้วคืนคนเดิมตอนจบ
+OLD_LEADS=$(DB "select coalesce(string_agg(id::text, ','),'') from \"User\" where \"itLead\"")
 SUF=$RANDOM
 IDS=""
 cleanup() {
@@ -55,8 +58,10 @@ cleanup() {
   [ -z "$HAD_MACHINE" ] && DB "delete from \"Machine\" m using \"Branch\" b where b.id=m.\"branchId\" and b.code='$BR' and m.code='W84'
     and not exists (select 1 from \"WorkOrder\" w where w.\"machineId\"=m.id)" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where id=$SID" >/dev/null
-  DB "delete from \"UsageSlot\" where \"userId\" in (select id from \"User\" where \"employeeCode\" in ('ZPPS$SUF','ZPPP$SUF'));
-      delete from \"User\" where \"employeeCode\" in ('ZPPS$SUF','ZPPP$SUF')" >/dev/null
+  DB "update \"User\" set \"itLead\"=false where \"itLead\";
+      delete from \"UsageSlot\" where \"userId\" in (select id from \"User\" where \"employeeCode\" in ('ZPPS$SUF','ZPPP$SUF','ZPPL$SUF'));
+      delete from \"User\" where \"employeeCode\" in ('ZPPS$SUF','ZPPP$SUF','ZPPL$SUF')" >/dev/null
+  [ -n "$OLD_LEADS" ] && DB "update \"User\" set \"itLead\"=true where id in ($OLD_LEADS)" >/dev/null
 }
 trap cleanup EXIT
 
@@ -73,8 +78,8 @@ HAD_MACHINE=$(DB "select m.id from \"Machine\" m join \"Branch\" b on b.id=m.\"b
 # หัวหน้าภาคต้องดูแลสาขานี้ — 403 ที่ทดสอบต้องมาจาก "ขั้นนี้เป็นของแอดมิน" ไม่ใช่ "นอกพื้นที่"
 DB "update \"User\" set region=nullif('$REGION','') where id=$SID" >/dev/null
 S=$(login S001)
-newwo() {
-  local W; W=$(POST $A "" "{\"branchCode\":\"$BR\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W84\",\"model\":\"Oasis\",\"symptom\":\"ทดสอบนัดจ่าย\"}]}" | J 'd.orders?d.orders[0].id:d.id')
+newwo() {  # $1 = ประเภทงาน (ไม่ใส่ = CM)
+  local W; W=$(POST $A "" "{\"branchCode\":\"$BR\",\"jobType\":\"${1:-CM}\",\"priority\":\"NORMAL\",\"contactName\":\"คุณทดสอบ\",\"contactPhone\":\"081-234-5678\",\"machines\":[{\"code\":\"W84\",\"model\":\"Oasis\",\"symptom\":\"ทดสอบนัดจ่าย\"}]}" | J 'd.orders?d.orders[0].id:d.id')
   DB "update \"WorkOrder\" set status='AWAITING_QUOTE', \"workStatus\"='QUOTING', \"needsParts\"=false where id=$W" >/dev/null
   echo "$W"
 }
@@ -200,5 +205,21 @@ WANT=$(echo "$B" | node -pe 'const [t,l]=require("fs").readFileSync(0,"utf8").tr
   && pass "payTab หลังยกเลิกสองใบ: ทั้งหมด −2 · เลยวันนัด −1 (ใบจากแถวเลยนัดอยู่) ตรงฐานข้อมูล ($B → $A2)" || fail "payTab $B → $A2 ต้องเป็น $WANT"
 [ "$(CODE $A "$PL/quote-declined" '{"reason":"PRICE"}')" = 409 ] && [ "$(DB "select count(*) from \"WorkOrderLog\" where \"workOrderId\"=$PL and action='CANCELLED'")" = 1 ] \
   && pass "กดซ้ำจากแถวที่ยังค้างบนจออีกเครื่อง 409 · ประวัติยกเลิกแถวเดียว" || fail "กดซ้ำได้"
+
+echo
+echo "═══ หัวหน้าภาคที่ดูแลงาน IT (ทำขั้นของแอดมินในใบ IT — สิทธิ์เดียวกับหน้าใบงาน)"
+DB "update \"User\" set \"itLead\"=false where \"itLead\";
+    insert into \"User\"(\"employeeCode\",name,role,region,\"passwordHash\",\"mustChangePassword\",\"itLead\") values
+    ('ZPPL$SUF','หัวหน้าไอทีทดสอบนัดจ่าย','SUPERVISOR',nullif('$REGION',''),'$HASH',false,true)" >/dev/null
+LD=$(login ZPPL$SUF); LDID=$(DB "select id from \"User\" where \"employeeCode\"='ZPPL$SUF'")
+PI=$(newwo IT); IDS="$IDS $PI"; quote $PI
+GC=$(CODE $LD "$PI/payment-followup" "{\"note\":\"ลูกค้าจะโอนวันนี้\",\"payBy\":\"$D3\"}")
+[ "$GC|$(DB "select \"userId\"||'|'||(meta->>'payBy') from \"WorkOrderLog\" where \"workOrderId\"=$PI and action='PAYMENT_FOLLOWUP' order by id desc limit 1")" = "200|$LDID|$D3" ] \
+  && pass "ใบ IT: หัวหน้า IT ตามพร้อมวันนัดจ่ายได้ (ฐานข้อมูล: คนตาม · meta.payBy)" || fail "หัวหน้า IT ตามใบ IT: $GC"
+N1=$(FU $P1)
+[ "$(CODE $LD "$P1/payment-followup" "{\"payBy\":\"$D3\"}")|$(FU $P1)" = "403|$N1" ] && pass "ใบ CM: หัวหน้า IT 403 · ไม่มีแถว" || fail "หัวหน้า IT ตามใบ CM ได้"
+POST $LD "$PI/quote-declined" '{"reason":"UNREACHABLE"}' >/dev/null
+[ "$(DB "select w.status||'|'||l.\"userId\"||'|'||(l.meta->>'reasonCode')||'|'||(l.meta->>'declineReason') from \"WorkOrder\" w join \"WorkOrderLog\" l on l.\"workOrderId\"=w.id where w.id=$PI order by l.id desc limit 1")" = "CANCELLED|$LDID|QUOTE_DECLINED|UNREACHABLE" ] \
+  && pass "ใบ IT: หัวหน้า IT กดลูกค้าไม่ซ่อมได้ (CANCELLED · meta เดียวกับแอดมิน)" || fail "หัวหน้า IT ลูกค้าไม่ซ่อม: $(ST $PI)"
 
 [ -z "$FAILED" ] || exit 1

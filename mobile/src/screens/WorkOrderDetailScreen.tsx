@@ -154,6 +154,8 @@ import { feedback } from "../components/Feedback";
 import { anyModalOpen, notifyWorkOrderStale, onPageShown, pageVisible, subscribeModals, subscribeWorkOrderStale } from "../utils/liveSync";
 import { APPOINTMENT_DONE, ISSUE_LOGS, buildStepPath, issueLeftOf, type FlowInfo, type StepState } from "../utils/stepPath";
 import { RECALL_STAGES, RESCHEDULE_STAGES, canMoveDates } from "../utils/reschedule";
+// หัวหน้าภาคที่ดูแลงาน IT — กติกาชุดเดียวกับปุ่มในแถวของแท็บรอเงิน (PaymentWait canActOnPayment)
+import { itLeadActs, itLeadOf } from "../utils/itLead";
 import { techPickHint } from "../utils/teams";
 import {
   AdminDayLine,
@@ -5323,18 +5325,6 @@ function useScrollTarget(scrollRef: React.RefObject<ScrollView | null>) {
   return { bind, go };
 }
 
-/** ผู้ใช้คนนี้เป็นหัวหน้าภาคที่ดูแลงาน IT (ไม่ใช่ตอนดูในฐานะ — ดูได้อย่างเดียว) */
-function itLeadOf(u: { role?: string; itLead?: boolean; viewAs?: unknown } | null | undefined) {
-  return !!u && u.role === "SUPERVISOR" && !!u.itLead && !u.viewAs;
-}
-/**
- * ขั้นของแอดมินที่หัวหน้าภาคที่ดูแลงาน IT กดได้ในใบ IT — ตรงกับ IT_LEAD_ADMIN_STAGES ฝั่งเซิร์ฟเวอร์ (utils/itLead.ts)
- * ตรวจเคลมไม่อยู่ในรายการ (เป็นของ Admin Spare Part)
- */
-const IT_LEAD_ADMIN_STAGES = ["INSPECT_CONFIRM", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "PARTS_REQUESTED", "AWAITING_CONFIRM"];
-function itLeadActs(u: Parameters<typeof itLeadOf>[0], o: { jobType: string; status: string }) {
-  return itLeadOf(u) && o.jobType === "IT" && IT_LEAD_ADMIN_STAGES.includes(o.status);
-}
 
 function StageModal({
   visible,
