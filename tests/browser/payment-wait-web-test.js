@@ -5,9 +5,9 @@
 //   · ตามลูกค้าแล้ว: ฟอร์มกางชิดแถวปุ่ม → บันทึก → ฐานข้อมูลมีประวัติ PAYMENT_FOLLOWUP (ใคร หมายเหตุ) · การ์ดขึ้น "(1 ครั้ง)"
 //   · ถอยเวลา 5 วันทาง SQL: ป้าย "รอลูกค้าจ่ายเงิน · 5 วัน" พื้นแดง · "รอมาแล้ว 5 วัน" · "เกิน 3 วัน — ควรตามลูกค้า" · ขอบการ์ดแดง
 //   · งานของฉันวันนี้ (แอดมิน · แบบแยกหัวข้อ 5 พ.ย. 69): หัวข้อ "รอลูกค้าจ่ายเงิน" เรียงรอนานสุดก่อน · ตามล่าสุด / "ยังไม่เคยตาม" ·
-//     ชิป "เกิน 3 วัน 1" (aria-selected) กดแล้วเหลือใบเดียว · กล่องงาน: แถบบรรทัดเดียว "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1 ·
-//     ยังไม่เคยตาม 1" (ไม่มีแถวรายใบ ไม่มีปุ่มย่อ/ขยาย — รายการเต็มอยู่แท็บรอลูกค้าจ่ายเงิน) · หัวข้อ "เลยนัด" (ใบนัดเมื่อวานที่เทสต์ตั้ง)
-//     ยังย่อ/ขยายตามเดิม: เปิดมาย่อ · ขยายแล้วไปหน้าอื่นด้วยเมนูข้างกลับมายังขยาย · รีเฟรชแล้วย่อ · แถบรอเงินอยู่ข้างกันไม่ถูกย่อตาม ·
+//     ชิป "เกิน 3 วัน 1" (aria-selected) กดแล้วเหลือใบเดียว · กล่องงาน: ไม่มีหัวข้อ/แถบรอลูกค้าจ่ายเงิน (เจ้าของงานเอาออก
+//     6 พ.ย. 69 — เลขเดียวกันอยู่บนแท็บกับชิปแล้ว) · หัวข้อ "เลยนัด" (ใบนัดเมื่อวานที่เทสต์ตั้ง) ยังย่อ/ขยายตามเดิม: เปิดมาย่อ ·
+//     ขยายแล้วไปหน้าอื่นด้วยเมนูข้างกลับมายังขยาย · รีเฟรชแล้วย่อ ·
 //     ชิป "รอจ่ายเกิน 3 วัน" พาไปแท็บรอลูกค้าจ่ายเงินที่ชิปเกิน 3 วัน (เหลือใบที่เกิน)
 //   · ลูกค้าไม่ซ่อม: ไม่เลือกเหตุผลกดแล้วไม่ส่ง · ชิป "อื่น ๆ" ติด (aria-selected) แต่ไม่พิมพ์ = ไม่ส่ง · พิมพ์แล้วยืนยัน →
 //     ฐานข้อมูล CANCELLED + meta รหัสเหตุผล · หน้าใบงานบอก "ยกเลิกแล้ว — เสนอราคาแล้วลูกค้าไม่ซ่อม · อื่น ๆ — …"
@@ -160,18 +160,14 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
         ? pass("กดแล้วเหลือเฉพาะใบที่รอเกิน 3 วัน (แสดง 1 จาก 2) · ชิปติด") : fail(`กรองเกิน 3 วัน: ${g2}`);
     }
 
-    // ── กล่องงาน: แถบรอเงินบรรทัดเดียว · หัวข้อเลยนัดย่อ/ขยายตามเดิม · ชิปรอจ่ายเกิน 3 วัน ──
+    // ── กล่องงาน: ไม่มีหัวข้อรอเงิน · หัวข้อเลยนัดย่อ/ขยายตามเดิม · ชิปรอจ่ายเกิน 3 วัน ──
     await page.goto("http://localhost:8081/#/inbox");
     await page.waitForTimeout(4500);
-    const PAYT = "รอลูกค้าจ่ายเงิน 2 · เกิน 3 วัน 1 · ยังไม่เคยตาม 1";
-    const payBar = page.locator(`[aria-label="หัวข้อ ${PAYT}"]`).locator("visible=true").first();
-    if ((await payBar.count()) === 0) fail(`กล่องงานไม่มีแถบ "${PAYT}"`);
-    else {
-      const t = await payBar.innerText();
-      !t.includes(a.code) && !t.includes(b.code) && t.includes("ดูในแท็บ รอลูกค้าจ่ายเงิน") &&
-      (await page.locator('[aria-label^="ขยายหัวข้อ รอลูกค้าจ่ายเงิน"], [aria-label^="ย่อหัวข้อ รอลูกค้าจ่ายเงิน"]').count()) === 0
-        ? pass(`กล่องงาน: แถบบรรทัดเดียว "${PAYT}" + ปุ่มดูในแท็บ · ไม่มีแถวรายใบ ไม่มีปุ่มย่อ/ขยาย`) : fail(`แถบรอเงิน: ${t}`);
-    }
+    // เจ้าของงานเอาแถบออก 6 พ.ย. 69 — แท็บ "รอลูกค้าจ่ายเงิน" กับชิป "รอจ่ายเกิน 3 วัน" บอกเลขเดียวกันในหน้านี้แล้ว
+    const payBar = page.locator('[aria-label^="หัวข้อ รอลูกค้าจ่ายเงิน"]').locator("visible=true");
+    const payTabLabel = await page.locator('[role="tab"]').locator("visible=true").filter({ hasText: "รอลูกค้าจ่ายเงิน" }).first().getAttribute("aria-label").catch(() => "");
+    (await payBar.count()) === 0 && (await page.getByText("ดูในแท็บ รอลูกค้าจ่ายเงิน").count()) === 0 && (payTabLabel ?? "").startsWith("รอลูกค้าจ่ายเงิน 2")
+      ? pass(`กล่องงาน: ไม่มีแถบรอลูกค้าจ่ายเงิน · เลขอยู่บนแท็บ "${payTabLabel}"`) : fail(`ยังมีแถบรอเงิน / แท็บ: ${payTabLabel}`);
     // หัวข้อที่ยังย่อ/ขยายได้ (เจ้าของงานขอ 5 พ.ย. 69 — หัวข้อยาวเต็มจอ): เปิด/รีเฟรชมาแล้วย่อไว้ก่อน · ขยายแล้วไปหน้าอื่นกลับมายังขยาย
     const lateHead = page.locator('[aria-label^="หัวข้อ เลยนัด "]').locator("visible=true").first();
     const lateToggle = (verb) => page.locator(`[aria-label^="${verb}หัวข้อ เลยนัด "]`).locator("visible=true").first();
@@ -182,8 +178,8 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
         ? pass("หัวข้อ \"เลยนัด\" ย่อไว้ก่อน (aria-expanded=false)") : fail(`เลยนัดไม่ได้ย่อตั้งต้น: ${shut0}`);
       await lateToggle("ขยาย").click();
       await page.waitForTimeout(600);
-      (await lateHead.innerText()).includes(late.code) && (await payBar.count()) > 0 && !(await payBar.innerText()).includes(a.code)
-        ? pass("กดขยายเลยนัด: แถวขึ้น · แถบรอเงินยังบรรทัดเดียวเหมือนเดิม (ปุ่มย่อ/ขยายไม่ไปโดนแถบรอเงิน)") : fail(`ขยายเลยนัด: ${await lateHead.innerText()}`);
+      (await lateHead.innerText()).includes(late.code)
+        ? pass("กดขยายเลยนัด: แถวขึ้น") : fail(`ขยายเลยนัด: ${await lateHead.innerText()}`);
       // ไปหน้าอื่นด้วยเมนูข้างในแอป — page.goto เปลี่ยน # แล้วหน้ารีโหลดทั้งหน้า (เท่ากับรีเฟรช) ซึ่งตั้งใจให้ย่อกลับ
       await page.locator('[aria-label="งานของฉันวันนี้"]').locator("visible=true").first().click();
       await page.waitForTimeout(2000);
@@ -193,8 +189,8 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
         ? pass("ไปหน้าอื่นแล้วกลับมา (ไม่รีเฟรช) หัวข้อเลยนัดยังขยายอยู่") : fail("กลับมาแล้วเลยนัดไม่ขยาย");
       await page.reload({ waitUntil: "networkidle" });
       await page.waitForTimeout(5000);
-      !(await lateHead.innerText().catch(() => late.code)).includes(late.code) && (await lateToggle("ขยาย").count()) > 0 && (await payBar.count()) > 0
-        ? pass("รีเฟรชแล้วเลยนัดกลับมาย่อ · แถบรอเงินยังอยู่") : fail("รีเฟรชแล้วเลยนัดไม่ย่อ");
+      !(await lateHead.innerText().catch(() => late.code)).includes(late.code) && (await lateToggle("ขยาย").count()) > 0 && (await payBar.count()) === 0
+        ? pass("รีเฟรชแล้วเลยนัดกลับมาย่อ · แถบรอเงินไม่กลับมา") : fail("รีเฟรชแล้วเลยนัดไม่ย่อ");
     }
     const qchip = page.locator('[aria-label="ต้องรีบดู รอจ่ายเกิน 3 วัน 1"]').locator("visible=true").first();
     if ((await qchip.count()) === 0) fail("ไม่มีชิป \"รอจ่ายเกิน 3 วัน 1\" ในกล่องงาน");

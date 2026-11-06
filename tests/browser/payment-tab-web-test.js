@@ -6,8 +6,8 @@
 //   · ชิป ทั้งหมด / เกิน 3 วัน / ยังไม่เคยตาม / ตามแล้ว: ตัวเลข = แถวที่เห็นเมื่อกด = นับจาก API · aria-selected
 //   · "ตามลูกค้าแล้ว" ในแถว: ช่อง "ลูกค้าว่ายังไง" ใต้แถว → บันทึก → ฐานข้อมูลมีแถว PAYMENT_FOLLOWUP (A001 · หมายเหตุ)
 //     → แถวขึ้น "วันนี้ · …" · ชิปยังไม่เคยตาม −1 / ตามแล้ว +1 ทันที · กดแถวเปิดใบงาน
-//   · กล่องงาน: แถบบรรทัดเดียว "รอลูกค้าจ่ายเงิน n · เกิน 3 วัน m · ยังไม่เคยตาม k" (ไม่มีปุ่มย่อ/ขยาย) · ใบยังอยู่ในรายการข้างล่าง
-//     · ปุ่ม "ดูในแท็บ รอลูกค้าจ่ายเงิน" → แท็บนี้ ชิปทั้งหมด · ชิปต้องรีบดู "รอจ่ายเกิน 3 วัน" → แท็บนี้ ชิปเกิน 3 วัน
+//   · กล่องงาน: ไม่มีแถบรอลูกค้าจ่ายเงิน (เจ้าของงานเอาออก 6 พ.ย. 69 — เลขอยู่บนแท็บกับชิปแล้ว) · ใบยังอยู่ในรายการข้างล่าง
+//     · ชิปต้องรีบดู "รอจ่ายเกิน 3 วัน" → แท็บนี้ ชิปเกิน 3 วัน
 //     · หัวข้อ "ไม่มีคนรับ" ยังย่อ/ขยายได้ตามเดิม (ถ้ามี)
 //   · มือถือ 390: แถวเป็นการ์ด · ตามลูกค้าแล้วกางช่องในการ์ด · ไม่ล้นจอแนวนอน
 //   · หัวหน้าภาค · ช่าง · Admin Spare Part: ไม่มีแท็บ · เปิดลิงก์ #/awaiting-payment แล้วที่อยู่กลับเป็น #/work-orders
@@ -184,7 +184,7 @@ const APP = "http://localhost:8081";
     (await page.locator('[role="tab"][aria-selected="true"]').locator("visible=true").first().getAttribute("aria-label").catch(() => "")).startsWith("รอลูกค้าจ่ายเงิน")
       ? pass("F5 ที่ #/awaiting-payment อยู่แท็บเดิม") : fail("F5 แล้วไม่ได้แท็บรอเงิน");
 
-    // ── กล่องงาน: แถบบรรทัดเดียว ──
+    // ── กล่องงาน: ไม่มีแถบรอเงิน (เจ้าของงานเอาออก 6 พ.ย. 69) ──
     await page.locator('[aria-label="กล่องงานของฉัน"]').locator("visible=true").first().click().catch(() => {});
     await page.waitForTimeout(4000);
     if ((await hash(page)) !== "#/inbox") {
@@ -192,25 +192,15 @@ const APP = "http://localhost:8081";
       await page.waitForTimeout(4500);
     }
     L = await api();
-    const barTitle = [`รอลูกค้าจ่ายเงิน ${L.payTab.total}`, L.payTab.over ? `เกิน ${L.payTab.alertDays} วัน ${L.payTab.over}` : "", L.payTab.never ? `ยังไม่เคยตาม ${L.payTab.never}` : ""].filter(Boolean).join(" · ");
-    const bar = lbl(`หัวข้อ ${barTitle}`).first();
-    if (!(await bar.count())) fail(`กล่องงานไม่มีแถบ "${barTitle}"`);
-    else {
-      const t = await bar.innerText();
-      !t.includes(a.code) && !t.includes(b.code) && (await bar.locator('[aria-expanded]').count()) === 0 && (await page.locator('[aria-label^="ขยายหัวข้อ รอลูกค้าจ่ายเงิน"], [aria-label^="ย่อหัวข้อ รอลูกค้าจ่ายเงิน"]').count()) === 0
-        ? pass(`กล่องงาน: แถบบรรทัดเดียว "${barTitle}" ไม่มีแถวรายใบ ไม่มีปุ่มย่อ/ขยาย`) : fail(`แถบ: ${t}`);
+    {
+      const bars = await page.locator('[aria-label^="หัวข้อ รอลูกค้าจ่ายเงิน"]').locator("visible=true").count();
+      (await hash(page)) === "#/inbox" && bars === 0 && (await page.getByText("ดูในแท็บ รอลูกค้าจ่ายเงิน").count()) === 0
+        ? pass("กล่องงาน: ไม่มีแถบรอลูกค้าจ่ายเงิน (เลขอยู่บนแท็บกับชิปแล้ว)") : fail(`ยังมีแถบรอเงิน ${bars} · ${await hash(page)}`);
       const inList = await page.locator('[data-testid="howto-orders.row"]').locator("visible=true").evaluateAll((ns, code) => ns.some((n) => n.innerText.includes(code)), a.code);
       inList ? pass(`ใบรอเงิน (${a.code}) ยังอยู่ในรายการกล่องงานข้างล่างตามปกติ`) : fail("ใบรอเงินหายจากรายการกล่องงาน");
       await page.screenshot({ path: path.join(DIR, "payment-tab-3-inbox.png") });
-      await lbl("ดูในแท็บ รอลูกค้าจ่ายเงิน").first().click();
-      await page.waitForTimeout(3500);
-      const selChip = (await chipLabels()).find((x) => x[1] === "true");
-      (await hash(page)) === "#/awaiting-payment" && selChip && selChip[0].startsWith("ชิปรอจ่าย ทั้งหมด")
-        ? pass("ปุ่ม \"ดูในแท็บ รอลูกค้าจ่ายเงิน\" → แท็บนี้ ชิปทั้งหมด") : fail(`ไปแท็บ: ${await hash(page)} ${JSON.stringify(selChip)}`);
     }
     // ชิปต้องรีบดูในกล่องงาน → แท็บนี้ที่ชิปเกิน 3 วัน
-    await page.locator('[role="tab"]').locator("visible=true").filter({ hasText: "กล่องงานของฉัน" }).first().click();
-    await page.waitForTimeout(4000);
     const qchip = page.locator(`[aria-label="ต้องรีบดู รอจ่ายเกิน ${L.payTab.alertDays} วัน ${L.payTab.over}"]`).locator("visible=true").first();
     if (!(await qchip.count())) fail(`ไม่มีชิป "รอจ่ายเกิน ${L.payTab.alertDays} วัน ${L.payTab.over}" ในกล่องงาน`);
     else {
