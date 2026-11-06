@@ -46,6 +46,11 @@ export interface QuickFilter {
   label: string;
   dot: string;
   n: number;
+  /**
+   * สีพื้นชิป (หน้าตาใหม่ พ.ย. 69) — แดงอ่อน = เรื่องที่ลูกค้ารออยู่ (ด่วน · เลยนัด · รอจ่ายเกิน) · เหลืองอ่อน = ของขาด · ไม่ใส่ = เทา
+   * เห็นจากสีว่าอันไหนต้องรีบก่อน โดยไม่ต้องอ่านทีละชิป
+   */
+  tone?: "bad" | "warn";
 }
 
 export const isSet = (g: FilterGroup) => g.value !== (g.allValue ?? "");
@@ -105,11 +110,8 @@ export function ViewTabs({
               aria-selected={on}
             >
               <Text style={[styles.tabText, on && styles.tabTextOn]}>{t.label}</Text>
-              {t.n ? (
-                <View style={[styles.tabN, on && styles.tabNOn]}>
-                  <Text style={[styles.tabNText, on && styles.tabNTextOn]}>{t.n.toLocaleString("th-TH")}</Text>
-                </View>
-              ) : null}
+              {/* ตัวเลขเป็นข้อความแยกชิ้น — ชื่อแท็บยังหาเจอด้วยข้อความตรงตัว ("ที่ยังค้าง") */}
+              {t.n ? <Text style={[styles.tabNText, on && styles.tabNTextOn]}>({t.n.toLocaleString("th-TH")})</Text> : null}
               {t.alert ? (
                 <View style={styles.tabAlert}>
                   <Text style={styles.tabAlertText}>{t.alert}</Text>
@@ -220,22 +222,30 @@ export function QuickChips({
   const chips = items.map((q) => {
     const sel = on.has(q.key);
     const off = !q.n && !sel;
+    const tone = q.tone === "bad" ? styles.qBad : q.tone === "warn" ? styles.qWarn : null;
+    const ink = q.tone === "bad" ? styles.qInkBad : q.tone === "warn" ? styles.qInkWarn : null;
     return (
       <TouchableOpacity
         key={q.key}
-        style={[styles.q, sel && styles.qOn, off && styles.dim]}
+        style={[styles.q, tone, sel && styles.qOn, off && styles.dim]}
         onPress={() => toggle(q.key)}
         disabled={off}
         accessibilityLabel={`ต้องรีบดู ${q.label} ${q.n}`}
         accessibilityState={{ selected: sel, disabled: off }}
+        aria-selected={sel}
       >
-        <View style={[styles.dot, { backgroundColor: sel ? colors.dangerInk : q.dot }]} />
-        <Text style={[styles.qText, sel && styles.qTextOn]}>{q.label}</Text>
-        <Text style={[styles.qN, sel && styles.qTextOn]}>{q.n.toLocaleString("th-TH")}</Text>
+        <View style={[styles.dot, { backgroundColor: sel ? "#fff" : q.dot }]} />
+        <Text style={[styles.qText, ink, sel && styles.qTextOn]}>{q.label}</Text>
+        <Text style={[styles.qN, ink, sel && styles.qTextOn]}>{q.n.toLocaleString("th-TH")}</Text>
       </TouchableOpacity>
     );
   });
-  const label = <Text style={styles.qLabel}>ต้องรีบดู</Text>;
+  const label = (
+    <View style={styles.qLabelRow}>
+      <Ionicons name="warning-outline" size={14} color={colors.warning} />
+      <Text style={styles.qLabel}>ต้องรีบดู:</Text>
+    </View>
+  );
   return wrap ? (
     <View style={[styles.qRow, { flexWrap: "wrap" }]}>
       {label}
@@ -402,30 +412,30 @@ export function FilterSheet({
 }
 
 const styles = StyleSheet.create({
+  // แท็บเป็นปุ่มเม็ดยาเรียงกัน (หน้าตาใหม่ พ.ย. 69) — แท็บที่เลือกพื้นกรมท่า ตัวเลขในวงเล็บต่อท้ายชื่อ
   tabsWrap: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingTop: spacing.md,
     paddingRight: spacing.lg,
   },
-  tabs: { flexDirection: "row", gap: spacing.xl, paddingHorizontal: spacing.lg },
+  tabs: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.lg },
   tab: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingVertical: 10,
-    borderBottomWidth: 3,
-    borderBottomColor: "transparent",
-    marginBottom: -1,
+    gap: 4,
+    height: 34,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
   },
-  tabOn: { borderBottomColor: colors.primary },
-  tabText: { fontSize: 14.5, lineHeight: 22, fontWeight: "700", color: colors.textMuted },
-  tabTextOn: { color: colors.text },
-  tabN: { borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.tile },
-  tabNOn: { backgroundColor: colors.primary },
-  tabNText: { fontSize: 11.5, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
+  tabOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
+  tabText: { fontSize: 13.5, lineHeight: 20, fontWeight: "600", color: colors.body },
+  tabTextOn: { color: "#fff" },
+  tabNText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.textMuted, fontVariant: ["tabular-nums"] },
   tabNTextOn: { color: "#fff" },
   tabDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, marginLeft: -2 },
   // ป้ายแดงทึบ (ตัวอย่าง paytab "เกิน 3 วัน 47") — แดงแบบชิปเกินกำหนดของแท็บรอเงิน
@@ -463,22 +473,28 @@ const styles = StyleSheet.create({
   dim: { opacity: 0.45 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   qRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.lg },
-  qLabel: { fontSize: 12.5, lineHeight: 18, fontWeight: "800", color: colors.textMuted, marginRight: 2 },
+  qLabelRow: { flexDirection: "row", alignItems: "center", gap: 4, marginRight: 2 },
+  qLabel: { fontSize: 12.5, lineHeight: 18, fontWeight: "700", color: colors.textMuted },
+  // ชิปเหลี่ยมมนเล็ก พื้นอ่อนตามความเร่ง (หน้าตาใหม่ พ.ย. 69) — กดแล้วพื้นกรมท่า แบบเดียวกับแท็บที่เลือก
   q: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: 999,
+    height: 28,
+    paddingHorizontal: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.card,
+    backgroundColor: colors.tile,
   },
-  qOn: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
-  qText: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.text },
-  qTextOn: { color: colors.dangerInk },
-  qN: { fontSize: 13, lineHeight: 20, fontWeight: "800", color: colors.text },
+  qBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
+  qWarn: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
+  qOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
+  qText: { fontSize: 12.5, lineHeight: 19, fontWeight: "600", color: colors.body },
+  qInkBad: { color: colors.dangerInk },
+  qInkWarn: { color: colors.warningInk },
+  qTextOn: { color: "#fff" },
+  qN: { fontSize: 12.5, lineHeight: 19, fontWeight: "800", color: colors.text },
   active: {
     flexDirection: "row",
     flexWrap: "wrap",

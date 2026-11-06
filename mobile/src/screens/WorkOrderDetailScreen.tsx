@@ -1963,10 +1963,118 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   const reviewMode = order.status === "CLAIM_REVIEW" && canReviewClaims(me) && verdicts.parts.some((p) => !p.locked);
   const bodyHidden = reviewMode && !claimDetailOpen;
 
+  /**
+   * หัวหน้าต่างใบงาน (หน้าตาใหม่ พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา):
+   *   แถวบน = เลขใบงาน + ป้าย (สถานะ · ด่วน · ย้อนขั้น · หัวหน้าภาค) · ตัวใหญ่ = อาการ (ไม่มีอาการใช้ชื่อเรื่อง) · บรรทัดสาขา
+   * ป้ายชุดเดิมจากหัวเรื่องในหน้า ย้ายขึ้นมาอยู่กับที่ — เลื่อนอ่านเนื้อหาแล้วยังรู้ว่าดูใบไหน รอใคร
+   */
+  const popHead = (
+    <View style={styles.popHead}>
+      <View style={styles.popRow}>
+        <View style={styles.codeChip}>
+          <Text style={styles.codeChipText}>{order.code}</Text>
+        </View>
+      {partsOut.length ? (
+        <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
+          <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
+        </View>
+      ) : (
+        // รอลูกค้าจ่ายเงิน: ป้ายบอกจำนวนวันด้วย "รอลูกค้าจ่ายเงิน · 4 วัน" · เกินเส้นเป็นแดง (ตัวอย่างที่ตกลง 5 พ.ย. 69)
+        <View
+          style={[styles.statusChip, { backgroundColor: closedOk ? colors.doneSoft : payLate ? colors.dangerSoft : tone.bg }, payLate && styles.statusChipLate]}
+          accessibilityLabel={`ป้ายสถานะ ${payChipText(order.statusLabel, payNow)}`}
+        >
+          <View style={[styles.statusDot, { backgroundColor: payLate ? colors.dangerInk : tone.fg }]} />
+          <Text style={[styles.statusChipText, { color: payLate ? colors.dangerInk : tone.fg }]}>{payChipText(order.statusLabel, payNow)}</Text>
+        </View>
+      )}
+      {urgent ? <UrgentBadge /> : null}
+      {order.rolledBack ? (
+        <View style={[styles.badge, styles.badgeBack]} accessibilityLabel="ป้ายย้อนขั้น">
+          <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้นมา</Text>
+        </View>
+      ) : null}
+      {/*
+        หัวหน้าภาคที่รับผิดชอบใบนี้ — ติดหัวใบงานทุกใบทุกขั้น (เจ้าของงานขอ ต.ค. 69) ไม่ใช่แค่ตอนรอหัวหน้าภาค
+        ช่างหรือแอดมินเปิดใบไหนก็รู้ว่าเรื่องนี้ต้องคุยกับใคร · ไม่มีใครดูแล = แดง ให้ไปตั้งที่สิทธิ์ผู้ใช้/ทีมช่าง
+      */}
+      {order.supervisors ? (
+        <View
+          style={[styles.tagLine, styles.supTag, !order.supervisors.length && styles.supTagNone]}
+          accessibilityLabel={`หัวหน้าภาค ${order.supervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนรับ"}`}
+        >
+          <Ionicons
+            name="person-circle-outline"
+            size={15}
+            color={order.supervisors.length ? colors.primaryInk : colors.dangerInk}
+          />
+          <Text style={[styles.tagLineText, { color: order.supervisors.length ? colors.primaryInk : colors.dangerInk }]}>
+            หัวหน้าภาค · {order.supervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนรับ"}
+          </Text>
+        </View>
+      ) : null}
+      </View>
+      <Text style={[styles.popTitle, headingFont]} numberOfLines={2}>
+        {order.symptom?.trim() || order.title}
+      </Text>
+      {/* บรรทัดเดียวที่ตัดคำเอง — จอแคบหักบรรทัดตามคำ ไม่ใช่หมุดค้างอยู่บรรทัดหนึ่งแล้วข้อความไปอีกบรรทัด */}
+      <Text style={styles.popLine}>
+        <Ionicons name="location-outline" size={14} color={colors.primary} /> สาขา <Text style={styles.popLineB}>{order.branchCode}</Text> ·{" "}
+        {order.branchName}
+        {order.region ? ` · ${order.region}` : ""} · {order.jobTypeLabel}
+        {order.machineCode ? ` · เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}` : ""}
+      </Text>
+    </View>
+  );
+  /**
+   * แถบท้ายหน้าต่าง (หน้าตาใหม่ พ.ย. 69) — อยู่กับที่ ไม่เลื่อนตามเนื้อหา
+   * ซ้าย = เครื่องมือรอง (แก้ไขอาการ/สถานะ) · ขวา = ปิด + ปุ่มของขั้นปัจจุบัน (ปุ่มเดียวกับในการ์ดขั้น เปิดฟอร์มเดียวกัน)
+   * ไม่ใช่คิวของคนดู = บอกว่าขั้นนี้รอใครแทนปุ่ม · ใบปิดแล้ว/ยกเลิก/รอตรวจเคลมไม่มีปุ่มขั้น
+   */
+  const footTurn = !done && order.status !== "CLAIM_REVIEW" && myTurn(order);
+  const popFoot = (
+    <>
+      {!done && !viewOnly ? (
+        <TouchableOpacity style={styles.footTool} onPress={() => setEditingNote(true)} activeOpacity={0.7} accessibilityLabel="แก้ไขอาการหรือสถานะ">
+          <Ionicons name="create-outline" size={15} color={colors.body} />
+          <Text style={styles.footToolText}>แก้ไขข้อมูล</Text>
+        </TouchableOpacity>
+      ) : null}
+      <View style={{ flex: 1 }} />
+      {!done && !footTurn && order.stageActorLabel && order.status !== "CLAIM_REVIEW" ? (
+        <View style={styles.footWait}>
+          <View style={[styles.statusDot, { backgroundColor: tone.fg }]} />
+          <Text style={[styles.footWaitText, { color: tone.fg }]}>ขั้นนี้รอ: {order.stageActorLabel}</Text>
+        </View>
+      ) : null}
+      <TouchableOpacity style={styles.footClose} onPress={() => navigation.goBack()} accessibilityLabel="ปิดใบงาน">
+        <Text style={styles.footCloseText}>ปิด</Text>
+      </TouchableOpacity>
+      {footTurn ? (
+        order.status === "IN_PROGRESS" ? (
+          <TouchableOpacity style={[styles.action, styles.actionPrimary]} onPress={() => setClosing(true)} disabled={busy} activeOpacity={0.8}>
+            <Ionicons name="checkmark-done" size={18} color="#fff" />
+            <Text style={styles.actionPrimaryText}>{order.assignedOutsource ? "บันทึกผลงาน SUB" : "ปิดงาน"}</Text>
+          </TouchableOpacity>
+        ) : (
+          <StagePrimaryButton
+            order={order}
+            partsOut={partsOut.length}
+            busy={busy}
+            tech={user?.role === "EMPLOYEE"}
+            onStage={() => setStageOpen(true)}
+          />
+        )
+      ) : null}
+    </>
+  );
+
   return (
     <PopupScreen
       title={order.code}
       subtitle="ใบงานซ่อม"
+      head={popHead}
+      foot={popFoot}
       backLabel={`ใบงาน ${order.code}`}
       startMaximized
       instant={instant}
@@ -2138,60 +2246,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         จอแคบเรียงเป็นคอลัมน์เดียวตามลำดับเดียวกัน
       */}
       <View style={styles.hero}>
-        <View style={styles.heroRow}>
-          <Text style={[styles.heroTitle, headingFont]}>
-            {order.title}
-            {order.branchCode ? ` — ${order.branchCode}` : ""}
-          </Text>
-          {partsOut.length ? (
-            <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
-              <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
-            </View>
-          ) : (
-            // รอลูกค้าจ่ายเงิน: ป้ายบอกจำนวนวันด้วย "รอลูกค้าจ่ายเงิน · 4 วัน" · เกินเส้นเป็นแดง (ตัวอย่างที่ตกลง 5 พ.ย. 69)
-            <View
-              style={[styles.statusChip, { backgroundColor: closedOk ? colors.doneSoft : payLate ? colors.dangerSoft : tone.bg }, payLate && styles.statusChipLate]}
-              accessibilityLabel={`ป้ายสถานะ ${payChipText(order.statusLabel, payNow)}`}
-            >
-              <View style={[styles.statusDot, { backgroundColor: payLate ? colors.dangerInk : tone.fg }]} />
-              <Text style={[styles.statusChipText, { color: payLate ? colors.dangerInk : tone.fg }]}>{payChipText(order.statusLabel, payNow)}</Text>
-            </View>
-          )}
-          {urgent ? <UrgentBadge /> : null}
-          {order.rolledBack ? (
-            <View style={[styles.badge, styles.badgeBack]} accessibilityLabel="ป้ายย้อนขั้น">
-              <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้นมา</Text>
-            </View>
-          ) : null}
-          <View style={styles.tagLine}>
-            <Text style={styles.tagLineText}>{order.jobTypeLabel}</Text>
-          </View>
-          {/* เครื่อง + ขนาดบนหัวใบงาน (เจ้าของงานขอ ต.ค. 69) — เดิมอยู่ในการ์ดสาขาด้านล่าง ต้องเลื่อนหา */}
-          {order.machineCode ? (
-            <View style={styles.tagLine} accessibilityLabel={`เครื่อง ${machineTag(order.machineCode, order.machineCapacityKg)}`}>
-              <Text style={styles.tagLineText}>เครื่อง {machineTag(order.machineCode, order.machineCapacityKg)}</Text>
-            </View>
-          ) : null}
-          {/*
-            หัวหน้าภาคที่รับผิดชอบใบนี้ — ติดหัวใบงานทุกใบทุกขั้น (เจ้าของงานขอ ต.ค. 69) ไม่ใช่แค่ตอนรอหัวหน้าภาค
-            ช่างหรือแอดมินเปิดใบไหนก็รู้ว่าเรื่องนี้ต้องคุยกับใคร · ไม่มีใครดูแล = แดง ให้ไปตั้งที่สิทธิ์ผู้ใช้/ทีมช่าง
-          */}
-          {order.supervisors ? (
-            <View
-              style={[styles.tagLine, styles.supTag, !order.supervisors.length && styles.supTagNone]}
-              accessibilityLabel={`หัวหน้าภาค ${order.supervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนรับ"}`}
-            >
-              <Ionicons
-                name="person-circle-outline"
-                size={15}
-                color={order.supervisors.length ? colors.primaryInk : colors.dangerInk}
-              />
-              <Text style={[styles.tagLineText, { color: order.supervisors.length ? colors.primaryInk : colors.dangerInk }]}>
-                หัวหน้าภาค · {order.supervisors.map((s) => s.name).join(", ") || "ยังไม่มีคนรับ"}
-              </Text>
-            </View>
-          ) : null}
-        </View>
+        {/* หัวเรื่อง + ป้ายย้ายขึ้นไปเป็นหัวหน้าต่าง (หน้าตาใหม่ พ.ย. 69) — ดู popHead ข้างบน */}
         {/* ลิงก์รูป/วิดีโอจากฟอร์มแจ้งซ่อมย้ายไปอยู่ในการ์ดรูปหน้างาน — ที่นี่เหลือแต่ข้อความ */}
         {formDetail.text ? <Text style={styles.detail}>{formDetail.text}</Text> : null}
         {/*
@@ -11614,6 +11669,30 @@ const styles = StyleSheet.create({
   hero: { gap: spacing.sm, paddingHorizontal: 2 },
   heroRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
   heroTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text, marginRight: spacing.xs },
+  // หัว/ท้ายหน้าต่างใบงาน (หน้าตาใหม่ พ.ย. 69)
+  popHead: { gap: 6 },
+  popRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
+  codeChip: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.tile, paddingHorizontal: 10, paddingVertical: 1 },
+  codeChipText: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.text, fontVariant: ["tabular-nums"] },
+  popTitle: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text },
+  popLine: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  popLineB: { fontWeight: "700", color: colors.text },
+  footTool: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    height: 38,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  footToolText: { fontSize: 13.5, lineHeight: 20, fontWeight: "600", color: colors.body },
+  footWait: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, backgroundColor: colors.tile },
+  footWaitText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
+  footClose: { height: 40, paddingHorizontal: 16, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  footCloseText: { fontSize: 14, lineHeight: 20, fontWeight: "600", color: colors.body },
   statusChip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
