@@ -17,6 +17,9 @@ const DIR = __dirname;
   }
   const fx = await setup();
   let outageId = null;
+  // W55 ที่ C0006 — ฐานทดสอบที่ยังไม่มีเครื่องนี้ เทสต์สร้างขึ้น (เปิดใบ) ตอนจบลบทิ้ง ไม่ให้ค้างเพิ่มทุกรอบ
+  const W55_SQL = `select m.id from "Machine" m join "Branch" b on b.id=m."branchId" where b.code='C0006' and m.code='W55'`;
+  const hadW55 = fx.sql(W55_SQL) !== "";
   // อะไหล่ข้ามยี่ห้อที่รอบนกระดาน (ใส่ทาง SQL) — ลบตอนจบหลังลบใบและเคส
   const crossCode = `CAPX${process.pid}`;
   // ใช้ chromium ที่ติดตั้งไว้แล้วถ้ามี ไม่งั้นให้ playwright หาเอง
@@ -339,6 +342,13 @@ const DIR = __dirname;
       fx.sql(`delete from "SparePart" where "partCode"='${crossCode}'`);
     } catch (e) {
       fail(`ลบอะไหล่ทดสอบ ${crossCode} ไม่ได้: ${e.message}`);
+    }
+    if (!hadW55) {
+      try {
+        fx.sql(`delete from "Machine" m where m.id in (${W55_SQL}) and not exists (select 1 from "WorkOrder" w where w."machineId"=m.id)`);
+      } catch (e) {
+        fail(`ลบเครื่อง W55 ที่เทสต์สร้างไม่ได้: ${e.message}`);
+      }
     }
     await fx.cleanup();
     await browser.close();
