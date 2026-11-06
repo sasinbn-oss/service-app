@@ -5,8 +5,10 @@
 //        · ในหน้ารายงานเปิดทุกรายงาน · ในใบงานซ่อมเปิดใบแรก
 //        · "สอนการใช้งาน" อยู่ในเมนูของทุกตำแหน่ง (เจ้าของงานเลือก — ไม่กรองตามว่ามีวิธีใช้ไหม) และเปิดแล้วเห็นรายการหรือหน้าที่บอกว่ากำลังทำ
 //
-// เทสต์นี้ไม่สร้างหรือแก้ข้อมูล — กดเฉพาะเมนู ไม่กดปุ่มบันทึก
+// เทสต์นี้ไม่กดปุ่มบันทึกในหน้าจอ — กดเฉพาะเมนู · สร้างใบงานของทีมช่างไว้หนึ่งใบก่อนเริ่ม (ลบทิ้งตอนจบ)
+// ฐานทดสอบที่ล้างแล้วไม่มีใบที่จ่ายให้ทีมของช่างทดสอบเลย รายการของช่างขึ้น 0 ใบ ข้อ "เปิดใบงานได้" ตกทั้งที่หน้าจอไม่ได้พัง
 const { chromium } = require("playwright");
+const fx0 = require("./fixture");
 const path = require("path");
 const DIR = __dirname;
 
@@ -39,6 +41,14 @@ const BAD_TEXT = ["โหลดข้อมูลไม่สำเร็จ", "
     ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
     args: ["--no-sandbox"],
   });
+  // ใบของทีมช่าง T001: เปิดที่สาขาของทีมนั้น (ไม่ใช้อะไหล่) แล้วหัวหน้าภาคนัดวันให้ทีมประจำสาขา
+  const fx = await fx0.setup();
+  const team = fx.sql(`select coalesce(team,'') from "User" where "employeeCode"='T001'`);
+  const branch = fx.sql(`select code from "Branch" where zone='${team}' order by code limit 1`);
+  if (branch) {
+    const wo = await fx.workOrder(branch, []);
+    await fx.schedule(wo.id, fx0.visitDay(30));
+  } else console.log(`(ไม่มีสาขาของทีม ${team || "—"} — ข้อเปิดใบงานของช่างอาจไม่มีใบให้เปิด)`);
 
   for (const role of ROLES) {
     console.log(`\n═══ ${role.name} (${role.code})`);
@@ -132,4 +142,5 @@ const BAD_TEXT = ["โหลดข้อมูลไม่สำเร็จ", "
     }
   }
   await browser.close();
+  await fx.cleanup();
 })();
