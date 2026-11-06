@@ -732,6 +732,13 @@ const userUpdateSchema = z.object({
   maidBranches: z.array(z.string().trim().min(1).max(30)).max(50).optional(),
 });
 
+/** มีหัวหน้าภาคที่ดูแลงาน IT คนอื่นอยู่แล้ว และคำขอไม่ได้ยืนยันการย้าย — ยกเลิกธุรกรรมแล้วตอบ 409 พร้อมชื่อ */
+class ItLeadHeld extends Error {
+  constructor(readonly holder: { id: number; name: string }) {
+    super("it lead held");
+  }
+}
+
 router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสผู้ใช้ไม่ถูกต้อง" });
@@ -829,26 +836,22 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
    * นับเฉพาะคนที่ยังเป็นหัวหน้าภาคและยังไม่ถูกลบ — ค่าค้างบนแถวอื่น (แก้ฐานข้อมูลตรง ๆ) ถูกล้างในธุรกรรมโดยไม่ต้องถาม
    */
   const setItLead = body.itLead === true;
-  if (setItLead) {
-    if (finalRole !== "SUPERVISOR") return res.status(400).json({ error: `${IT_LEAD_TITLE}ต้องเป็นหัวหน้าภาค` });
-    const holder = await prisma.user.findFirst({
-      where: { itLead: true, role: "SUPERVISOR", deletedAt: null, id: { not: id } },
-      select: { id: true, name: true },
-    });
-    if (holder && !body.replaceItLead) {
-      return res.status(409).json({
-        error: `${holder.name} เป็น${IT_LEAD_TITLE}อยู่ — ได้คนเดียว ยืนยันเพื่อย้ายมาที่คนนี้ (ใบงาน IT ทั้งหมดจะย้ายตาม)`,
-        itLeadHolder: holder,
-      });
-    }
-  }
+  if (setItLead && finalRole !== "SUPERVISOR") return res.status(400).json({ error: `${IT_LEAD_TITLE}ต้องเป็นหัวหน้าภาค` });
   // เปลี่ยนเป็นบทบาทอื่น = ถอดหน้าที่ดูแลงาน IT ด้วย (ค้างไว้ = ตั้งกลับเป็นหัวหน้าภาคทีหลังได้ใบ IT ทั้งบริษัทติดมา)
   const dropItLead = body.itLead === false || (body.role !== undefined && body.role !== "SUPERVISOR");
 
   const run = () => prisma.$transaction(
     async (tx) => {
-      // ย้ายในธุรกรรมเดียว: ถอดคนเดิมก่อนแล้วค่อยตั้ง — ดัชนี "ได้คนเดียว" (migration it_lead) ไม่ยอมให้มีสองแถวแม้ชั่วขณะ
-      if (setItLead) await tx.user.updateMany({ where: { itLead: true, id: { not: id } }, data: { itLead: false } });
+      if (setItLead) {
+        // ถามคนที่ถืออยู่ในธุรกรรมเดียวกับที่ย้าย — ถามก่อนเปิดธุรกรรม สองแอดมินกดพร้อมกันจะย้ายทับกันโดยไม่มีใครเห็นกล่องยืนยัน
+        const holder = await tx.user.findFirst({
+          where: { itLead: true, role: "SUPERVISOR", deletedAt: null, id: { not: id } },
+          select: { id: true, name: true },
+        });
+        if (holder && !body.replaceItLead) throw new ItLeadHeld(holder);
+        // ถอดคนเดิมก่อนแล้วค่อยตั้ง — ดัชนี "ได้คนเดียว" (migration it_lead) ไม่ยอมให้มีสองแถวแม้ชั่วขณะ
+        await tx.user.updateMany({ where: { itLead: true, id: { not: id } }, data: { itLead: false } });
+      }
       if (maidIds !== null || clearMaid) await tx.cocoMaidBranch.deleteMany({ where: { userId: id } });
       if (maidIds?.length) await tx.cocoMaidBranch.createMany({ data: maidIds.map((branchId) => ({ userId: id, branchId })) });
       const u = await tx.user.update({
@@ -893,6 +896,12 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, r
   try {
     updated = await run();
   } catch (e) {
+    if (e instanceof ItLeadHeld) {
+      return res.status(409).json({
+        error: `${e.holder.name} เป็น${IT_LEAD_TITLE}อยู่ — ได้คนเดียว ยืนยันเพื่อย้ายมาที่คนนี้ (ใบงาน IT ทั้งหมดจะย้ายตาม)`,
+        itLeadHolder: e.holder,
+      });
+    }
     // อีกคนตั้งหัวหน้า IT ไปพร้อมกันพอดี (ดัชนีได้คนเดียวปฏิเสธ) — ให้กดใหม่แล้วจะได้ 409 พร้อมชื่อคนที่ถืออยู่
     if (setItLead && (e as { code?: string }).code === "P2002") {
       return res.status(409).json({ error: `มีคนเพิ่งตั้ง${IT_LEAD_TITLE}ไปพร้อมกัน — ลองใหม่อีกครั้ง` });
