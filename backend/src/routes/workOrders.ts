@@ -1242,6 +1242,9 @@ function shape(
 const listSelect = {
   id: true,
   code: true,
+  holdUntil: true,
+  holdReason: true,
+  heldAt: true,
   source: true,
   jobType: true,
   adminReviews: activeReviewSelect,
@@ -1433,6 +1436,9 @@ const NON_STAGE_ACTIONS = [
    * ทั้งที่ลูกค้ายังไม่จ่าย — การตามคือสิ่งที่ทำระหว่างรอ ไม่ใช่ความคืบหน้าของใบ
    */
   "PAYMENT_FOLLOWUP",
+  // ระงับชั่วคราว / กลับมาทำต่อ (พ.ย. 69) — ใบอยู่ขั้นเดิม เวลาที่ระงับถูกหักออกจากวันค้างแทน (holdPausedMs)
+  "HOLD",
+  "RESUMED",
 ];
 
 /**
@@ -1599,8 +1605,9 @@ function listShape(
         machineBrand: machineMake(w.machine),
       })
     ),
-    // เข้าขั้นปัจจุบันเมื่อไร — ใบที่ไม่มีประวัติขยับขั้นเลยนับจากวันเปิด
-    stageSince: ctx.stageSince.get(w.id) ?? w.createdAt,
+    // เข้าขั้นปัจจุบันเมื่อไร — ใบที่ไม่มีประวัติขยับขั้นเลยนับจากวันเปิด · เวลาที่ระงับชั่วคราวไม่นับ (เลื่อนจุดเริ่มไปเท่าที่ระงับ)
+    stageSince: pausedSince(ctx.stageSince.get(w.id) ?? w.createdAt, w),
+    hold: holdShape(w),
     id: w.id,
     code: w.code,
     source: w.source,
@@ -2315,7 +2322,30 @@ function inboxFilter(
       }
     }
   }
-  return { OR: or };
+  // ใบที่ระงับชั่วคราวอยู่ออกจากกล่องงานทุกคนจนถึงวันกลับมาทำ (เจ้าของงานเลือก พ.ย. 69) — ตัวเลขกล่องงานใช้ตัวนี้ จึงลดตามด้วย
+  return { AND: [{ OR: or }, notHeld()] };
+}
+
+/**
+ * ระงับชั่วคราว (เจ้าของงานเลือก พ.ย. 69) — ระงับอยู่ = holdUntil ยังไม่ถึง · ไม่มีงานประจำมาปลด ถึงวันแล้วกลับเข้ากล่องเอง
+ * holdUntil = เที่ยงคืนเวลาไทยของวันที่กลับมาทำ · กดกลับมาทำต่อก่อนกำหนด = holdUntil เป็นตอนที่กด
+ */
+export function notHeld(now = new Date()): Prisma.WorkOrderWhereInput {
+  return { OR: [{ holdUntil: null }, { holdUntil: { lte: now } }] };
+}
+function holdShape(w: { holdUntil: Date | null; holdReason: string | null; heldAt: Date | null }, now = new Date()) {
+  if (!w.holdUntil || !w.heldAt || w.holdUntil <= now) return null;
+  return { until: w.holdUntil, reason: w.holdReason, at: w.heldAt };
+}
+/**
+ * หยุดนับวันค้างระหว่างระงับ — เลื่อนจุดเริ่มนับของขั้นไปเท่าช่วงที่ระงับซึ่งอยู่หลังเข้าขั้น (รอบล่าสุดรอบเดียว — เก็บไว้แค่รอบล่าสุด)
+ * ระงับอยู่ตอนนี้ = นับถึงตอนนี้ ตัวเลขจึงนิ่งตลอดช่วงระงับ
+ */
+export function pausedSince(since: Date, w: { holdUntil: Date | null; heldAt: Date | null }, now = new Date()): Date {
+  if (!w.heldAt || !w.holdUntil) return since;
+  const from = Math.max(w.heldAt.getTime(), since.getTime());
+  const to = Math.min(w.holdUntil.getTime(), now.getTime());
+  return to > from ? new Date(since.getTime() + (to - from)) : since;
 }
 
 /**
@@ -2554,7 +2584,11 @@ router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const arrivedAt = new Map<number, boolean>();
   for (const a of arrivals) {
     const since = stageSince.get(a.workOrderId);
-    if (a._max.createdAt && (!since || a._max.createdAt > since)) arrivedAt.set(a.workOrderId, true);
+    if (a._max.createdAt && (!since || a._max.createdAt > since)) {
+      arrivedAt.set(a.workOrderId, true);
+      // ถึงหน้างานแล้ว = เข้าขั้น "ปิดงาน" — วันค้างนับจากตอนถึง (เวลาที่อยู่หน้างาน) ตรงกับหน้าใบงาน
+      stageSince.set(a.workOrderId, a._max.createdAt);
+    }
   }
 
   const byStatus = Object.fromEntries(counts.map((c) => [c.status, c._count])) as Record<
@@ -4044,6 +4078,9 @@ function detailBody({ row, logs, supervisors, itLead, crossTeam, claimUsers, app
     statusLabel: statusLabelOf(row.status, partsPick, onSiteOf(logs)),
     // แถบขั้นแยก "เข้างาน" กับ "ปิดงาน" จากค่านี้ — กฎเดียวกับป้ายข้างบน (ตัวอย่าง พ.ย. 69)
     onSite: row.status === "IN_PROGRESS" || row.status === "INSPECTING" ? onSiteOf(logs) : null,
+    // ระงับชั่วคราว (พ.ย. 69): hold = ระงับอยู่ตอนนี้ · holdSpan = ช่วงระงับรอบล่าสุด (หักออกจากวันค้างของขั้นในหน้าจอ)
+    hold: holdShape(row),
+    holdSpan: row.heldAt && row.holdUntil ? { from: row.heldAt, to: row.holdUntil } : null,
     partsPick,
     partsPickConfirmed: partsPickConfirmedShape(row, logs),
     // นาฬิกาเซิร์ฟเวอร์ — ฟอร์มนัดวันขีดฆ่าวันที่ปิดและนับถอยหลังด้วยเวลานี้ ไม่ใช่นาฬิกามือถือ (ข้อ 12)
@@ -8204,6 +8241,97 @@ router.post("/:id/arrive", requireAuth, async (req: AuthRequest, res) => {
     return res.status(409).json({ error: `${wo.code} ไม่ได้อยู่ในมือช่างตอนนี้ — แอดมินเพิ่งเลื่อนวันนัดหรือมีคนเปลี่ยนขั้น โหลดใหม่แล้วดูวันนัดล่าสุด` });
   }
   res.json({ ok: true, note, distance: distance != null ? Math.round(distance) : null, withinRadius: within });
+});
+
+/**
+ * ระงับชั่วคราว / กลับมาทำต่อ (เจ้าของงานเลือก พ.ย. 69)
+ *
+ * ใส่เหตุผล + วันที่จะกลับมาทำ → ใบออกจากกล่องงานทุกคนจนถึงวันนั้น หยุดนับวันค้าง ป้าย "ระงับชั่วคราว" บนใบ
+ * กดกลับมาทำต่อก่อนกำหนดได้ · ใบอยู่ขั้นเดิม (ไม่ใช่การเดินขั้น) · คนกดได้: แอดมิน (ไม่ใช่ Admin Spare Part) และหัวหน้าภาคของใบนั้น
+ * ไม่จำกัดขั้น — ใบรอลูกค้า/รอร้านเปิดเกิดได้ทุกขั้น · ใบปิด/ยกเลิกแล้วระงับไม่ได้ (ไม่มีอะไรให้รอ)
+ * ดูในฐานะคนอื่นกดไม่ได้ (คนที่ถูกดูไม่ได้ตัดสินใจ)
+ */
+const HOLD_MAX_DAYS = 60;
+const holdSchema = z.object({
+  reason: z.string().trim().min(5, "บอกเหตุผลอย่างน้อย 5 ตัวอักษร เช่น ร้านปิดปรับปรุง").max(300),
+  until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "เลือกวันที่จะกลับมาทำต่อ"),
+});
+
+async function holdGate(req: AuthRequest, res: Response, id: number) {
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
+    return null;
+  }
+  if (req.auth!.viewAs) {
+    res.status(403).json({ error: "กำลังดูในฐานะคนอื่น — ระงับ/กลับมาทำต่อแทนไม่ได้" });
+    return null;
+  }
+  const role = req.auth!.role;
+  if (!(role === "ADMIN" && !req.auth!.partsAdmin) && role !== "SUPERVISOR") {
+    res.status(403).json({ error: "ระงับชั่วคราวได้เฉพาะแอดมินและหัวหน้าภาคของใบนี้" });
+    return null;
+  }
+  const wo = await prisma.workOrder.findUnique({
+    where: { id },
+    select: { code: true, status: true, deletedAt: true, holdUntil: true, heldAt: true, updatedAt: true, ...VIEW_SELECT },
+  });
+  if (!wo || wo.deletedAt) {
+    res.status(404).json({ error: "ไม่พบใบงานนี้" });
+    return null;
+  }
+  if (role === "SUPERVISOR" && !coversWorkOrder(await supervisorScope(req.auth!.userId), wo)) {
+    res.status(403).json({ error: `${wo.code} ไม่ได้อยู่ในความดูแลของคุณ — ระงับได้เฉพาะหัวหน้าภาคของใบนี้หรือแอดมิน` });
+    return null;
+  }
+  return wo;
+}
+
+router.post("/:id/hold", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const parsed = holdSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  const wo = await holdGate(req, res, id);
+  if (!wo) return;
+  if (wo.status === "DONE" || wo.status === "CANCELLED") return res.status(409).json({ error: `${wo.code} ปิดแล้ว — ระงับไม่ได้` });
+  const now = new Date();
+  if (wo.holdUntil && wo.holdUntil > now) {
+    return res.status(409).json({ error: `${wo.code} ระงับอยู่แล้ว — กดกลับมาทำต่อก่อน ถ้าจะเปลี่ยนวัน` });
+  }
+  const { reason, until } = parsed.data;
+  const today = bangkokDay(now);
+  const last = bangkokDay(new Date(now.getTime() + HOLD_MAX_DAYS * 86_400_000));
+  if (until <= today) return res.status(400).json({ error: "วันที่กลับมาทำต้องเป็นวันพรุ่งนี้หรือหลังจากนั้น" });
+  if (until > last) return res.status(400).json({ error: `ระงับได้ไม่เกิน ${HOLD_MAX_DAYS} วัน` });
+  const holdUntil = new Date(`${until}T00:00:00+07:00`);
+  const ok = await prisma.$transaction(async (tx) => {
+    // แตะแถวด้วย updatedAt ที่อ่านมา — สองคนกดพร้อมกัน คนที่สองไม่ผ่าน (ไม่ได้ประวัติระงับซ้อนสองแถว)
+    const { count } = await tx.workOrder.updateMany({
+      where: { id, updatedAt: wo.updatedAt },
+      data: { holdUntil, holdReason: reason, heldAt: now },
+    });
+    if (count === 0) return false;
+    await writeLog(tx, id, req.auth!.userId, "HOLD", wo.status, `${reason} · กลับมาทำ ${visitText(until, null)}`, { until, reason });
+    return true;
+  }, STAGE_TX);
+  if (!ok) return res.status(409).json({ error: `${wo.code} เพิ่งถูกแก้ระหว่างกด — โหลดใหม่แล้วลองอีกครั้ง` });
+  res.json(await detailFor(id));
+});
+
+router.post("/:id/resume", requireAuth, async (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const wo = await holdGate(req, res, id);
+  if (!wo) return;
+  const now = new Date();
+  if (!wo.holdUntil || wo.holdUntil <= now) return res.status(409).json({ error: `${wo.code} ไม่ได้ระงับอยู่` });
+  const ok = await prisma.$transaction(async (tx) => {
+    // holdUntil = ตอนนี้ (ไม่ล้างทิ้ง) — ช่วงที่ระงับจริงยังใช้หักวันค้างได้ (pausedSince)
+    const { count } = await tx.workOrder.updateMany({ where: { id, updatedAt: wo.updatedAt }, data: { holdUntil: now } });
+    if (count === 0) return false;
+    await writeLog(tx, id, req.auth!.userId, "RESUMED", wo.status, "กลับมาทำต่อก่อนกำหนด");
+    return true;
+  }, STAGE_TX);
+  if (!ok) return res.status(409).json({ error: `${wo.code} เพิ่งถูกแก้ระหว่างกด — โหลดใหม่แล้วลองอีกครั้ง` });
+  res.json(await detailFor(id));
 });
 
 /**

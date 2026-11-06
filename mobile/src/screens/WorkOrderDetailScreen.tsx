@@ -215,6 +215,10 @@ interface WorkOrder {
   statusLabel: string;
   /** ช่างถึงหน้างานในรอบนี้แล้ว — ขั้นช่างแยก "เข้างาน" / "ปิดงาน" ตามค่านี้ (ตัวอย่าง พ.ย. 69) · ขั้นอื่นเป็น null */
   onSite?: boolean | null;
+  /** ระงับชั่วคราวอยู่ (พ.ย. 69) — until = เที่ยงคืนเวลาไทยของวันที่กลับมาทำ · ไม่ได้ระงับ = null */
+  hold?: { until: string; reason: string | null; at: string } | null;
+  /** ช่วงระงับรอบล่าสุด (จบแล้วก็ยังส่งมา) — หักออกจากวันค้างของขั้น ตรงกับ pausedSince ฝั่งเซิร์ฟเวอร์ */
+  holdSpan?: { from: string; to: string } | null;
   /** URGENT | NORMAL | LOW — URGENT ขึ้นออร่าแดงและป้ายด่วนบนหัวใบงาน */
   priority: string;
   priorityLabel: string;
@@ -759,6 +763,9 @@ const NOT_A_MOVE = [
   // ตามลูกค้าเรื่องจ่ายเงิน (5 พ.ย. 69) — ใบรอลูกค้าอยู่ขั้นเดิม (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
   // ใบที่ย้อนกลับมารอเงินแล้วแอดมินตาม กล่องย้อนขั้น/ช่างแจ้งปัญหาต้องไม่หายเพราะการตาม
   "PAYMENT_FOLLOWUP",
+  // ระงับชั่วคราว / กลับมาทำต่อ (พ.ย. 69) — ใบอยู่ขั้นเดิม (ตรงกับ NON_STAGE_ACTIONS ฝั่งเซิร์ฟเวอร์)
+  "HOLD",
+  "RESUMED",
 ];
 function sentBackLog(o: WorkOrder): LogEntry | null {
   const last = [...o.logs]
@@ -1122,6 +1129,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   // Area Team ก็ดูอย่างเดียวเหมือนกัน — แจ้งและเปิดใบงานได้ แต่ไม่ได้ทำขั้นตอนของใคร (เจ้าของงานกำหนด ต.ค. 69)
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมาก็ดูอย่างเดียว — ใบเป็นของหัวหน้าภาคเจ้าของพื้นที่ (เซิร์ฟเวอร์บอกมา)
   const viewOnly = !!me?.partsAdmin || isAreaTeam(me) || !!order?.viewOnly;
+  // ช่าง (รวม Senior ช่าง) — คนเดียวที่กด "ถึงหน้างาน" ได้ (เจ้าของงานเลือก พ.ย. 69)
+  const isTech = me?.role === "EMPLOYEE" || me?.role === "SENIOR_TECH";
   const user = viewOnly ? null : me;
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
@@ -1162,6 +1171,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   // ย้อนขั้นตอน (แอดมิน/หัวหน้าภาค) — คนละอย่างกับ rollbackOpen ที่เป็นช่างส่งกลับ
   const [stageBackOpen, setStageBackOpen] = useState(false);
   const [etaOpen, setEtaOpen] = useState(false);
+  // ระงับชั่วคราว (พ.ย. 69) — ฟอร์มใส่เหตุผล + วันที่กลับมาทำ
+  const [holdOpen, setHoldOpen] = useState(false);
   // แอดมินเลื่อนวันนัด (ต.ค. 69) — ทุกขั้นที่เลื่อนได้ รวมขั้นคอนเฟิร์มลูกค้า (ใบอยู่ขั้นเดิม ไม่ใช่การคอนเฟิร์ม)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   // แอดมินแก้เป็นงานด่วน / ตอบคำขอนัดด่วนของหัวหน้าภาค — หน้าต่างของตัวเอง ไม่เปิดจากในฟอร์มขั้น (Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ)
@@ -1774,9 +1785,9 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       return;
     }
     if ((state !== "now" && state !== "loop") || !order || !myTurn(order) || busy) return;
-    // ขั้นเข้างาน: กดวงขั้น = กดถึงหน้างาน (ไม่มีฟอร์ม)
+    // ขั้นเข้างาน: ช่างกดวงขั้น = กดถึงหน้างาน (ไม่มีฟอร์ม) · คนอื่นไม่มีอะไรให้กดที่วงนี้
     if (key === "ARRIVE") {
-      void arriveNow();
+      if (isTech) void arriveNow();
       return;
     }
     // ตรวจเคลมทำที่การ์ดใบเคลมด้านล่าง ไม่มีฟอร์มขั้นตอนให้เปิด
@@ -2007,6 +2018,13 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         <View style={styles.codeChip}>
           <Text style={styles.codeChipText}>{order.code}</Text>
         </View>
+      {/* ระงับชั่วคราว (พ.ย. 69) — ป้ายแรกหลังเลขใบ: คนเปิดใบต้องรู้ก่อนว่าใบนี้พักอยู่ */}
+      {order.hold ? (
+        <View style={[styles.badge, styles.badgeHold]} accessibilityLabel="ป้ายระงับชั่วคราว">
+          <Ionicons name="pause" size={12} color={colors.text} />
+          <Text style={[styles.badgeText, { color: colors.text }]}>ระงับถึง {thaiDate(dayOfIso(order.hold.until))}</Text>
+        </View>
+      ) : null}
       {partsOut.length ? (
         <View style={[styles.badge, styles.badgeOut]} accessibilityLabel="ป้ายอะไหล่หมด">
           <Text style={[styles.badgeText, { color: "#fff" }]}>● อะไหล่หมด</Text>
@@ -2071,59 +2089,27 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       </View>
     </View>
   );
-  /**
-   * แถบท้ายหน้าต่าง (หน้าตาใหม่ พ.ย. 69) — อยู่กับที่ ไม่เลื่อนตามเนื้อหา · เครื่องมือรองของใบงาน
-   * ปุ่มของขั้นปัจจุบันไม่อยู่ที่นี่: เคยวางซ้ำกับปุ่มในการ์ดขั้น เจ้าของงานให้เอาออก คงไว้ในการ์ดที่เดียว (6 พ.ย. 69)
-   * ใบปิดแล้ว/ยกเลิก หรือคนที่ดูได้อย่างเดียว ไม่มีอะไรให้กด — ไม่วาดแถบเปล่า
-   */
-  /**
-   * ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา: แถบท้ายมี พักงานชั่วคราว · บันทึกแบบร่าง · ปุ่มของขั้น "→ ขั้นถัดไป"
-   * พักงาน/แบบร่างยังไม่มีในระบบ — ปุ่มในตัวอย่างบอกว่ารอคำตอบ (ดูคำถามในตัวอย่าง) · ปุ่มขั้นเปิดฟอร์มเดียวกับในการ์ดขั้น
-   */
-  const footTurn = !done && order.status !== "CLAIM_REVIEW" && myTurn(order);
+  // ขั้นปัจจุบันบนแถบ — แถบย้อนขั้นบอกว่าย้อนมาที่ขั้นที่เท่าไร (ไม่มีแถบท้ายหน้าต่างแล้ว ปุ่มของขั้นอยู่ในการ์ดขั้นที่เดียว)
   const nowAt = path.rows.findIndex((r) => r.state === "now" || r.state === "loop");
-  // ระหว่างตรวจหน้างาน (ขั้น 1 วนกลับ) ขั้นถัดไปคือรอบตรวจย่อย ไม่ใช่ขั้นหลักถัดไป — ไม่บอก
-  const nextStep =
-    nowAt >= 0 && path.rows[nowAt].state === "now" ? path.rows.slice(nowAt + 1).find((r) => r.state === "future")?.label : undefined;
-  // จอแคบ: ปุ่มรองแถวเดียว ปุ่มขั้นเต็มแถวชื่อสั้น (ไม่บอกขั้นถัดไป — ยาวจนล้นจอ)
-  const narrowFoot = bodyWidth > 0 && bodyWidth < 640;
-  const sampleOnly = (what: string) => showAlert(what, "ปุ่มนี้อยู่ในตัวอย่างเท่านั้น — รอเจ้าของงานตอบคำถามว่าต้องทำงานแบบไหน");
-  const popFootUnused =
-    !done && !viewOnly ? (
-      <>
-        {footTurn ? (
-          <TouchableOpacity style={styles.footTool} onPress={() => sampleOnly("พักงานชั่วคราว")} activeOpacity={0.7} accessibilityLabel="พักงานชั่วคราว">
-            <Ionicons name="pause-circle-outline" size={16} color={colors.body} />
-            <Text style={styles.footToolText}>พักงานชั่วคราว</Text>
-          </TouchableOpacity>
-        ) : null}
-        <TouchableOpacity style={styles.footTool} onPress={() => setEditingNote(true)} activeOpacity={0.7} accessibilityLabel="แก้ไขอาการหรือสถานะ">
-          <Ionicons name="create-outline" size={15} color={colors.body} />
-          <Text style={styles.footToolText}>แก้ไขข้อมูล</Text>
-        </TouchableOpacity>
-        {narrowFoot ? null : <View style={{ flex: 1 }} />}
-        {footTurn ? (
-          <TouchableOpacity style={styles.footDraft} onPress={() => sampleOnly("บันทึกแบบร่าง")} activeOpacity={0.7} accessibilityLabel="บันทึกแบบร่าง">
-            <Text style={styles.footToolText}>บันทึกแบบร่าง</Text>
-          </TouchableOpacity>
-        ) : null}
-        {footTurn ? (
-          <TouchableOpacity
-            style={[styles.action, styles.actionPrimary, narrowFoot && styles.footPrimaryFull]}
-            onPress={() => (order.status === "IN_PROGRESS" ? setClosing(true) : setStageOpen(true))}
-            disabled={busy}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.actionPrimaryText} numberOfLines={1}>
-              {order.status === "IN_PROGRESS"
-                ? "ปิดงาน"
-                : `${stageButtonLabel(order, { partsOut: partsOut.length, tech: user?.role === "EMPLOYEE" })}${nextStep && !narrowFoot ? ` · ไปขั้นถัดไป (${nextStep})` : ""}`}
-            </Text>
-            <Ionicons name="arrow-forward" size={17} color="#fff" />
-          </TouchableOpacity>
-        ) : null}
-      </>
-    ) : undefined;
+  /**
+   * ระงับชั่วคราว/กลับมาทำต่อ — แอดมิน (ไม่ใช่ Admin Spare Part) และหัวหน้าภาคของใบนี้ (เจ้าของงานเลือก พ.ย. 69)
+   * หัวหน้าภาคที่เห็นใบแบบดูอย่างเดียว (จ่ายข้ามทีม · ใบ IT นอกความดูแล) ไม่มีปุ่ม — เซิร์ฟเวอร์กันอีกชั้น (holdGate)
+   */
+  const canHold =
+    !!user && !user.viewAs && !done && ((user.role === "ADMIN" && !user.partsAdmin) || (user.role === "SUPERVISOR" && !viewOnly));
+  const holdLog = order.hold ? [...order.logs].filter((l) => l.action === "HOLD").sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0] : undefined;
+  async function resumeNow() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.post(`/work-orders/${order!.id}/resume`, {});
+      await reloadWithNotice("กลับมาทำต่อแล้ว — ใบกลับเข้ากล่องงาน");
+    } catch (e) {
+      showAlert("ทำไม่ได้", apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <PopupScreen
@@ -2342,6 +2328,30 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       </View>
 
       {/*
+        ระงับชั่วคราว (พ.ย. 69) — บอกก่อนอย่างอื่นว่าใบนี้พักไว้ถึงวันไหน เพราะอะไร ใครระงับ · ใบไม่อยู่ในกล่องงานจนถึงวันนั้น
+        กด "กลับมาทำต่อ" ก่อนกำหนดได้ (คนเดียวกับที่ระงับได้)
+      */}
+      {order.hold ? (
+        <View style={[styles.rbBanner, styles.holdBanner]} accessibilityLabel="กล่องระงับชั่วคราว">
+          <View style={[styles.rbIcon, styles.holdIcon]}>
+            <Ionicons name="pause" size={16} color="#fff" />
+          </View>
+          <View style={{ flex: 1, minWidth: 220, gap: 2 }}>
+            <Text style={[styles.rbTitle, styles.holdText]}>ระงับชั่วคราวถึง {thaiDate(dayOfIso(order.hold.until))} — ไม่อยู่ในกล่องงานและหยุดนับวันค้างจนถึงวันนั้น</Text>
+            <Text style={[styles.rbText, styles.holdText]}>
+              เหตุผล: <Text style={styles.rbStrong}>{order.hold.reason || "—"}</Text>
+              {holdLog ? ` · ระงับโดย ${holdLog.byName ?? "—"} เมื่อ ${whenShort(holdLog.createdAt)}` : ""}
+            </Text>
+          </View>
+          {canHold ? (
+            <TouchableOpacity style={[styles.rbLink, styles.holdLink]} onPress={() => void resumeNow()} disabled={busy} accessibilityLabel="กลับมาทำต่อ">
+              <Text style={[styles.rbLinkText, styles.holdText]}>กลับมาทำต่อ</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/*
         ย้อนขั้นมา — แถบบนสุดเหนือแถบขั้นตอน (ตัวอย่าง พ.ย. 69 ตามแบบ: "ย้อนกลับมาขั้นตอนที่ 2 เรียบร้อยแล้ว")
         คนที่เปิดใบต้องรู้ก่อนอย่างอื่นว่าใบนี้ถอยมา เพราะอะไร ใครย้อน · ข้อมูลเดิมไม่หาย (rollbackPrefill) · หายเองเมื่อกดผ่านขั้นนี้
       */}
@@ -2387,10 +2397,6 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                 </View>
               ) : null}
             </View>
-            {/* บรรทัดรองตามแบบ: อาการ (ประเภทงาน) */}
-            <Text style={styles.stepsSub} numberOfLines={1}>
-              {order.symptom?.trim() || order.title} ({order.jobTypeLabel})
-            </Text>
           </View>
           {order.rolledBack ? (
             <TouchableOpacity style={[styles.stepHist, styles.stepHistBack]} onPress={goHistory} accessibilityLabel="ประวัติการย้อนขั้นตอน">
@@ -2698,7 +2704,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
               </Text>
             </View>
             <Text style={styles.stepsFootText}>
-              ระยะเวลาสะสมในขั้นตอนนี้: <Text style={styles.stepsFootStrong}>{stayText(Date.now() - stageEnteredAt(order).getTime())}</Text>
+              ระยะเวลาสะสมในขั้นตอนนี้: <Text style={styles.stepsFootStrong}>{stayText(Date.now() - pausedFrom(stageEnteredAt(order), order.holdSpan).getTime())}</Text>
+              {order.hold ? " (ระงับอยู่ — หยุดนับ)" : ""}
             </Text>
             <View style={{ flex: 1 }} />
             <Text style={styles.stepsFootText}>
@@ -2785,10 +2792,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                   : pickReturned(order)
                     ? "ตรวจหน้างาน — แก้รายการอะไหล่"
                     : order.status === "IN_PROGRESS"
-                      ? // ขั้นช่างแยกสอง (ตัวอย่าง พ.ย. 69) — ชื่อตามแถบ ไม่ใช่ชื่อรวม "เข้างาน/ปิดงาน" ของเซิร์ฟเวอร์
+                      ? // ขั้นช่างแยกสอง (พ.ย. 69) — ชื่อตามแถบ ไม่ใช่ชื่อรวม "เข้างาน/ปิดงาน" ของเซิร์ฟเวอร์
                         order.onSite
                         ? "ปิดงาน"
-                        : "เข้างาน — กดถึงหน้างานเมื่อถึงร้าน"
+                        : isTech
+                          ? "เข้างาน — กดถึงหน้างานเมื่อถึงร้าน"
+                          : "เข้างาน — รอช่างถึงหน้างาน"
                       : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
             </Text>
           </View>
@@ -3219,13 +3228,13 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         {/* ท้ายการ์ด: ใครทำอะไรล่าสุด + ปุ่มของขั้นนี้ (ปุ่มเดียว) — ตามแบบ ปุ่มอยู่มุมขวาล่างของการ์ด */}
         <View style={[styles.nowFoot, wide && styles.nowFootWide]}>
           {/*
-            ท้ายการ์ดขั้น (ตัวอย่าง พ.ย. 69 ตามแบบ): ซ้าย = ระงับชั่วคราว · แก้ไขรายละเอียด · ขวา = บันทึกฉบับร่าง + ปุ่มของขั้น
-            ปุ่มของขั้นอยู่ที่นี่ที่เดียว (แถบท้ายหน้าต่างเอาออก ไม่ให้ซ้ำ) · "ล่าสุด: …" อยู่บนสุดของการ์ดประวัติแล้ว
+            ท้ายการ์ดขั้น (หน้าตาใหม่ พ.ย. 69): ซ้าย = ระงับชั่วคราว · แก้ไขรายละเอียด · ขวา = ปุ่มของขั้น
+            ปุ่มของขั้นอยู่ที่นี่ที่เดียว (แถบท้ายหน้าต่างเอาออก ไม่ให้ซ้ำ) · ไม่มีบันทึกฉบับร่าง (เจ้าของงานเลือก — ฟอร์มแต่ละขั้นสั้น)
           */}
           {!done && !viewOnly ? (
             <View style={styles.cardTools}>
-              {myTurn(order) && order.status !== "CLAIM_REVIEW" ? (
-                <TouchableOpacity style={styles.footTool} onPress={() => sampleOnly("ระงับการปฏิบัติงานชั่วคราว")} activeOpacity={0.7} accessibilityLabel="ระงับการปฏิบัติงานชั่วคราว">
+              {canHold && !order.hold ? (
+                <TouchableOpacity style={styles.footTool} onPress={() => setHoldOpen(true)} activeOpacity={0.7} accessibilityLabel="ระงับการปฏิบัติงานชั่วคราว">
                   <Ionicons name="pause-circle-outline" size={16} color={colors.body} />
                   <Text style={styles.footToolText}>ระงับการปฏิบัติงานชั่วคราว</Text>
                 </TouchableOpacity>
@@ -3279,8 +3288,9 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     <Text style={styles.actionProblemText}>แจ้งปัญหาหน้างาน</Text>
                   </TouchableOpacity>
                 ) : null}
-                {order.status === "IN_PROGRESS" && !order.onSite && !order.assignedOutsource ? (
-                  // ขั้นเข้างาน: ปุ่มเดียวคือ "ถึงหน้างาน" — ถึงแล้วปุ่มเปลี่ยนเป็นปิดงาน (ปุ่มเดียวต่อขั้นเหมือนขั้นอื่น)
+                {order.status === "IN_PROGRESS" && !order.onSite && !order.assignedOutsource && isTech ? (
+                  // ขั้นเข้างาน: ปุ่มเดียวของช่างคือ "ถึงหน้างาน" — ถึงแล้วปุ่มเปลี่ยนเป็นปิดงาน (ปุ่มเดียวต่อขั้นเหมือนขั้นอื่น)
+                  // กดได้เฉพาะช่าง (เจ้าของงานเลือก) — แอดมิน/หัวหน้าภาคเห็นปุ่มปิดงานแทนตามเดิม ไม่งั้นประวัติบอกว่าแอดมินถึงหน้างาน
                   // ใบ SUB ไม่มีปุ่มนี้: ทีม outsource ไม่มีบัญชี หัวหน้าภาคบันทึกผลงานแทนได้เลย
                   <TouchableOpacity
                     style={[styles.action, styles.actionPrimary]}
@@ -3310,10 +3320,6 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                       (ปุ่มขั้นต้องอยู่บนสุด ไม่ถูกปุ่มรองดันลงไป — แบบเดียวกับเลื่อนวันนัด) · ดูในฐานะไม่มี (เซิร์ฟเวอร์กันอีกชั้น)
                     */}
                     {wide && payNow && !user?.viewAs ? <PayWaitButtons panel={payPanel} onPanel={setPayPanel} disabled={busy} /> : null}
-                    <TouchableOpacity style={styles.footDraftOutline} onPress={() => sampleOnly("บันทึกฉบับร่าง")} activeOpacity={0.7} accessibilityLabel="บันทึกฉบับร่าง">
-                      <Ionicons name="download-outline" size={16} color={colors.body} />
-                      <Text style={styles.footToolText}>บันทึกฉบับร่าง</Text>
-                    </TouchableOpacity>
                     <StagePrimaryButton
                       order={order}
                       partsOut={partsOut.length}
@@ -3815,6 +3821,17 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         }}
       />
 
+      {holdOpen ? (
+        <HoldModal
+          order={order}
+          onCancel={() => setHoldOpen(false)}
+          onDone={async () => {
+            setHoldOpen(false);
+            await reloadWithNotice("ระงับชั่วคราวแล้ว — ใบออกจากกล่องงานจนถึงวันที่เลือก");
+          }}
+        />
+      ) : null}
+
       {etaOpen ? (
         <PartsEtaModal
           order={order}
@@ -4174,6 +4191,17 @@ function stageEnteredAt(order: WorkOrder) {
   const moves = new Set([...Object.values(STAGE_ACTIONS).flat(), "ROLLED_BACK", "CREATED"]);
   const l = order.logs.filter((x) => moves.has(x.action)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id - a.id)[0];
   return new Date(l?.createdAt ?? order.createdAt);
+}
+/** วันที่ (YYYY-MM-DD เวลาไทย) ของเวลา ISO — holdUntil เก็บเป็นเที่ยงคืนเวลาไทย */
+function dayOfIso(iso: string) {
+  return new Date(new Date(iso).getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+}
+/** หยุดนับวันค้างระหว่างระงับ — กฎเดียวกับ pausedSince ฝั่งเซิร์ฟเวอร์ (รายการกับหน้าใบงานนับตรงกัน) */
+function pausedFrom(since: Date, span: { from: string; to: string } | null | undefined): Date {
+  if (!span) return since;
+  const from = Math.max(Date.parse(span.from), since.getTime());
+  const to = Math.min(Date.parse(span.to), Date.now());
+  return to > from ? new Date(since.getTime() + (to - from)) : since;
 }
 function stayText(ms: number) {
   const m = Math.max(0, Math.floor(ms / 60000));
@@ -4721,6 +4749,78 @@ function FollowUpModal({
         multiline
         numberOfLines={2}
         accessibilityLabel="บันทึกเพิ่มเติม"
+      />
+      {error ? <Text style={styles.modalError}>{error}</Text> : null}
+    </AppModal>
+  );
+}
+
+/**
+ * ระงับชั่วคราว (เจ้าของงานเลือก พ.ย. 69) — เหตุผล + วันที่กลับมาทำ (พรุ่งนี้ถึง 60 วัน — เซิร์ฟเวอร์ตรวจซ้ำ)
+ * ใบออกจากกล่องงานทุกคนและหยุดนับวันค้างจนถึงวันนั้น · กดกลับมาทำต่อก่อนกำหนดได้ที่แถบบนหน้าใบงาน
+ */
+function HoldModal({ order, onCancel, onDone }: { order: WorkOrder; onCancel: () => void; onDone: () => void }) {
+  const [day, setDay] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tomorrow = (() => {
+    const d = new Date(`${todayBkk()}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const off = saving || !/^\d{4}-\d{2}-\d{2}$/.test(day) || reason.trim().length < 5;
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(`/work-orders/${order.id}/hold`, { reason: reason.trim(), until: day });
+      onDone();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      visible
+      onClose={onCancel}
+      busy={saving}
+      title={<>ระงับการปฏิบัติงานชั่วคราว · {order.code}</>}
+      footer={
+        <View style={styles.modalActions}>
+          <TouchableOpacity style={styles.modalCancel} onPress={onCancel} activeOpacity={0.7}>
+            <Text style={styles.modalCancelText}>ยกเลิก</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modalSave, off && styles.modalSaveOff]}
+            onPress={submit}
+            disabled={off}
+            activeOpacity={0.8}
+            accessibilityLabel="ยืนยันระงับชั่วคราว"
+          >
+            {saving ? <Spinner color="#fff" size="small" /> : <Text style={styles.modalSaveText}>ระงับชั่วคราว</Text>}
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <Text style={styles.linkedText}>
+        ใบนี้จะออกจากกล่องงานของทุกคนและหยุดนับวันค้าง จนถึงวันที่เลือก แล้วกลับเข้ากล่องเอง — กลับมาทำต่อก่อนกำหนดได้
+      </Text>
+      <DateField value={day} onChange={setDay} label="กลับมาทำต่อวันที่" required min={tomorrow} />
+      <Text style={styles.modalLabel}>เหตุผล</Text>
+      <TextInput
+        style={styles.modalInput}
+        value={reason}
+        onChangeText={setReason}
+        placeholder="เช่น ร้านปิดปรับปรุงถึงสิ้นเดือน"
+        placeholderTextColor={colors.textFaint}
+        multiline
+        numberOfLines={2}
+        accessibilityLabel="เหตุผลที่ระงับ"
       />
       {error ? <Text style={styles.modalError}>{error}</Text> : null}
     </AppModal>
@@ -11980,6 +12080,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningSoft,
   },
   rbIcon: { width: 32, height: 32, borderRadius: 8, backgroundColor: colors.warning, alignItems: "center", justifyContent: "center" },
+  // ระงับชั่วคราว — โทนเทาอมฟ้า แยกจากเหลืองของย้อนขั้น (พักไว้ ไม่ใช่ถอยหลัง)
+  holdBanner: { borderColor: colors.borderStrong, backgroundColor: colors.background },
+  holdIcon: { backgroundColor: colors.body },
+  holdText: { color: colors.text },
+  holdLink: { borderColor: colors.borderStrong },
   rbTitle: { fontSize: 14.5, lineHeight: 21, fontWeight: "800", color: colors.warningInk },
   rbText: { fontSize: 13, lineHeight: 20, color: colors.warningInk },
   rbStrong: { fontWeight: "700" },
@@ -11989,7 +12094,6 @@ const styles = StyleSheet.create({
   rbLinkText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.warningInk },
   stepsTitle: { fontSize: 20, lineHeight: 28, fontWeight: "800", color: colors.text },
   stepsTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" },
-  stepsSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   stepPill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 2, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primaryLine },
   stepPillBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
   stepPillText: { fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.primaryInk },
@@ -12045,7 +12149,6 @@ const styles = StyleSheet.create({
   },
   footToolText: { fontSize: 13.5, lineHeight: 20, fontWeight: "600", color: colors.body },
   footPrimaryFull: { flexBasis: "100%", justifyContent: "center" },
-  footDraft: { height: 40, paddingHorizontal: 14, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.tile },
   statusChip: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusChipText: { fontSize: 13, lineHeight: 20, fontWeight: "700" },
@@ -12123,7 +12226,6 @@ const styles = StyleSheet.create({
   fxDate: { borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.tile, paddingHorizontal: 8, paddingVertical: 1 },
   fxDateText: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
   cardTools: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, flexGrow: 1 },
-  footDraftOutline: { flexDirection: "row", alignItems: "center", gap: 6, height: 44, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
   ptChipText: { fontSize: 12, lineHeight: 18, fontWeight: "700" },
   ptEtaText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   ptEtaBtn: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, minHeight: 34, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.tile },
@@ -12192,6 +12294,8 @@ const styles = StyleSheet.create({
   badge: { borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm },
   badgeText: { fontSize: 11, lineHeight: 19, fontWeight: "700" },
   badgeOut: { backgroundColor: colors.danger },
+  // ระงับชั่วคราว — เทาอมฟ้ามีกรอบ ไม่ใช่สีของคนที่ใบรอ (ใบไม่ได้รอใครระหว่างพัก)
+  badgeHold: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.borderStrong },
   outCard: {
     flexDirection: "row",
     alignItems: "flex-start",

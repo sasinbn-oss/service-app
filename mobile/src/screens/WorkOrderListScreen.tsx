@@ -110,6 +110,8 @@ export interface WorkOrderRow {
   appointmentByName?: string | null;
   /** ย้อนขั้นมาจากขั้นไหน (ยังไม่มีใครกดผ่านขั้นนี้) — ไม่ได้ย้อน = null */
   rolledBackFrom?: string | null;
+  /** ระงับชั่วคราวอยู่ (พ.ย. 69) — until = เที่ยงคืนเวลาไทยของวันที่กลับมาทำ */
+  hold?: { until: string; reason: string | null; at: string } | null;
   /** หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ (ยังไม่ตอบ / ตอบแล้วรอรับทราบ) — ขั้นตอนไม่เปลี่ยน */
   adminReview?: AdminReviewInfo | null;
   /** ขั้นรอเบิกอะไหล่ — วันที่คาดว่าของเข้า */
@@ -613,6 +615,23 @@ function RolledBackBadge({ row }: { row: { rolledBackFrom?: string | null } }) {
       accessibilityLabel={`ป้ายย้อนขั้น จาก ${row.rolledBackFrom}`}
     >
       <Text style={[styles.badgeText, { color: "#fff" }]}>↩ ย้อนขั้น</Text>
+    </View>
+  );
+}
+
+/**
+ * ป้าย "⏸ ระงับถึง 15 พ.ย." (พ.ย. 69) — ใบที่พักไว้ไม่อยู่ในกล่องงาน แต่ยังอยู่ในแท็บที่ยังค้าง/ทั้งหมด
+ * ต้องเห็นจากรายการว่าทำไมไม่มีใครขยับ ไม่ใช่นึกว่าลืม
+ */
+function HoldBadge({ row }: { row: { hold?: { until: string; reason: string | null } | null } }) {
+  if (!row.hold) return null;
+  const day = new Date(new Date(row.hold.until).getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+  return (
+    <View
+      style={[styles.badge, { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.borderStrong, alignSelf: "flex-start" }]}
+      accessibilityLabel={`ป้ายระงับชั่วคราว ถึง ${thaiDate(day)}${row.hold.reason ? ` เหตุผล ${row.hold.reason}` : ""}`}
+    >
+      <Text style={[styles.badgeText, { color: colors.text }]}>⏸ ระงับถึง {thaiDate(day)}</Text>
     </View>
   );
 }
@@ -2603,6 +2622,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         <LiveScheduleChip row={row} serverNow={serverNow} cutoff={cutoff} />
         <PartsOutBadge row={row} />
         <RolledBackBadge row={row} />
+        <HoldBadge row={row} />
         <AdminReviewTag review={row.adminReview} />
         {/* ปิดแล้วแต่ไม่มีช่างเข้า — คนไล่ดูรายการต้องแยกออกจากใบที่ซ่อมจริงได้ */}
         {row.closeResult === "SUPERVISOR_CLOSED" || row.closeResult === "REMOTE_FIXED" ? <Text style={styles.td2}>{row.closeResultLabel}</Text> : null}
@@ -2681,6 +2701,7 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
         <ClaimBadge row={row} />
         <View style={{ flex: 1 }} />
         <RolledBackBadge row={row} />
+        <HoldBadge row={row} />
         <AdminReviewTag review={row.adminReview} />
         <PartsOutBadge row={row} />
         <View style={[styles.badge, { backgroundColor: closed ? colors.card : tone.bg }, closed && styles.badgeDone]}>
