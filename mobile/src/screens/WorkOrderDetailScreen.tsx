@@ -2060,7 +2060,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   // จอแคบ: ปุ่มรองแถวเดียว ปุ่มขั้นเต็มแถวชื่อสั้น (ไม่บอกขั้นถัดไป — ยาวจนล้นจอ)
   const narrowFoot = bodyWidth > 0 && bodyWidth < 640;
   const sampleOnly = (what: string) => showAlert(what, "ปุ่มนี้อยู่ในตัวอย่างเท่านั้น — รอเจ้าของงานตอบคำถามว่าต้องทำงานแบบไหน");
-  const popFoot =
+  const popFootUnused =
     !done && !viewOnly ? (
       <>
         {footTurn ? (
@@ -2102,7 +2102,6 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       title={order.code}
       subtitle="ใบงานซ่อม"
       head={popHead}
-      foot={popFoot}
       backLabel={`ใบงาน ${order.code}`}
       startMaximized
       instant={instant}
@@ -2748,12 +2747,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     : stageNow?.action ?? stageNow?.label ?? order.statusLabel}
             </Text>
           </View>
-          {!done && !viewOnly ? (
-            <TouchableOpacity style={styles.editNote} onPress={() => setEditingNote(true)} activeOpacity={0.7}>
-              <Ionicons name="create-outline" size={15} color={colors.primaryInk} />
-              <Text style={styles.editNoteText}>แก้ไขอาการ/สถานะ</Text>
-            </TouchableOpacity>
-          ) : null}
+          {/* "แก้ไขอาการ/สถานะ" ย้ายไปท้ายการ์ดเป็น "แก้ไขรายละเอียด" (ตัวอย่าง พ.ย. 69 ตามแบบ) */}
         </View>
         {/*
           ขั้นรอลูกค้าจ่ายเงิน (เจ้าของงานเลือก 5 พ.ย. 69) — ส่งใบเสนอราคาเมื่อไร (เปิดใบเสนอราคาได้เลย) · รอมากี่วัน · การตามลูกค้า
@@ -2956,22 +2950,22 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         {partsOut.length ? (
           <View style={styles.outCard} accessibilityLabel="กล่องอะไหล่หมด">
             <View style={styles.outIcon}>
-              <Text style={styles.outIconText}>!</Text>
+              <Ionicons name="warning-outline" size={18} color={colors.dangerInk} />
             </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flex: 1, minWidth: 220, gap: 2 }}>
               <Text style={styles.outTitle}>
-                อะไหล่หมด {partsOut.length} รายการ{" "}
-                <Text style={styles.outText}>— {partsOut.map((p) => p.name || p.partCode).join(", ")}</Text>
+                แจ้งเตือน: อะไหล่ขาดสต็อก {partsOut.length} รายการ —{" "}
+                {partsOut.map((p) => (p.name ? `${p.name} (${p.partCode})` : p.partCode)).join(", ")}
               </Text>
               <Text style={styles.outText}>
                 {etaDay
-                  ? `คาดว่าเข้า ${thaiDate(etaDay)}${etaLate ? " (เลยกำหนดแล้ว — ตามผู้ขาย)" : ""}`
-                  : "ยังไม่ได้ระบุวันคาดว่าของเข้า"}
+                  ? `คาดว่าสินค้าเข้าคลัง ${thaiDate(etaDay)}${etaLate ? " (เลยกำหนดแล้ว — ตามผู้ขาย)" : ""}`
+                  : "ยังไม่ได้ระบุวันที่คาดการณ์สินค้าเข้าคลัง"}
                 {(() => {
                   const c = [...order.logs]
                     .filter((l) => ["PARTS_CHECKED", "PARTS_BACKORDERED", "SPLIT_FROM"].includes(l.action))
                     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-                  return c ? ` · เช็คเมื่อ ${formatDateTime(c.createdAt)}${c.byName ? ` (${c.byName})` : ""}` : "";
+                  return c ? ` • บันทึกการตรวจสอบเมื่อ ${formatDateTime(c.createdAt)}${c.byName ? ` (${c.byName})` : ""}` : "";
                 })()}
               </Text>
             </View>
@@ -2982,8 +2976,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                 activeOpacity={0.7}
                 accessibilityLabel="เลื่อนวันคาดว่าเข้า"
               >
-                <Ionicons name="calendar-outline" size={14} color={colors.dangerInk} />
-                <Text style={styles.outEtaBtnText}>{etaDay ? "เลื่อนวัน" : "ใส่วันคาดว่าเข้า"}</Text>
+                <Ionicons name="calendar-outline" size={15} color={colors.dangerInk} />
+                <Text style={styles.outEtaBtnText}>{etaDay ? "เลื่อนวันคาดการณ์สินค้าเข้า" : "ระบุวันคาดการณ์สินค้าเข้า"}</Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -2994,16 +2988,31 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         {/* อาการกับอะไหล่ — กรอกที่นี่ที่เดียว กระดานดึงไปแสดงเอง */}
         {order.symptom || order.inspectionNote || order.waitingParts.length > 0 || order.services.length > 0 ? (
           <View style={styles.nowBody}>
-            <Row label="อาการ" value={order.symptom ?? "—"} />
+            {/* อาการที่แจ้ง — ค่าในกรอบตัวหนา (ตัวอย่าง พ.ย. 69 ตามแบบ) */}
+            <View style={styles.fxRow}>
+              <Text style={styles.fxLabel}>อาการที่แจ้ง</Text>
+              <View style={styles.fxBox}>
+                <Text style={styles.fxBoxText}>{order.symptom ?? "—"}</Text>
+              </View>
+            </View>
             {/* สถานะหลักอยู่บนป้ายหัวใบงานแล้ว — ขึ้นเฉพาะสถานะย่อยที่คนตั้งเอง (รอลูกค้า ฯลฯ) */}
             {order.workStatus === MANUAL_STATUS && order.workStatusLabel ? (
               <Row label="สถานะย่อย" value={order.workStatusLabel} />
             ) : null}
             {order.inspectionNote ? (
-              <Row
-                label="ผลตรวจหน้างาน"
-                value={`${order.inspectionNote}${order.inspectedAt ? ` (${formatDate(order.inspectedAt)})` : ""}`}
-              />
+              <View style={styles.fxRow}>
+                <Text style={styles.fxLabel}>ผลตรวจหน้างาน</Text>
+                <View style={styles.fxChips}>
+                  <View style={styles.fxFinding}>
+                    <Text style={styles.fxFindingText}>{order.inspectionNote}</Text>
+                  </View>
+                  {order.inspectedAt ? (
+                    <View style={styles.fxDate}>
+                      <Text style={styles.fxDateText}>({formatDate(order.inspectedAt)})</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
             ) : null}
             {order.services.length > 0 ? (
               <>
@@ -3024,12 +3033,18 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
             {order.waitingParts.length > 0 ? (
               <>
                 <View style={styles.ptTop}>
-                  <Text style={styles.ptTitle}>อะไหล่ที่ต้องใช้</Text>
+                  <Text style={styles.ptTitle}>รายการอะไหล่ที่ต้องใช้</Text>
+                  {order.waitingParts.some((x) => x.inStock === false) ? (
+                    <View style={styles.ptOutPill}>
+                      <View style={[styles.statusDot, { backgroundColor: colors.danger }]} />
+                      <Text style={styles.ptOutPillText}>สินค้าขาดสต็อก</Text>
+                    </View>
+                  ) : null}
                   <View style={{ flex: 1 }} />
                   <Text style={styles.ptSummary}>
-                    {order.waitingParts.length} รายการ · มีของ {order.waitingParts.filter((x) => x.inStock === true).length}
+                    ทั้งหมด {order.waitingParts.length} รายการ • พร้อมจ่าย {order.waitingParts.filter((x) => x.inStock === true).length}
                     {order.waitingParts.some((x) => x.inStock === false) ? (
-                      <Text style={styles.ptSummaryOut}> · หมด {order.waitingParts.filter((x) => x.inStock === false).length}</Text>
+                      <Text style={styles.ptSummaryOut}> • ขาดสต็อก {order.waitingParts.filter((x) => x.inStock === false).length}</Text>
                     ) : null}
                   </Text>
                 </View>
@@ -3051,21 +3066,21 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                         ? { text: "ยังไม่เช็ค", fg: colors.textMuted, bg: colors.background }
                         : part.inStock
                           ? { text: part.offCatalog ? "หาได้" : part.warehouse ?? "มีของ", fg: colors.successInk, bg: colors.successSoft }
-                          : { text: part.offCatalog ? "ยังหาไม่ได้" : "หมด", fg: colors.dangerInk, bg: colors.dangerSoft };
+                          : { text: part.offCatalog ? "ยังหาไม่ได้" : "ขาดสต็อก / สินค้าหมด", fg: colors.dangerInk, bg: colors.dangerSoft };
                     const chipView = (
-                      <View style={[styles.ptChip, { backgroundColor: chip.bg }]}>
+                      <View style={[styles.ptChip, { backgroundColor: chip.bg, borderColor: chip.fg === colors.dangerInk ? colors.dangerLine : chip.fg === colors.successInk ? colors.successLine : colors.border }]}>
                         <View style={[styles.statusDot, { backgroundColor: chip.fg }]} />
                         <Text style={[styles.ptChipText, { color: chip.fg }]}>{chip.text}</Text>
                       </View>
                     );
-                    const qty = `${part.quantity}${part.unit ? ` ${part.unit}` : ""}`;
+                    const qty = `${part.quantity} ${part.unit ?? "หน่วย"}`;
                     const eta = out ? (
                       etaDay ? (
                         <Text style={[styles.ptEtaText, etaLate && { color: colors.dangerInk }]}>{thaiDate(etaDay)}</Text>
                       ) : user?.role === "ADMIN" || (itLeadOf(user) && order.jobType === "IT") ? (
                         <TouchableOpacity style={styles.ptEtaBtn} onPress={() => setEtaOpen(true)} accessibilityLabel={`ใส่วันคาดว่าเข้า ${partTitle(part)}`}>
-                          <Ionicons name="calendar-outline" size={14} color={colors.navy} />
-                          <Text style={styles.ptEtaBtnText}>ใส่วันที่</Text>
+                          <Ionicons name="calendar-outline" size={14} color={colors.body} />
+                          <Text style={styles.ptEtaBtnText}>ระบุวันที่รับเข้า</Text>
                         </TouchableOpacity>
                       ) : (
                         <Text style={styles.ptEtaText}>ยังไม่ระบุ</Text>
@@ -3076,15 +3091,15 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                     return wide ? (
                       <View key={part.sparePartId} style={[i > 0 && styles.ptRowLine, out && styles.ptRowOut]}>
                         <View style={styles.ptRow}>
-                          <Text style={[styles.ptCell, styles.ptCode, styles.ptStrong]}>{partTitle(part)}</Text>
+                          <Text style={[styles.ptCell, styles.ptCode, styles.ptStrong, styles.ptCodeInk]}>{partTitle(part)}</Text>
                           <View style={styles.ptName}>
                             <View style={styles.ptNameRow}>
-                              <Text style={styles.ptCell}>{part.offCatalog ? part.note ?? "" : part.name}</Text>
+                              <Text style={[styles.ptCell, styles.ptStrong]}>{part.offCatalog ? part.note ?? "" : part.name}</Text>
                               {part.offCatalog ? <OffTag /> : null}
                             </View>
                             {part.requisitionNo ? <RequisitionText part={part} /> : null}
                           </View>
-                          <Text style={[styles.ptCell, styles.ptQty]}>{qty}</Text>
+                          <Text style={[styles.ptCell, styles.ptQty, styles.ptStrong]}>{qty}</Text>
                           <View style={styles.ptStock}>{chipView}</View>
                           <View style={styles.ptEta}>{eta}</View>
                         </View>
@@ -3158,11 +3173,23 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
 
         {/* ท้ายการ์ด: ใครทำอะไรล่าสุด + ปุ่มของขั้นนี้ (ปุ่มเดียว) — ตามแบบ ปุ่มอยู่มุมขวาล่างของการ์ด */}
         <View style={[styles.nowFoot, wide && styles.nowFootWide]}>
-          {lastLog ? (
-            <Text style={styles.nowFootMeta}>
-              ล่าสุด: {lastLog.actionLabel} · {formatDateTime(lastLog.createdAt)}
-              {lastLog.byName ? ` · ${lastLog.byName}` : ""}
-            </Text>
+          {/*
+            ท้ายการ์ดขั้น (ตัวอย่าง พ.ย. 69 ตามแบบ): ซ้าย = ระงับชั่วคราว · แก้ไขรายละเอียด · ขวา = บันทึกฉบับร่าง + ปุ่มของขั้น
+            ปุ่มของขั้นอยู่ที่นี่ที่เดียว (แถบท้ายหน้าต่างเอาออก ไม่ให้ซ้ำ) · "ล่าสุด: …" อยู่บนสุดของการ์ดประวัติแล้ว
+          */}
+          {!done && !viewOnly ? (
+            <View style={styles.cardTools}>
+              {myTurn(order) && order.status !== "CLAIM_REVIEW" ? (
+                <TouchableOpacity style={styles.footTool} onPress={() => sampleOnly("ระงับการปฏิบัติงานชั่วคราว")} activeOpacity={0.7} accessibilityLabel="ระงับการปฏิบัติงานชั่วคราว">
+                  <Ionicons name="pause-circle-outline" size={16} color={colors.body} />
+                  <Text style={styles.footToolText}>ระงับการปฏิบัติงานชั่วคราว</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={styles.footTool} onPress={() => setEditingNote(true)} activeOpacity={0.7} accessibilityLabel="แก้ไขรายละเอียด">
+                <Ionicons name="create-outline" size={15} color={colors.body} />
+                <Text style={styles.footToolText}>แก้ไขรายละเอียด</Text>
+              </TouchableOpacity>
+            </View>
           ) : null}
           {/*
             ป้ายเวลาปิดนัดข้างปุ่มขั้น (ใบรอนัดวัน) — เห็นก่อนเปิดฟอร์มว่านัดพรุ่งนี้ได้อีกเท่าไร/ขอแอดมินไว้แล้ว/แอดมินแก้ให้แล้ว
@@ -3225,6 +3252,10 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                       (ปุ่มขั้นต้องอยู่บนสุด ไม่ถูกปุ่มรองดันลงไป — แบบเดียวกับเลื่อนวันนัด) · ดูในฐานะไม่มี (เซิร์ฟเวอร์กันอีกชั้น)
                     */}
                     {wide && payNow && !user?.viewAs ? <PayWaitButtons panel={payPanel} onPanel={setPayPanel} disabled={busy} /> : null}
+                    <TouchableOpacity style={styles.footDraftOutline} onPress={() => sampleOnly("บันทึกฉบับร่าง")} activeOpacity={0.7} accessibilityLabel="บันทึกฉบับร่าง">
+                      <Ionicons name="download-outline" size={16} color={colors.body} />
+                      <Text style={styles.footToolText}>บันทึกฉบับร่าง</Text>
+                    </TouchableOpacity>
                     <StagePrimaryButton
                       order={order}
                       partsOut={partsOut.length}
@@ -11971,11 +12002,25 @@ const styles = StyleSheet.create({
   ptQty: { width: 70, textAlign: "right" },
   ptStock: { width: 120 },
   ptEta: { width: 130 },
-  ptChip: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  ptChip: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, borderRadius: 6, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 },
+  ptCodeInk: { color: colors.primaryInk },
+  ptOutPill: { flexDirection: "row", alignItems: "center", gap: 5, marginLeft: spacing.sm, borderRadius: 999, borderWidth: 1, borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft, paddingHorizontal: 9, paddingVertical: 1 },
+  ptOutPillText: { fontSize: 12, lineHeight: 18, fontWeight: "700", color: colors.dangerInk },
+  fxRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.md, paddingVertical: 6 },
+  fxLabel: { width: 130, fontSize: 13, lineHeight: 20, color: colors.textMuted },
+  fxBox: { flex: 1, minWidth: 200, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background, paddingHorizontal: spacing.md, paddingVertical: 10 },
+  fxBoxText: { fontSize: 15, lineHeight: 22, fontWeight: "700", color: colors.text },
+  fxChips: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: spacing.sm },
+  fxFinding: { borderRadius: 8, borderWidth: 1, borderColor: colors.dangerLine, backgroundColor: colors.dangerSoft, paddingHorizontal: 10, paddingVertical: 3 },
+  fxFindingText: { fontSize: 14, lineHeight: 21, fontWeight: "700", color: colors.dangerInk },
+  fxDate: { borderRadius: 6, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.tile, paddingHorizontal: 8, paddingVertical: 1 },
+  fxDateText: { fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  cardTools: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, flexGrow: 1 },
+  footDraftOutline: { flexDirection: "row", alignItems: "center", gap: 6, height: 44, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
   ptChipText: { fontSize: 12, lineHeight: 18, fontWeight: "700" },
   ptEtaText: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
-  ptEtaBtn: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, height: 32, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.card },
-  ptEtaBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.navy },
+  ptEtaBtn: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, minHeight: 34, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.tile },
+  ptEtaBtnText: { fontSize: 12.5, lineHeight: 18, fontWeight: "600", color: colors.body },
   ptCardRow: { paddingHorizontal: spacing.md, paddingVertical: 10, gap: 2 },
   ptSub: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   ptCardEta: { marginTop: 4, alignItems: "flex-start" },
@@ -12148,10 +12193,10 @@ const styles = StyleSheet.create({
   sentBackTitle: { fontSize: 13.5, lineHeight: 21, fontWeight: "800", color: colors.warningInk },
   sentBackText: { fontSize: 13, lineHeight: 21, color: colors.text },
   sentBackMeta: { fontSize: 12, lineHeight: 19, color: colors.textMuted },
-  outIcon: { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.danger, alignItems: "center", justifyContent: "center" },
+  outIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.dangerLine, alignItems: "center", justifyContent: "center" },
   outIconText: { color: "#fff", fontWeight: "800", fontSize: 14, lineHeight: 20 },
-  outTitle: { fontSize: 13.5, lineHeight: 21, fontWeight: "800", color: colors.dangerInk },
-  outText: { fontSize: 13, lineHeight: 21, fontWeight: "400", color: colors.text },
+  outTitle: { fontSize: 14, lineHeight: 21, fontWeight: "800", color: colors.dangerInk },
+  outText: { fontSize: 12.5, lineHeight: 19, fontWeight: "400", color: colors.dangerInk },
   outEtaBtn: {
     flexDirection: "row",
     alignItems: "center",
