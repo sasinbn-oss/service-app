@@ -76,6 +76,8 @@ export interface IssuedRow {
   transferReqNo: string | null;
   transferNo: string | null;
   transferArrived: boolean;
+  /** แอดมินส่งของให้ลูกค้าแล้ว (พ.ย. 69) — ของออกจากคลังไปอยู่ที่ร้าน ไม่ได้อยู่กับช่าง */
+  sentToCustomer: boolean;
   /** เบิกเมื่อ — ใบเบิกส่งมอบใช้เวลาที่บันทึกเบิก · เบิกเพื่อโอนใช้เวลาที่หัวหน้าภาคบันทึกเบิก-โอน */
   issuedAt: string | null;
   issuedDays: number | null;
@@ -136,6 +138,7 @@ export async function buildIssuedReport(opts: { scope: Prisma.WorkOrderWhereInpu
           transferReqNo: true,
           transferNo: true,
           transferredAt: true,
+          sentToCustomerAt: true,
           checkedAt: true,
           sparePart: { select: { partCode: true, name: true } },
         },
@@ -185,6 +188,7 @@ export async function buildIssuedReport(opts: { scope: Prisma.WorkOrderWhereInpu
         transferReqNo: p.transferReqNo,
         transferNo: p.transferNo,
         transferArrived: !!p.transferredAt,
+        sentToCustomer: delivered && !!p.sentToCustomerAt,
         issuedAt: at?.toISOString() ?? null,
         issuedDays: at ? today - bkkDay(at) : null,
       });
@@ -225,6 +229,8 @@ export async function issuedWorkbook(r: IssuedReport): Promise<Buffer> {
       "เลขใบงาน", "รหัสสาขา", "ชื่อสาขา", "ภาค", "ทีมช่าง", "เครื่อง", "ขั้นตอนตอนนี้", "วันนัด", "ลูกค้าคอนเฟิร์ม", "เลยวันนัด (วัน)",
       "รหัสอะไหล่", "ชื่ออะไหล่", "จำนวน", "คลัง", "เลขใบเบิก", "เบิกจากคลัง (โอน)", "ใบเบิกต้นทาง", "เลขที่ใบโอน", "สถานะโอน",
       "เบิกเมื่อ", "เบิกมาแล้ว (วัน)",
+      // ต่อท้าย ไม่แทรกกลาง — ไฟล์ที่คนทำสูตรอ้างคอลัมน์เดิมไว้ไม่เลื่อน
+      "ส่งให้ลูกค้าแล้ว",
     ],
     issued.map((x) => [
       x.code, x.branchCode, x.branchName, x.region ?? "—", x.team ?? "—", x.machineCode ?? "ทั้งสาขา", x.statusLabel, visitText(x),
@@ -233,6 +239,7 @@ export async function issuedWorkbook(r: IssuedReport): Promise<Buffer> {
       x.transferFrom ?? "—", x.transferReqNo ?? "—", x.transferNo ?? "—",
       x.transferReqNo ? (x.transferArrived ? "โอนถึงแล้ว" : "กำลังโอน") : "—",
       x.issuedAt ? thaiDateTime(new Date(x.issuedAt), false) : "—", x.issuedDays ?? "—",
+      x.sentToCustomer ? "ส่งให้ลูกค้าแล้ว" : "—",
     ])
   );
   if (!issued.length) s1.addRow(["ไม่มีใบงานที่เบิกอะไหล่แล้วและยังไม่ปิด"]);

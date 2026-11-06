@@ -124,7 +124,8 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
         machine: { select: { code: true } },
         parts: {
           where: { kind: "WAITING" },
-          select: { quantity: true, sparePart: { select: { partCode: true } } },
+          // ส่งให้ลูกค้าแล้ว (พ.ย. 69) — คนวางแผนรู้ว่าชิ้นไหนไม่ต้องแวะรับที่คลัง
+          select: { quantity: true, inStock: true, requisitionNo: true, sentToCustomerAt: true, sparePart: { select: { partCode: true } } },
         },
       },
     }),
@@ -180,7 +181,12 @@ router.get("/day", requireAuth, requirePlanner, async (req: AuthRequest, res) =>
       jobTypeLabel: JOB_TYPE_LABELS[o.jobType] ?? o.jobType,
       title: o.title,
       symptom: o.symptom,
-      parts: o.parts.map((p) => (p.quantity > 1 ? `${p.sparePart.partCode} x${p.quantity}` : p.sparePart.partCode)),
+      parts: o.parts.map(
+        (p) =>
+          `${p.quantity > 1 ? `${p.sparePart.partCode} x${p.quantity}` : p.sparePart.partCode}${
+            p.inStock === true && p.requisitionNo && p.sentToCustomerAt ? " (ส่งให้ลูกค้าแล้ว)" : ""
+          }`
+      ),
       status: o.status,
       statusLabel: WORK_ORDER_STATUS_LABELS[o.status] ?? o.status,
       // ไปตรวจหน้างาน กับไปซ่อม เป็นงานคนละแบบ — ไปตรวจไม่ต้องเตรียมอะไหล่
