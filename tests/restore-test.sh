@@ -14,6 +14,8 @@
 #     รอบกู้ปกติจับเรื่องนี้ไม่ได้ เพราะไฟล์สำรองรุ่นเดียวกับฐานมีตารางนี้อยู่แล้ว
 #   · จำนวนแถวหลังกู้เท่าต้นฉบับ · ล็อกอินด้วยรหัสผ่านเดิมได้ · กู้ซ้ำลงฐานที่มีข้อมูลแล้วต้องปฏิเสธ
 #   · สอนการใช้งาน (User.howtoSeen) ตามมาทุกคน: NULL ยังเป็น NULL (= พนักงานเดิม ถ้ากลายเป็นค่าอื่น วิธีใช้เด้งทั้งบริษัท)
+#   · หัวหน้าภาคที่ดูแลงาน IT (User.itLead — 6 พ.ย. 69) ตามมา: คนเดิมยังถืออยู่ ไม่หายเป็น false (ใบ IT ทั้งบริษัทจะกลายเป็นไม่มีคนรับ)
+#     ฐานไม่มีใครถือ = ใส่หัวหน้าภาคชั่วคราว zz.restore.howto.itlead ที่ถือไว้ (ลบตอนจบพร้อมผู้ใช้ชั่วคราวของ howto)
 #     และค่าที่เป็น JSON ตรงทุกตัวอักษร — ไม่แตะผู้ใช้ในฐานต้นฉบับ (A001/S001/T001 ต้องคง "ดูแล้ว" ไว้ให้เทสต์เบราว์เซอร์)
 #     ฐานทดสอบหลัง seed:test มีแต่สามคนนั้น (มีค่าทุกคน) — เทียบแล้วไม่มี NULL ให้ตรวจ จึงใส่ผู้ใช้ชั่วคราวสองคน
 #     (ว่าง · มีค่าพร้อมหน้าที่ดูแล้ว) ก่อนสำรอง แล้วลบตอนจบ แบบเดียวกับใบเลือกอะไหล่ชั่วคราว
@@ -80,10 +82,20 @@ INSERT INTO "User" ("employeeCode", name, role, "passwordHash", "howtoSeen") VAL
    '{"notice": "2026-11-03T09:00:00.000Z", "tours": {"tech.myday": "2026-11-03T09:05:00.000Z", "tech.close": "2026-11-03T09:10:00.000Z"}}');
 SQL
 
+# หัวหน้าภาคที่ดูแลงาน IT — ได้คนเดียว (ดัชนี) ใส่คนชั่วคราวเฉพาะเมื่อยังไม่มีใครถือ · ยังไม่ migrate it_lead ให้ข้อ 3b2 รายงานเอง
+# ใส่ก่อนอ่านลายนิ้วมือ howtoSeen ข้างล่าง — คนนี้ต้องอยู่ในลายนิ้วมือทั้งก่อนและหลังกู้
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<'SQL' || true
+INSERT INTO "User" ("employeeCode", name, role, "passwordHash", "itLead")
+SELECT 'zz.restore.howto.itlead', 'หัวหน้า IT ทดสอบกู้คืน', 'SUPERVISOR', 'x', true WHERE NOT EXISTS (SELECT 1 FROM "User" WHERE "itLead");
+SQL
+ITLEAD_SQL='select coalesce(string_agg("employeeCode", $$,$$ order by "employeeCode"), $$-$$) from "User" where "itLead"'
+SRC_ITLEAD=$(PG -d serviceapp -Atc "$ITLEAD_SQL" 2>/dev/null) || SRC_ITLEAD=""
+
 # ลายนิ้วมือของ howtoSeen ทุกคน (NULL | มีค่า | md5 ของรหัสผู้ใช้:md5 ค่า เรียงตามรหัส) — อ่านก่อนสำรอง
 # ไม่ใช้ set -e ตายเงียบ: คอลัมน์ยังไม่มี (ยังไม่ migrate) ให้ข้อ 3b รายงานเอง
 HOWTO_SQL='select count(*) filter (where "howtoSeen" is null)||$$|$$||count(*) filter (where "howtoSeen" is not null)||$$|$$||md5(string_agg("employeeCode"||$$:$$||coalesce(md5("howtoSeen"::text),$$NULL$$), $$,$$ order by "employeeCode")) from "User"'
 SRC_HOWTO=$(PG -d serviceapp -Atc "$HOWTO_SQL" 2>/dev/null) || SRC_HOWTO=""
+
 
 # ประวัติสาขา + ชื่อที่จำไว้ชั่วคราว (เหตุผลอยู่หัวไฟล์) · คนทำที่บัญชีถูกลบ = id ที่ไม่มีใน User แล้ว (ไม่มี FK ให้ขวาง)
 # ใส่ไม่สำเร็จ (ยังไม่ migrate branch_rename) ให้ข้อ 3c รายงานเอง
@@ -177,6 +189,16 @@ elif [ "$SRC_HOWTO" = "$DST_HOWTO" ]; then
   pass "สอนการใช้งานตามมาครบ: ว่าง $SRC_NULLS คนยังว่าง (พนักงานเดิม) · มีค่า $SRC_SET คนตรงทุกตัวอักษร"
 else
   fail "howtoSeen หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_HOWTO] · หลังกู้ [$DST_HOWTO]"
+fi
+
+# 3b2) หัวหน้าภาคที่ดูแลงาน IT — ต้นฉบับต้องมีคนถือ (ไม่งั้น "-" เทียบ "-" ไม่ได้ตรวจอะไร) · หลังกู้คนเดิมยังถือ
+DST_ITLEAD=$(PG -d $TMPDB -Atc "$ITLEAD_SQL" 2>/dev/null) || DST_ITLEAD=""
+if [ -z "$SRC_ITLEAD" ] || [ "$SRC_ITLEAD" = "-" ]; then
+  fail "ต้นฉบับต้องมีหัวหน้าภาคที่ดูแลงาน IT (ได้ [$SRC_ITLEAD]) — ใส่ผู้ใช้ชั่วคราวไม่สำเร็จ หรือยังไม่ migrate it_lead"
+elif [ "$SRC_ITLEAD" = "$DST_ITLEAD" ]; then
+  pass "หัวหน้าภาคที่ดูแลงาน IT ตามมา: $SRC_ITLEAD ยังถืออยู่หลังกู้"
+else
+  fail "itLead หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_ITLEAD] · หลังกู้ [$DST_ITLEAD]"
 fi
 
 # 3c) ประวัติสาขา + ชื่อที่แก้ในแอป — ต้นฉบับต้องมีแถวชั่วคราวครบ (2 ประวัติ + 1 ชื่อ) ไม่งั้นเทียบ 0 กับ 0 ไม่ได้ตรวจอะไร
