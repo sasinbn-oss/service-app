@@ -705,6 +705,7 @@ async function mergeWaitingParts(
             inStock: null,
             warehouse: null,
             requisitionNo: null,
+            sentToCustomerAt: null,
             checkedAt: null,
             checkedById: null,
           },
@@ -725,6 +726,13 @@ async function mergeWaitingParts(
 
 /** เบิกไปแล้ว — มีของและมีเลขใบเบิก ไม่ต้องเช็คหรือเสนอราคาซ้ำ */
 const isIssued = (p: { inStock: boolean | null; requisitionNo: string | null }) => p.inStock === true && !!p.requisitionNo;
+
+/**
+ * อะไหล่ส่งให้ลูกค้าแล้ว (เจ้าของงานขอ พ.ย. 69) — ผูกกับการเบิกครั้งนั้น: นับเฉพาะชิ้นที่ยังเบิกอยู่ (มีเลขใบเบิก)
+ * ทุกทางที่ล้างเลขใบเบิกล้าง sentToCustomerAt ด้วยอยู่แล้ว — เช็คซ้ำตรงนี้กันทางที่ลืม ไม่ให้ป้ายค้างไปบอกช่างผิด
+ */
+const isSentToCustomer = (p: { inStock: boolean | null; requisitionNo: string | null; sentToCustomerAt?: Date | null }) =>
+  isIssued(p) && !!p.sentToCustomerAt;
 
 /**
  * นัดวัน → เบิก → คอนเฟิร์มลูกค้า (เจ้าของงานกำหนด ต.ค. 69 รอบสอง) — ใบเดินต่อไปไหนหลังแต่ละจังหวะ
@@ -1675,6 +1683,7 @@ const DISPATCH_PART_SELECT = {
   inStock: true,
   warehouse: true,
   requisitionNo: true,
+  sentToCustomerAt: true,
   offFound: true,
   offKind: true,
   offDetail: true,
@@ -1686,6 +1695,7 @@ function dispatchPart(p: {
   inStock: boolean | null;
   warehouse: string | null;
   requisitionNo: string | null;
+  sentToCustomerAt: Date | null;
   offFound: boolean | null;
   offKind: string | null;
   offDetail: string | null;
@@ -1701,6 +1711,8 @@ function dispatchPart(p: {
     inStock: p.inStock,
     warehouse: p.warehouse,
     requisitionNo: p.requisitionNo,
+    // ส่งให้ลูกค้าแล้ว — การ์ดช่าง/ข้อความ LINE เขียน "ส่งให้ลูกค้าแล้ว" แทน "รับที่คลัง…" ช่างจะได้ไม่แวะคลังเสียเที่ยว
+    sentToCustomer: isSentToCustomer(p),
     // หาได้จากที่ไหน — ข้อความ LINE/การ์ดช่างบอกแหล่งของนอกสโตร์ ช่างรู้ว่าไปรับของที่ไหน (เจ้าของงานเลือกข้อ 5)
     offFound: p.offFound,
     offKind: p.offKind,
@@ -1717,6 +1729,7 @@ function partShape(p: {
   transferReqNo?: string | null;
   transferNo?: string | null;
   transferredAt?: Date | null;
+  sentToCustomerAt?: Date | null;
   unit?: string | null;
   note?: string | null;
   offFound?: boolean | null;
@@ -1761,6 +1774,8 @@ function partShape(p: {
     transferReqNo: p.transferReqNo ?? null,
     transferNo: p.transferNo ?? null,
     transferredAt: p.transferredAt ? p.transferredAt.toISOString() : null,
+    // แอดมินส่งของให้ลูกค้าแล้ว (พ.ย. 69) — หน้าใบงาน/ข้อความทีม SUB บอก "ส่งให้ลูกค้าแล้ว" · ไม่ส่งเวลา (ประวัติบอกแล้ว)
+    sentToCustomer: p.inStock === true && !!p.requisitionNo && !!p.sentToCustomerAt,
   };
 }
 
@@ -6210,6 +6225,13 @@ router.post("/:id/parts-pick/return", requireAuth, async (req: AuthRequest, res)
  * มีของต้องบอกคลังด้วย — ของอยู่คลังอื่นหัวหน้าภาคต้องเบิก/โอนเองหลังนัดวัน ก่อนคอนเฟิร์มลูกค้า (ป้าย TRANSFER)
  * มีบางตัว หมดบางตัว — แยกตัวที่หมดไปใบรออะไหล่ได้ ใบนี้ไปนัดด้วยของที่มี (เหมือนขั้นเบิกเดิม)
  */
+/**
+ * "อะไหล่ส่งให้ลูกค้าแล้ว" (เจ้าของงานขอ พ.ย. 69) เลือกได้ที่เดียว: แอดมินเบิกจากคลัง 94 ในขั้นเบิก (parts-check)
+ * ขั้นอื่นที่รับรายการอะไหล่ (เช็คอะไหล่ · หัวหน้าภาคเบิกคลังอื่น) ปฏิเสธชัด ๆ ไม่ทิ้งค่าเงียบ ๆ —
+ * แอปที่ส่งมาผิดที่จะได้รู้ว่าไม่ถูกบันทึก แทนที่ช่างจะถูกบอกให้ไปรับของที่ส่งไปร้านแล้ว (หรือกลับกัน)
+ */
+const SENT_ONLY_ADMIN_94 = `เลือก “อะไหล่ส่งให้ลูกค้าแล้ว” ได้เฉพาะชิ้นที่แอดมินเบิกจาก${ADMIN_WAREHOUSE}ในขั้นเบิกอะไหล่ — ของคลังอื่นหัวหน้าภาคเบิก ช่างรับที่คลังตามเดิม`;
+
 const partsSourcingSchema = z.object({
   results: z
     .array(
@@ -6217,6 +6239,8 @@ const partsSourcingSchema = z.object({
         sparePartId: z.number().int().positive(),
         inStock: z.boolean(),
         warehouse: z.string().trim().max(120).nullable().optional(),
+        // ขั้นนี้ยังไม่เบิก — รับไว้เพื่อปฏิเสธ (SENT_ONLY_ADMIN_94) ไม่ใช่ตัดทิ้งเงียบ ๆ
+        sentToCustomer: z.boolean().optional(),
       })
     )
     .min(1),
@@ -6234,6 +6258,7 @@ router.post("/:id/parts-sourcing", requireAuth, async (req: AuthRequest, res) =>
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = partsSourcingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (parsed.data.results.some((r) => r.sentToCustomer)) return res.status(400).json({ error: SENT_ONLY_ADMIN_94 });
   if (!(await guardStage(req, res, id, "PARTS_SOURCING"))) return;
 
   // ตัวที่เบิกไปแล้วรอบก่อนไม่ต้องเช็คซ้ำ — เช็คเฉพาะตัวที่เพิ่มมา
@@ -6371,7 +6396,7 @@ router.post("/:id/parts-short", requireAuth, async (req: AuthRequest, res) => {
   await prisma.$transaction(async (tx) => {
     await tx.workOrderPart.updateMany({
       where: { id: { in: short.map((p) => p.id) } },
-      data: { inStock: false, warehouse: null, requisitionNo: null, checkedAt: new Date(), checkedById: req.auth!.userId },
+      data: { inStock: false, warehouse: null, requisitionNo: null, sentToCustomerAt: null, checkedAt: new Date(), checkedById: req.auth!.userId },
     });
     await tx.workOrder.update({
       where: { id },
@@ -6419,6 +6444,12 @@ const partsCheckSchema = z.object({
         warehouse: z.string().trim().max(120).nullable().optional(),
         // เลขใบเบิกจากระบบคลัง ของที่หมดยังไม่มีใบเบิก
         requisitionNo: z.string().trim().max(60).nullable().optional(),
+        /**
+         * อะไหล่ส่งให้ลูกค้าแล้ว (เจ้าของงานขอ พ.ย. 69) — ทีละชิ้น เฉพาะชิ้นที่แอดมินเบิกจากคลัง 94 รอบนี้
+         * ไม่ส่ง / false = รับที่คลัง (แบบเดิม · แอปรุ่นก่อน) · ขั้นตอนไม่เปลี่ยน ("ไปต่อตามขั้นตอนเลย")
+         * ไม่มีข้อมูลอื่นให้กรอกเพิ่ม (เจ้าของงาน: "ไม่ต้องเพิ่ม") — เลขใบเบิกยังบังคับเหมือนเดิม
+         */
+        sentToCustomer: z.boolean().optional(),
       })
     )
     .min(1),
@@ -6499,6 +6530,11 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: "ต้องเช็คให้ครบทุกรายการก่อนจึงจะไปขั้นต่อไปได้" });
   }
   for (const r of parsed.data.results) {
+    // ส่งให้ลูกค้าแล้ว — เฉพาะของในสโตร์ที่มีของและแอดมินเบิกจากคลัง 94 (ของนอกสโตร์ไม่ได้ออกจากคลัง · ของหมดยังไม่ได้เบิก
+    // · คลังอื่นหัวหน้าภาคเบิก ไม่อยู่ในเรื่องนี้) · ตรวจก่อนข้อที่เหลือ ข้อความจะได้ชี้เรื่องนี้ตรง ๆ
+    if (r.sentToCustomer && (offIds.has(r.sparePartId) || !r.inStock || r.warehouse !== ADMIN_WAREHOUSE)) {
+      return res.status(400).json({ error: SENT_ONLY_ADMIN_94 });
+    }
     if (offIds.has(r.sparePartId)) continue;
     if (r.inStock && !r.warehouse) {
       return res.status(400).json({ error: "ของที่มีอยู่ ต้องระบุด้วยว่าอยู่คลังไหน" });
@@ -6613,6 +6649,10 @@ router.post("/:id/parts-check", requireAuth, async (req: AuthRequest, res) => {
           warehouse: r.inStock && !offIds.has(r.sparePartId) ? r.warehouse ?? null : null,
           // ของที่หมดยังไม่ได้เบิก เลขใบเบิกที่ค้างจากรอบก่อนต้องถูกล้าง · ของนอกสโตร์ไม่มีใบเบิก
           requisitionNo: r.inStock && !offIds.has(r.sparePartId) ? r.requisitionNo?.trim() || null : null,
+          // ส่งให้ลูกค้าแล้ว — เขียนทุกชิ้นที่ตอบรอบนี้ (ไม่เลือก = ว่าง) ค่าของการเบิกรอบก่อนจึงไม่ติดมากับเลขใบเบิกใหม่
+          // เวลาเดียวกับ checkedAt — คนบันทึกคือ checkedById ไม่เก็บซ้ำ (ดู schema.prisma)
+          sentToCustomerAt:
+            r.inStock && !offIds.has(r.sparePartId) && r.warehouse === ADMIN_WAREHOUSE && r.sentToCustomer ? now : null,
           // ยังอยู่คลังที่โอนมาถึง = เก็บข้อมูลการโอนไว้ · เปลี่ยนคลัง/หมด = การโอนรอบเดิมไม่เกี่ยวแล้ว
           // ไม่ต้องโอน — ขั้นหัวหน้าภาคเบิกอ่านว่า "ของอยู่คลังนี้แล้ว" จาก transferredAt (ไม่มีเลขใบโอน = ไม่ได้โอน)
           ...(noTransferIds.has(r.sparePartId)
@@ -6761,6 +6801,8 @@ const pickupSchema = z.object({
         sparePartId: z.number().int().positive(),
         warehouse: z.string().trim().min(1).max(120),
         requisitionNo: z.string().trim().min(1, "ต้องใส่เลขใบเบิกทุกรายการ").max(60),
+        // หัวหน้าภาคเบิกคลังอื่น ไม่อยู่ในเรื่องส่งให้ลูกค้าแล้ว — รับไว้เพื่อปฏิเสธ (SENT_ONLY_ADMIN_94) ไม่ตัดทิ้งเงียบ ๆ
+        sentToCustomer: z.boolean().optional(),
       })
     )
     .min(1),
@@ -6947,6 +6989,7 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "รหัสใบงานไม่ถูกต้อง" });
   const parsed = pickupSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "ข้อมูลไม่ถูกต้อง" });
+  if (parsed.data.results.some((r) => r.sentToCustomer)) return res.status(400).json({ error: SENT_ONLY_ADMIN_94 });
   const cur = await guardStage(req, res, id, "PARTS_PICKUP");
   if (!cur) return;
   const next = afterIssue(cur);
@@ -6980,7 +7023,8 @@ router.post("/:id/parts-pickup", requireAuth, async (req: AuthRequest, res) => {
     for (const r of parsed.data.results) {
       await tx.workOrderPart.updateMany({
         where: { workOrderId: id, kind: "WAITING", sparePartId: r.sparePartId },
-        data: { warehouse: r.warehouse, requisitionNo: r.requisitionNo, checkedAt: now },
+        // ส่งให้ลูกค้าแล้วเป็นของการเบิกคลัง 94 เท่านั้น — เลขใบเบิกใหม่ของหัวหน้าภาคต้องไม่ได้ป้ายที่ค้างมาจากไหน
+        data: { warehouse: r.warehouse, requisitionNo: r.requisitionNo, sentToCustomerAt: null, checkedAt: now },
       });
     }
     await tx.workOrder.update({
@@ -9018,6 +9062,8 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
           inStock: p.inStock,
           warehouse: p.warehouse,
           requisitionNo: p.requisitionNo,
+          // ส่งให้ลูกค้าแล้วติดไปกับเลขใบเบิก — ใบทดสอบต้องบอกช่างเหมือนใบจริง
+          sentToCustomerAt: p.sentToCustomerAt,
           unit: p.unit,
           note: p.note,
           checkedAt: p.checkedAt,
@@ -9072,7 +9118,7 @@ router.post("/:id/test-copy", requireAuth, requireAdmin, async (req: AuthRequest
  */
 async function partsCheckLines(
   waiting: { sparePartId: number; quantity: number }[],
-  results: { sparePartId: number; inStock: boolean; warehouse?: string | null; requisitionNo?: string | null }[],
+  results: { sparePartId: number; inStock: boolean; warehouse?: string | null; requisitionNo?: string | null; sentToCustomer?: boolean }[],
   offIds: Set<number>,
   arrivedIds: Set<number> = new Set(),
   noTransferIds: Set<number> = new Set()
@@ -9088,7 +9134,10 @@ async function partsCheckLines(
       const head = `${code} ×${qty}`;
       if (offIds.has(r.sparePartId)) return `${head} — ${r.inStock ? "ได้ของแล้ว" : "ยังไม่ได้ของ"}`;
       if (!r.inStock) return `${head} — หมด`;
-      if (r.warehouse === ADMIN_WAREHOUSE) return `${head} · ${r.warehouse} · ใบเบิก ${r.requisitionNo?.trim()} — แอดมินเบิกแล้ว`;
+      // ส่งให้ลูกค้าแล้ว (พ.ย. 69) ต่อท้าย — ย้อนดูได้ว่าชิ้นไหนช่างไม่ต้องไปรับที่คลัง
+      if (r.warehouse === ADMIN_WAREHOUSE) {
+        return `${head} · ${r.warehouse} · ใบเบิก ${r.requisitionNo?.trim()} — แอดมินเบิกแล้ว${r.sentToCustomer ? " · ส่งให้ลูกค้าแล้ว" : ""}`;
+      }
       if (noTransferIds.has(r.sparePartId)) return `${head} · ${r.warehouse} (ไม่ต้องโอน) — ส่งหัวหน้าภาคเบิกส่งมอบ`;
       if (arrivedIds.has(r.sparePartId)) return `${head} · ${r.warehouse} (โอนมาแล้ว) — ส่งหัวหน้าภาคเบิกส่งมอบ`;
       return `${head} · ${r.warehouse} — ส่งหัวหน้าภาคเบิกและโอน`;
@@ -9185,7 +9234,7 @@ router.post("/:id/parts-arrived", requireAuth, async (req: AuthRequest, res) => 
   await prisma.$transaction(async (tx) => {
     await tx.workOrderPart.updateMany({
       where: { workOrderId: id, kind: "WAITING" },
-      data: { inStock: null, warehouse: null, requisitionNo: null, checkedAt: null, checkedById: null },
+      data: { inStock: null, warehouse: null, requisitionNo: null, sentToCustomerAt: null, checkedAt: null, checkedById: null },
     });
     await tx.workOrder.update({
       where: { id },
@@ -9237,7 +9286,7 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       partsExpectedAt: true,
       parts: {
         where: { kind: "WAITING" },
-        select: { sparePartId: true, inStock: true, warehouse: true, requisitionNo: true },
+        select: { sparePartId: true, inStock: true, warehouse: true, requisitionNo: true, sentToCustomerAt: true },
       },
       branch: { select: { region: true, zone: true, pmTeam: true } },
     },
@@ -9324,7 +9373,8 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
     if (toStage === "PARTS_REQUESTED") {
       await tx.workOrderPart.updateMany({
         where: { workOrderId: id, kind: "WAITING" },
-        data: { requisitionNo: null, transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: null },
+        // ส่งให้ลูกค้าแล้วผูกกับเลขใบเบิก — ล้างพร้อมกัน (ค่าเดิมอยู่ใน snapshot ข้างล่าง ฟอร์มเบิกเติมให้)
+        data: { requisitionNo: null, sentToCustomerAt: null, transferFrom: null, transferReqNo: null, transferNo: null, transferredAt: null },
       });
     }
     // ย้อนไปถึงขั้นเช็คอะไหล่หรือก่อนนั้น ผลเช็ครอบเดิมใช้ไม่ได้แล้ว — แอดมินต้องเช็คใหม่
@@ -9336,6 +9386,7 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
           inStock: null,
           warehouse: null,
           requisitionNo: null,
+          sentToCustomerAt: null,
           transferFrom: null,
           transferReqNo: null,
           transferNo: null,
@@ -9356,7 +9407,16 @@ router.post("/:id/rollback", requireAuth, async (req: AuthRequest, res) => {
       scheduledAt: wo.scheduledAt?.toISOString().slice(0, 10) ?? null,
       scheduledTime: wo.scheduledTime,
       partsExpectedAt: wo.partsExpectedAt?.toISOString().slice(0, 10) ?? null,
-      parts: wo.parts.filter((p) => p.inStock !== null),
+      // แถวละสี่ช่องเดิม + ส่งให้ลูกค้าแล้ว (เป็นค่าจริงเท็จ ไม่เก็บเวลา — ฟอร์มเติมแค่ว่าเลือกไว้ไหม)
+      parts: wo.parts
+        .filter((p) => p.inStock !== null)
+        .map((p) => ({
+          sparePartId: p.sparePartId,
+          inStock: p.inStock,
+          warehouse: p.warehouse,
+          requisitionNo: p.requisitionNo,
+          sentToCustomer: isSentToCustomer(p),
+        })),
     };
     await tx.workOrderLog.create({
       data: {
@@ -9569,6 +9629,7 @@ router.post("/:id/reassess-parts", requireAuth, async (req: AuthRequest, res) =>
             inStock: null,
             warehouse: null,
             requisitionNo: null,
+            sentToCustomerAt: null,
             transferFrom: null,
             transferReqNo: null,
             transferNo: null,

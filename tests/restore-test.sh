@@ -30,6 +30,9 @@
 #   · ประวัติการนำเข้า (ImportRun + ImportRunRow · 5 พ.ย. 69) ตามมาครบทุกช่อง — ตารางเปล่าจาก migration ไม่อยู่ใน SEEDED_BY_MIGRATION
 #     แถวผลอ้างรอบ (FK) สคริปต์กู้ต้องใส่รอบก่อน · ชุดอื่นล้างรอบของตัวเองตอนจบ ฐานทดสอบจึงว่าง ใส่รอบชั่วคราวหนึ่งรอบ (สองแถว ·
 #     แถวหนึ่งไม่มีเลขแถว) แล้วลบตอนจบ
+#   · อะไหล่ส่งให้ลูกค้าแล้ว (WorkOrderPart.sentToCustomerAt · พ.ย. 69) ตามมาครบทั้งค่าและค่าว่าง — หลุดแล้วช่างถูกบอกให้ไปรับของ
+#     ที่ส่งไปร้านแล้วที่คลัง · ฐานทดสอบปกติไม่มีแถวอะไหล่ค้าง (ชุดอื่นลบใบของตัวเอง) จึงใส่สองแถวชั่วคราวบนใบงานที่ไม่มีอะไหล่
+#     (ชิ้นหนึ่งส่งแล้ว อีกชิ้นรับที่คลัง) แล้วลบตอนจบ
 # สร้างฐานข้อมูลชั่วคราว serviceapp_restore_test ในเครื่อง แล้วลบทิ้งตอนจบ
 set -e
 cd "$(dirname "$0")/../backend"
@@ -44,6 +47,7 @@ DIR=$(mktemp -d)
 PICK_MARK='restore-test ใบชั่วคราว'
 BRANCH_MARK='restore-test ประวัติชั่วคราว'
 IMPORT_MARK='restore-test ประวัติการนำเข้าชั่วคราว.xlsx'
+SENT_MARK='restore-test ส่งให้ลูกค้าชั่วคราว'
 cleanup() {
   PG -d serviceapp -qc "delete from \"PartsPick\" where note='$PICK_MARK'" >/dev/null 2>&1 || true   # รายการในใบลบตาม (cascade)
   PG -d serviceapp -qc "delete from \"User\" where \"employeeCode\" like 'zz.restore.howto.%'" >/dev/null 2>&1 || true
@@ -51,6 +55,7 @@ cleanup() {
   PG -d serviceapp -qc "delete from \"BranchPin\" where field='name' and \"fromValue\"='$BRANCH_MARK'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"Branch\" where code like 'ZZRT01%'" >/dev/null 2>&1 || true
   PG -d serviceapp -qc "delete from \"ImportRun\" where \"fileName\"='$IMPORT_MARK'" >/dev/null 2>&1 || true
+  PG -d serviceapp -qc "delete from \"WorkOrderPart\" where note='$SENT_MARK'" >/dev/null 2>&1 || true
   PG -d postgres -qc "DROP DATABASE IF EXISTS $TMPDB" >/dev/null 2>&1 || true; rm -rf "$DIR"
 }
 trap cleanup EXIT
@@ -138,6 +143,19 @@ UNION ALL SELECT id, NULL, 'PENDING', 'C0006', NULL, NULL, NULL, 'ยังไ�
 SQL
 IMPORT_SQL='select (select count(*) from "ImportRun")||$$|$$||(select count(*) from "ImportRunRow")||$$|$$||coalesce((select md5(string_agg(concat_ws($$~$$, u.id, u.kind, coalesce(u."runKey",$$NULL$$), u."fileName", coalesce(u."byUserId"::text,$$NULL$$), u.status, to_char(u."startedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$), coalesce(to_char(u."finishedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$), u."rowsInFile", u.summary::text, coalesce(u.error,$$NULL$$), (select string_agg(concat_ws($$~$$, r.id, coalesce(r.line::text,$$NULL$$), r.result, coalesce(r.code,$$NULL$$), coalesce(r.name,$$NULL$$), coalesce(r.machine,$$NULL$$), coalesce(r.detail,$$NULL$$), coalesce(r.note,$$NULL$$), coalesce(r.ref,$$NULL$$)), $$;$$ order by r.id) from "ImportRunRow" r where r."runId"=u.id)), $$,$$ order by u.id)) from "ImportRun" u),$$-$$)'
 SRC_IMPORT=$(PG -d serviceapp -Atc "$IMPORT_SQL" 2>/dev/null) || SRC_IMPORT=""
+
+# อะไหล่ส่งให้ลูกค้าแล้วชั่วคราว (เหตุผลอยู่หัวไฟล์) — ใบงานแรกที่ยังไม่มีแถวอะไหล่ ไม่ชนแถวเดิม · ใส่ไม่สำเร็จ (ยังไม่ migrate
+# part_sent_to_customer) ให้ข้อ 3f รายงานเอง
+PG -d serviceapp -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<SQL || true
+INSERT INTO "WorkOrderPart" ("workOrderId", "sparePartId", quantity, kind, "inStock", warehouse, "requisitionNo", "checkedAt", "sentToCustomerAt", note)
+SELECT (SELECT id FROM "WorkOrder" w WHERE NOT EXISTS (SELECT 1 FROM "WorkOrderPart" p WHERE p."workOrderId" = w.id) ORDER BY id LIMIT 1),
+       s.id, 1, 'WAITING', true, 'คลังลาดพร้าว 94', 'RQ-RESTORE', now(),
+       CASE WHEN s."partCode" = 'SP-BOARD' THEN now() - interval '1 hour' END, '$SENT_MARK'
+FROM "SparePart" s WHERE s."partCode" IN ('SP-BOARD', 'SP-BELT');
+SQL
+# ทุกแถวอะไหล่: id กับเวลาที่ส่ง (ว่างเขียนเป็นคำ — NULL กับค่าที่หายต้องแยกกันออก)
+SENT_SQL='select (select count(*) from "WorkOrderPart" where note=$$'"$SENT_MARK"'$$ and "sentToCustomerAt" is not null)||$$+$$||(select count(*) from "WorkOrderPart" where note=$$'"$SENT_MARK"'$$ and "sentToCustomerAt" is null)||$$|$$||coalesce((select md5(string_agg(id||$$~$$||coalesce(to_char("sentToCustomerAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$), $$,$$ order by id)) from "WorkOrderPart"),$$-$$)'
+SRC_SENT=$(PG -d serviceapp -Atc "$SENT_SQL" 2>/dev/null) || SRC_SENT=""
 
 REUSE_SQL='select count(*)||$$|$$||coalesce(md5(string_agg(concat_ws($$~$$, id, code, coalesce("originalCode",$$NULL$$), coalesce("reusedFromId"::text,$$NULL$$), coalesce(to_char("reusedAt",$$YYYY-MM-DD HH24:MI:SS.MS$$),$$NULL$$)), $$,$$ order by id)),$$-$$) from "Branch" where "originalCode" is not null or "reusedFromId" is not null or "reusedAt" is not null'
 SRC_REUSE=$(PG -d serviceapp -Atc "$REUSE_SQL" 2>/dev/null) || SRC_REUSE=""
@@ -229,6 +247,17 @@ elif [ "$SRC_IMPORT" = "$DST_IMPORT" ]; then
   pass "ประวัติการนำเข้าตามมาครบทุกช่อง (รอบ $(echo "$SRC_IMPORT" | cut -d'|' -f1) · ผลทีละแถว $(echo "$SRC_IMPORT" | cut -d'|' -f2) แถว รวมแถวไม่มีเลขแถว — รอบใส่ก่อนแถวที่อ้างถึง)"
 else
   fail "ประวัติการนำเข้าหลังกู้ไม่ตรง: ต้นฉบับ [$SRC_IMPORT] · หลังกู้ [$DST_IMPORT]"
+fi
+
+# 3f) อะไหล่ส่งให้ลูกค้าแล้ว — ต้นฉบับต้องมีแถวชั่วคราวครบ (ส่งแล้ว 1 + รับที่คลัง 1) ไม่งั้นเทียบค่าว่างกับค่าว่างไม่ได้ตรวจอะไร
+#     หลังกู้ทุกแถวอะไหล่ต้องมีเวลาที่ส่งตรงกันทุกตัว (ค่าว่างยังว่าง)
+DST_SENT=$(PG -d $TMPDB -Atc "$SENT_SQL" 2>/dev/null) || DST_SENT=""
+if [ "$(echo "$SRC_SENT" | cut -d'|' -f1)" != "1+1" ]; then
+  fail "ใส่อะไหล่ส่งให้ลูกค้าแล้วชั่วคราวไม่สำเร็จ (ได้ [$SRC_SENT] ต้อง 1+1) — ยังไม่ migrate part_sent_to_customer หรือไม่มีใบงานที่ว่างอะไหล่"
+elif [ "$SRC_SENT" = "$DST_SENT" ]; then
+  pass "อะไหล่ส่งให้ลูกค้าแล้ว (sentToCustomerAt) ตามมาครบทุกแถว — ชิ้นที่ส่งแล้วเวลาตรง · ชิ้นที่รับที่คลังยังว่าง"
+else
+  fail "sentToCustomerAt หลังกู้ไม่ตรง: ต้นฉบับ [$SRC_SENT] · หลังกู้ [$DST_SENT]"
 fi
 
 # 4) กู้ซ้ำลงฐานที่มีข้อมูลแล้ว ต้องปฏิเสธ ไม่เขียนทับ

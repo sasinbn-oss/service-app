@@ -299,7 +299,7 @@ export async function buildSystemReport(opts: { from?: string; to?: string }): P
         parts: {
           orderBy: { id: "asc" },
           select: {
-            kind: true, quantity: true, unit: true, inStock: true, requisitionNo: true,
+            kind: true, quantity: true, unit: true, inStock: true, requisitionNo: true, sentToCustomerAt: true,
             sparePart: { select: { partCode: true, name: true, offCatalog: true } },
           },
         },
@@ -381,6 +381,7 @@ type PartRow = {
   unit: string | null;
   inStock: boolean | null;
   requisitionNo: string | null;
+  sentToCustomerAt: Date | null;
   sparePart: { partCode: string; name: string; offCatalog: boolean };
 };
 /** "SPOT0070 ชื่อ ×2" · ของนอกสโตร์ไม่มี SKU (partCode เป็นรหัสภายใน) จึงขึ้นชื่อ + หน่วยที่หัวหน้าภาคใส่ แทนรหัส */
@@ -396,7 +397,9 @@ function partLine(p: PartRow) {
  */
 function waitingState(p: PartRow) {
   if (p.sparePart.offCatalog) return "ของนอกสโตร์";
-  if (p.inStock === true) return p.requisitionNo ? `เบิกแล้ว (${p.requisitionNo})` : "มีของ ยังไม่เบิก";
+  // ส่งให้ลูกค้าแล้ว (พ.ย. 69) ต่อท้าย — ช่องนี้เป็นข้อความไว้กรอง "มีคำว่า…" อยู่แล้ว ไม่เพิ่มคอลัมน์
+  if (p.inStock === true)
+    return p.requisitionNo ? `เบิกแล้ว (${p.requisitionNo})${p.sentToCustomerAt ? " · ส่งให้ลูกค้าแล้ว" : ""}` : "มีของ ยังไม่เบิก";
   if (p.inStock === false) return "ของหมด";
   return "ยังไม่เช็คคลัง";
 }

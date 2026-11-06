@@ -513,6 +513,7 @@ interface RawRow {
   transferReqNo: string | null;
   transferNo: string | null;
   transferredAt: Date | null;
+  sentToCustomerAt: Date | null;
   branchId: number;
   rowCount: number;
 }
@@ -527,6 +528,7 @@ async function rawRows(f: Filters, where: Prisma.Sql, tail: Prisma.Sql, cte: { b
            f."sparePartId", s."partCode", s.name AS "partName", s."offCatalog", p.unit, p."offFound", p."offKind", p."offDetail",
            w."closedAt", cu.name AS "closedBy", cl.status AS "claimStatus",
            p."inStock", p.warehouse, p."requisitionNo", p."transferFrom", p."transferReqNo", p."transferNo", p."transferredAt",
+           p."sentToCustomerAt",
            (COUNT(*) OVER ())::int AS "rowCount"
     FROM f
     JOIN "WorkOrderPart" p ON p.id = f."partRowId"
@@ -593,7 +595,8 @@ function detailText(r: RawRow, statusLabel: string): string {
   }
   const delivered = r.inStock === true && !!r.requisitionNo;
   const where = delivered
-    ? `${r.warehouse ?? "ไม่ระบุคลัง"} · ใบเบิก ${r.requisitionNo}`
+    ? // ส่งให้ลูกค้าแล้ว (พ.ย. 69) — ของถึงสาขาแล้วแม้งานยังไม่จบ บอกไว้ในบรรทัดเดียวกับใบเบิก
+      `${r.warehouse ?? "ไม่ระบุคลัง"} · ใบเบิก ${r.requisitionNo}${r.sentToCustomerAt ? " · ส่งให้ลูกค้าแล้ว" : ""}`
     : r.transferredAt
     ? `โอนถึง${r.warehouse ?? "คลังปลายทาง"}แล้ว · ใบเบิกต้นทาง ${r.transferReqNo}`
     : `กำลังโอน ${r.transferFrom ?? "—"} → ${r.warehouse ?? "—"} · ใบโอน ${r.transferNo ?? "—"}`;

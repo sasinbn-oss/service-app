@@ -16,8 +16,11 @@ export interface RollbackSnapshot {
   scheduledAt: string | null;
   scheduledTime: string | null;
   partsExpectedAt: string | null;
-  /** ผลเช็คคลังรอบก่อน — เฉพาะตัวที่เคยเช็คแล้ว (มีหรือหมด) */
-  parts: { sparePartId: number; inStock: boolean | null; warehouse: string | null; requisitionNo: string | null }[];
+  /**
+   * ผลเช็คคลังรอบก่อน — เฉพาะตัวที่เคยเช็คแล้ว (มีหรือหมด)
+   * sentToCustomer = แอดมินเลือก "อะไหล่ส่งให้ลูกค้าแล้ว" ไว้กับเลขใบเบิกนั้น (พ.ย. 69) · ประวัติก่อนมีช่องนี้ไม่มี = รับที่คลัง
+   */
+  parts: { sparePartId: number; inStock: boolean | null; warehouse: string | null; requisitionNo: string | null; sentToCustomer?: boolean }[];
 }
 
 interface LogLike {
