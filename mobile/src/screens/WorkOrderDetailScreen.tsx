@@ -338,6 +338,8 @@ interface WorkOrder {
    * เซิร์ฟเวอร์ตัดสินขั้นเอง (CROSS_CLOSE_STAGES) หน้าจอไม่เดาซ้ำ
    */
   crossClose?: boolean;
+  /** ใบ IT ในพื้นที่ของหัวหน้าภาคคนนี้ที่อยู่ขั้นจ่ายงาน — ดูอย่างเดียว แต่นัดวันเข้า/ปล่อยงานได้ (เจ้าของงานตัดสิน 6 พ.ย. 69) */
+  itDispatch?: boolean;
   /** หัวหน้าภาคส่งกลับให้แอดมินตรวจสอบ — ยังไม่ตอบ / ตอบแล้วรอรับทราบ (ขั้นตอนไม่เปลี่ยน) */
   adminReview?: AdminReviewInfo | null;
   stageActorLabel: string | null;
@@ -2940,10 +2942,26 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
                 ใบงาน IT — {order.itLead ? `${order.itLead.name} (หัวหน้าภาคที่ดูแลงาน IT)` : "แอดมิน (ยังไม่ได้เลือกหัวหน้าภาคที่ดูแลงาน IT)"} เป็นคนดูแล
               </Text>
               <Text style={styles.sentBackText}>
-                {order.crossClose
-                  ? "สาขาอยู่ในพื้นที่ของคุณ — ปิดใบงานได้ที่ “เครื่องมือเพิ่มเติม” · ขั้นอื่นเป็นของคนที่ดูแลงาน IT"
-                  : "สาขาอยู่ในพื้นที่ของคุณ — ดูได้อย่างเดียว"}
+                {order.itDispatch
+                  ? "สาขาอยู่ในพื้นที่ของคุณ — นัดวันเข้า/ปล่อยงานได้ (ทีมที่ดูแลสาขาขึ้นเป็นค่าตั้งต้น เปลี่ยนได้) · ปิดใบงานได้ที่ “เครื่องมือเพิ่มเติม”"
+                  : order.crossClose
+                    ? "สาขาอยู่ในพื้นที่ของคุณ — ปิดใบงานได้ที่ “เครื่องมือเพิ่มเติม” · ขั้นอื่นเป็นของคนที่ดูแลงาน IT"
+                    : "สาขาอยู่ในพื้นที่ของคุณ — ดูได้อย่างเดียว"}
               </Text>
+              {/* หน้าจอนี้เป็นแบบดูอย่างเดียว (user = null) — ปุ่มของขั้นจ่ายงานจึงวาดที่นี่ เปิดฟอร์มขั้นเดียวกับเจ้าของใบ */}
+              {order.itDispatch && me?.role === "SUPERVISOR" && !me?.viewAs ? (
+                <TouchableOpacity
+                  style={[styles.action, styles.actionPrimary, { alignSelf: "flex-start", marginTop: 8 }]}
+                  onPress={() => setStageOpen(true)}
+                  disabled={busy}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name={order.status === "PARTS_CHECKED" ? "calendar" : "send"} size={18} color="#fff" />
+                  <Text style={styles.actionPrimaryText}>
+                    {order.status === "PARTS_CHECKED" ? "นัดวันเข้า" : order.status === "INSPECT_DISPATCH" ? "ส่งช่างตรวจ" : "ปล่อยงาน"}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
         ) : null}

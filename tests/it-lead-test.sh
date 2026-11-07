@@ -121,7 +121,7 @@ GC=$(GETC $S "work-orders/$IT1")
 GC=$(GETC $S "work-orders/$IT2")
 [ "$GC" = "403" ] && BODY 'd.error' | grep -q "หัวหน้าไอทีทดสอบ" && pass "ใบ IT ภาคอื่นเปิดตรง ๆ ได้ 403 บอกว่าอยู่กับใคร" || fail "S เปิดใบ IT ภาคอื่น: $GC $(BODY 'd.error')"
 GC=$(CODE $S "work-orders/$IT1/parts" '{"needsParts":false}')
-[ "$GC|$(DB "select status from \"WorkOrder\" where id=$IT1")" = "403|NEW" ] && BODY 'd.error' | grep -q "คุณเห็นและปิดใบงานได้" \
+[ "$GC|$(DB "select status from \"WorkOrder\" where id=$IT1")" = "403|NEW" ] && BODY 'd.error' | grep -q "และปิดใบงานได้" \
   && pass "หัวหน้าภาคของพื้นที่กดขั้นอื่นของใบ IT ไม่ได้ (403 บอกว่าปิดได้ · ฐานข้อมูลไม่เปลี่ยน)" || fail "S กดขั้นใบ IT: $GC $(BODY 'd.error')"
 GC=$(CODE $S "work-orders/$IT5/supervisor-close" '{"reason":"PHONE","note":"ร้านโทรมาบอกว่าเครื่องออนไลน์ได้แล้ว"}')
 [ "$GC|$(DB "select status||'|'||\"closeResult\"||'|'||\"closedById\" from \"WorkOrder\" where id=$IT5")" = "200|DONE|SUPERVISOR_CLOSED|$SID" ] \
