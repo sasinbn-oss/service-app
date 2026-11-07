@@ -41,6 +41,9 @@ import { requireAuth, requireAdmin } from "./middleware/auth";
 import { checkFileStore } from "./storage/fileStore";
 import { prisma } from "./prisma";
 import { startTrashPurge } from "./utils/trash";
+import { trackRequests, statusSnapshot } from "./utils/reqStats";
+import { dbErrorOf } from "./utils/dbError";
+import { pollGate, pollGateStats } from "./utils/pollGate";
 
 const app = express();
 
@@ -54,11 +57,35 @@ const app = express();
  * Render ไม่ได้บีบอัดให้เอง ถ้าไม่ใส่ตรงนี้ก็ส่งดิบทั้งก้อนจริง ๆ
  * คนที่จ่ายส่วนต่างคือช่างที่เปิดจากหน้างานด้วย 4G ไม่ใช่เซิร์ฟเวอร์
  */
+app.use(trackRequests);
+// ก่อน route ทั้งหมด — แบ่งคิว: ตัวเลขที่แอปถามเป็นรอบ / ดูข้อมูล / ล็อกอินกับบันทึกไม่เข้าคิว (utils/pollGate.ts)
+app.use(pollGate);
 app.use(compression());
 app.use(cors());
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
+
+/**
+ * สุขภาพตอนนี้ — เปิดจากเบราว์เซอร์ได้เลย ไม่ต้องล็อกอิน (ตอนที่ต้องดูที่สุดคือตอนล็อกอินไม่ได้)
+ *
+ * ถามฐานข้อมูลหนึ่งคำสั่ง รอไม่เกิน 8 วินาที — ช้า/หมดเวลาตรงนี้ = คำขอของทุกคนก็กำลังรอแบบเดียวกัน
+ * ที่เหลือมาจากหน่วยความจำ (utils/reqStats.ts) ไม่แตะฐานข้อมูล ไม่มีชื่อคนหรือข้อมูลใบงาน
+ */
+app.get("/health/status", async (_req, res) => {
+  const started = Date.now();
+  let db: { ok: boolean; sec: number; code?: string };
+  try {
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("timeout"), { code: "รอเกิน 8 วินาที" })), 8000)),
+    ]);
+    db = { ok: true, sec: Math.round((Date.now() - started) / 100) / 10 };
+  } catch (e) {
+    db = { ok: false, sec: Math.round((Date.now() - started) / 100) / 10, code: dbErrorOf(e)?.code ?? (e as { code?: string }).code ?? "อื่น ๆ" };
+  }
+  res.set("Cache-Control", "no-store").json({ db, lanes: pollGateStats(), ...statusSnapshot() });
+});
 
 /**
  * เช็คว่าที่เก็บไฟล์แนบต่อได้จริงไหม
@@ -218,9 +245,23 @@ app.use("/api/import-history", importHistoryRoutes);
  */
 app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   console.error(`[${req.method} ${req.originalUrl}]`, err);
+  /**
+   * รหัสสั้น ๆ ของต้นเหตุติดไปกับข้อความด้วย (P2024 · EMAXCONNSESSION …) — ไม่ใช่ข้อความเต็ม
+   * บทเรียน 7 พ.ย. 69: ล็อกอินไม่ได้ทั้งระบบสองรอบ มีแค่ภาพหน้าจอ ไม่มีใครเปิด log ได้ ต้นเหตุจึงเดาได้อย่างเดียว
+   * รหัสไม่บอกชื่อตาราง/คอลัมน์ แต่ภาพหน้าจอภาพเดียวพอให้รู้ว่าพังเพราะอะไร
+   */
+  const db = dbErrorOf(err);
+  res.locals.errCode = db?.code ?? null;
   if (res.headersSent) return;
+  if (db?.busy) {
+    // ฐานข้อมูลไม่ว่าง/ต่อไม่ติด — ไม่ใช่โค้ดผิด ลองใหม่สักครู่ได้ (503 ไม่ใช่ 500 จะได้แยกออกในตัวเลขสุขภาพ)
+    return res.status(503).json({
+      error: `ฐานข้อมูลไม่ว่างหรือต่อไม่ติดชั่วคราว — รอสักครู่แล้วลองใหม่ (รหัส ${db.code})`,
+      code: db.code,
+    });
+  }
   res.status(500).json({
-    error: "เซิร์ฟเวอร์ทำรายการนี้ไม่สำเร็จ — แจ้งแอดมินให้ดู log ของเซิร์ฟเวอร์",
+    error: "เซิร์ฟเวอร์ทำรายการนี้ไม่สำเร็จ — แจ้งแอดมินให้ดู log ของเซิร์ฟเวอร์" + (db ? ` (รหัส ${db.code})` : ""),
   });
 });
 

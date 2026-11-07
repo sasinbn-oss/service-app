@@ -13,6 +13,8 @@ import { bellItemsFor } from "../routes/workOrders";
 import type { Role } from "../utils/constants";
 import type { TokenPayload } from "../utils/jwt";
 import { pushToUsers } from "./webPush";
+import { noteJob } from "../utils/reqStats";
+import { pollSlot } from "../utils/pollGate";
 
 const EVERY_MS = 2 * 60_000;
 
@@ -32,6 +34,8 @@ export async function inboxPushRound() {
   let sent = 0;
   for (const u of users) {
     // เวลาก่อนถาม — ใบที่เข้าขั้นระหว่างถามได้ในรอบหน้า ไม่ใช่ทั้งสองรอบ
+    // ต่อคิวเดียวกับตัวเลขกระดิ่งที่แอปถาม (utils/pollGate.ts) — คนเปิดแจ้งเตือนเป็นสิบคน รอบนี้ต้องไม่กินสายฐานข้อมูลทั้งหมดไปพร้อมกัน
+    const free = await pollSlot();
     const until = new Date();
     const since = u.pushSince ?? until;
     try {
@@ -61,6 +65,8 @@ export async function inboxPushRound() {
       sent++;
     } catch (e) {
       console.error("[push] รอบงานเข้ากล่องของผู้ใช้", u.id, e);
+    } finally {
+      free();
     }
   }
   return { users: users.length, sent };
@@ -71,7 +77,9 @@ export function startInboxPush() {
   const run = () => {
     if (running) return; // รอบก่อนยังไม่จบ (ฐานข้อมูลช้า) — ข้ามไป ไม่ซ้อนกัน
     running = true;
+    const started = Date.now();
     inboxPushRound()
+      .then((r) => noteJob("inboxPush", Date.now() - started, `${r.users} คนที่เปิดแจ้งเตือน · ส่ง ${r.sent}`))
       .catch((e) => console.error("[push] รอบงานเข้ากล่อง", e))
       .finally(() => (running = false));
   };
