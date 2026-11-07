@@ -22,7 +22,8 @@ TOKEN=$(curl -s -X POST $API/auth/login -H 'Content-Type: application/json' -d '
 WO=$(curl -s "$API/work-orders?status=INBOX" -H "Authorization: Bearer $TOKEN" | J 'd.rows[0].id')
 curl -s -o /dev/null "$API/work-orders/$WO/version" -H "Authorization: Bearer $TOKEN"
 BODY=$(curl -s -m 20 localhost:4000/health/status)
-echo "$BODY" | J 'd.last15min.busiestRoutes.some(r=>r.route==="GET /api/work-orders/:id/version")?"ok":"bad"' | grep -q ok \
+# ทางที่ใช้เวลารวมมากสุด 10 อัน — หลังรันเทสต์ทั้งชุด ทางของข้อนี้อาจหลุดอันดับ จึงตรวจว่าไม่มีทางไหนมีเลขเหลือ และมีทางที่ถูกแทนเป็น :id
+echo "$BODY" | J 'const r=d.last15min.busiestRoutes;r.length>0&&r.every(x=>!/\/\d+(\/|$)/.test(x.route))&&r.some(x=>x.route.includes("/:id"))&&!/\/\d+(\/|$)/.test(d.oldestWaitingRoute||"")?"ok":"bad"' | grep -q ok \
   && ! echo "$BODY" | grep -qE "A001|T001|WO-[0-9]|/work-orders/$WO/" \
   && pass "/health/status: ทางที่มีเลขรวมกลุ่มเป็น :id · ไม่มีรหัสพนักงาน/รหัสใบงาน" || fail "/health/status รั่ว/ไม่รวมกลุ่ม: $(echo "$BODY" | head -c 400)"
 
