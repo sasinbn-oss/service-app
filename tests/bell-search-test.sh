@@ -19,7 +19,7 @@ DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres servic
 login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"employeeCode\":\"$1\",\"password\":\"test1234\"}" | J 'd.token'; }
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 PC() { curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
-GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
+GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)" -H 'Cache-Control: no-cache'; }  # no-cache = ผลสดหลังแก้ข้อมูลตรงในฐานข้อมูล (กระดิ่ง/แชทจำคำตอบ 20 วิ — utils/shortCache.ts)
 A=$(login A001); T=$(login T001)
 AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'")

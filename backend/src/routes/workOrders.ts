@@ -168,6 +168,7 @@ import {
 } from "../storage/fileStore";
 import { imageUpload, storeImage, thumbnailUrl } from "../storage/imageUpload";
 import { pushLater } from "../push/webPush";
+import { shortCache, wantsFresh } from "../utils/shortCache";
 import {
   ACTIVE_WORK_ORDER_STATUSES,
   ATTACHMENT_KIND_LABELS,
@@ -255,6 +256,21 @@ import {
 } from "../utils/constants";
 
 const router = Router();
+
+/**
+ * กระดิ่ง · รายการแชท ตอบจากที่จำไว้ 20 วินาทีต่อคน (utils/shortCache.ts — เหตุผลอยู่ที่นั่น: ระบบล่ม 7 พ.ย. 69)
+ * คำขอที่เขียนข้อมูลใด ๆ ใต้ /api/work-orders ล้างทิ้งทั้งหมด — เดินขั้น ส่งข้อความ อ่านแล้วทั้งหมด เห็นผลทันที
+ */
+const bellCache = shortCache<Awaited<ReturnType<typeof bellItems>>>(20_000);
+const chatsCache = shortCache<{ threads: unknown[]; unread: number }>(20_000);
+const cacheKey = (req: AuthRequest) => `${req.auth!.userId}|${req.auth!.viewAs ? "v" : ""}`;
+router.use((req, _res, next) => {
+  if (req.method !== "GET") {
+    bellCache.drop();
+    chatsCache.drop();
+  }
+  next();
+});
 
 /**
  * ใบในถังขยะ — ทุกเส้นทาง /:id ข้างล่าง (ดู แก้ แนบไฟล์ เคลม ลิงก์ไฟล์ ฯลฯ) ตอบ 404 "ใบงานนี้อยู่ในถังขยะ" ก่อนถึงตัวเส้นทาง
@@ -2509,12 +2525,17 @@ async function chatThread(id: number, me: number, markRead = true) {
       create: { workOrderId: id, userId: me, lastReadId: last },
       update: { lastReadId: last },
     });
+    chatsCache.drop(`${me}|`); // ตัวเลขยังไม่อ่านบนแถบหัวต้องหายทันทีที่เปิดอ่าน
   }
   return Promise.all(rows.reverse().map((m) => chatRow(m, true)));
 }
 
 /** รายการห้องแชท (ใบที่มีข้อความ) ของคนนี้ — ใหม่สุดก่อน · ใบนอกขอบเขตไม่ขึ้น */
 router.get("/chats", requireAuth, async (req: AuthRequest, res) => {
+  res.json(await chatsCache.get(cacheKey(req), wantsFresh(req.headers), () => chatsFor(req)));
+});
+
+async function chatsFor(req: AuthRequest) {
   const me = req.auth!.userId;
   const scope = await scopeFor(req);
   // ห้องที่มีข้อความล่าสุดก่อน — หาจากข้อความ (เรียงตามข้อความล่าสุดของแต่ละใบ) ไม่ใช่จากใบงาน ไม่งั้น 60 ห้องแรกเป็นห้องเก่า
@@ -2558,8 +2579,8 @@ router.get("/chats", requireAuth, async (req: AuthRequest, res) => {
     })
     )
   ).sort((a, b) => b.last.id - a.last.id);
-  res.json({ threads, unread: threads.filter((t) => t.unread > 0).length });
-});
+  return { threads, unread: threads.filter((t) => t.unread > 0).length };
+}
 
 router.get("/:id/chat", requireAuth, async (req: AuthRequest, res) => {
   const id = Number(req.params.id);
@@ -3377,7 +3398,7 @@ async function bellItems(req: AuthRequest) {
 }
 
 router.get("/bell", requireAuth, async (req: AuthRequest, res) => {
-  const items = await bellItems(req);
+  const items = await bellCache.get(cacheKey(req), wantsFresh(req.headers), () => bellItems(req));
   res.json({ count: items.length, items: items.slice(0, 20) });
 });
 
@@ -4623,6 +4644,7 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
         create: { workOrderId: id, userId: req.auth!.userId },
         update: { seenAt: new Date() },
       })
+      .then(() => bellCache.drop(`${req.auth!.userId}|`))
       .catch((e) => console.error("[bell] บันทึกการเปิดดูไม่ได้", id, e));
   }
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)

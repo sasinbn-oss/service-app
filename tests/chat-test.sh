@@ -16,7 +16,7 @@ login() { curl -s -X POST localhost:4000/api/auth/login -H 'Content-Type: applic
 POST() { curl -s -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 PC() { curl -s -o /dev/null -w '%{http_code}' -X POST "localhost:4000/api/$2" -H "$(H $1)" -H 'Content-Type: application/json' -d "$3"; }
 DC() { curl -s -o /dev/null -w '%{http_code}' -X DELETE "localhost:4000/api/$2" -H "$(H $1)"; }
-GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)"; }
+GET() { curl -s "localhost:4000/api/$2" -H "$(H $1)" -H 'Cache-Control: no-cache'; }  # no-cache = ผลสดหลังแก้ข้อมูลตรงในฐานข้อมูล (กระดิ่ง/แชทจำคำตอบ 20 วิ — utils/shortCache.ts)
 GC() { curl -s -o /dev/null -w '%{http_code}' "localhost:4000/api/$2" -H "$(H $1)"; }
 A=$(login A001)
 TEAM=$(DB "select zone from \"Branch\" where code='C0006'")
