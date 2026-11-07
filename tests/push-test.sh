@@ -46,10 +46,13 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
 OLD_PS=$(DB "select string_agg(id||'='||coalesce(\"pushSince\"::text,''), ' ') from \"User\" where id in ($AID,$TID,$SID)")
 SUF=$RANDOM
 IDS=""
+# ข้อดูในฐานะช่างเขียนบันทึกดูในฐานะ — ลบตอนจบ ไม่ให้ค้างทุกรอบ
+VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 cleanup() {
   kill $MOCK 2>/dev/null
   purge_orders "$A" $IDS
-  DB "delete from \"PushSubscription\" where endpoint like 'https://localhost:$PORT/%';
+  DB "delete from \"ViewAsLog\" where id > $VSTART;
+      delete from \"PushSubscription\" where endpoint like 'https://localhost:$PORT/%';
       delete from \"User\" where \"employeeCode\"='ZPSP$SUF';
       update \"User\" set team=nullif('$OLD_TEAM','') where id=$TID;
       update \"User\" set region=nullif('$OLD_REGION','') where id=$SID" >/dev/null
