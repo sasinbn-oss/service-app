@@ -37,6 +37,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { api, apiErrorMessage, noResponse, resolveImageUrl, staleWorkOrderId } from "../api/client";
 import { currentPosition } from "../utils/position";
+import { ChatBubble } from "../components/WorkOrderChat";
 import { openUrl } from "../utils/share";
 import { showAlert } from "../utils/alert";
 import PartPicker, {
@@ -2125,6 +2126,19 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       backLabel={`ใบงาน ${order.code}`}
       startMaximized
       instant={instant}
+      // แชทใบงาน (พ.ย. 69) — มาจากรายการแชทบนแถบหัว (open: "chat") = เปิดหน้าต่างแชทเลย
+      // หน้าตรวจเคลมมีแถบตัดสินชิดล่าง (ปุ่มขวาสุด) — ปุ่มแชทลอยทับพอดี และคนตรวจเคลมไม่ได้คุยในหน้านี้
+      overlay={
+        reviewMode ? null : (
+        <ChatBubble
+          key={order.id}
+          orderId={order.id}
+          code={order.code}
+          branch={`${order.branchCode} ${order.branchName}`}
+          startOpen={route.params.open === "chat"}
+        />
+        )
+      }
       right={
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           {user?.superAdmin ? (
@@ -4062,6 +4076,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
         logs={order.logs}
         onClose={() => setStepInfo(null)}
       />
+      {/* ที่ว่างท้ายใบเท่าปุ่มแชทใบงานที่ลอยมุมขวาล่าง — เลื่อนสุดแล้วปุ่ม/ข้อความบรรทัดสุดท้ายไม่อยู่ใต้ปุ่มแชท */}
+      {reviewMode ? null : <View style={{ height: 84 }} />}
     </ScrollView>
     {/*
       แถบตัดสินเคลมอยู่นอกส่วนที่เลื่อน (ต่อท้าย ScrollView ในกรอบใบงาน) — เลื่อนไปดูหลักฐานไหนก็ยังเห็นปุ่ม
