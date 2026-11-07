@@ -147,6 +147,8 @@ const PARTS_ADMIN_WRITES = [
   // แชทใบงาน (พ.ย. 69) — คุยไม่ใช่การแก้ข้อมูลงาน แอดมินทุกคนเห็นทุกห้อง ตอบได้
   /^POST \/api\/work-orders\/\d+\/chat$/,
   /^DELETE \/api\/work-orders\/\d+\/chat\/\d+$/,
+  // แจ้งเตือนเข้ามือถือของตัวเอง (พ.ย. 69) — ไม่แตะข้อมูลงาน
+  /^POST \/api\/push\/(subscribe|unsubscribe)$/,
   // POST ที่ไม่ได้แก้ข้อมูล
   /^POST \/api\/machines\/export$/,
   /^POST \/api\/documents\/transfer-request$/,
