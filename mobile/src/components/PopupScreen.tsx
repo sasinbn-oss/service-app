@@ -79,6 +79,7 @@ export default function PopupScreen({
   startMaximized = false,
   instant = false,
   head,
+  headLine = true,
   foot,
   overlay,
   children,
@@ -90,6 +91,11 @@ export default function PopupScreen({
    * ปุ่มขวา (right · ขยาย · ปิด) ยังอยู่ที่เดิม
    */
   head?: React.ReactNode;
+  /**
+   * false = หัวหน้าต่างไม่มีเส้นใต้ — หน้าใบงานบนมือถือย้ายรายละเอียดหัวใบไปต้นเนื้อหาที่เลื่อนได้ (หัวใบย่อตอนเลื่อน พ.ย. 69)
+   * เส้นใต้ไปอยู่ใต้รายละเอียดแทน ไม่งั้นเลขใบกับรายละเอียดดูเป็นคนละส่วน
+   */
+  headLine?: boolean;
   /** แถบท้ายหน้าต่างที่อยู่กับที่ ไม่เลื่อนตามเนื้อหา — ปุ่มของขั้นปัจจุบันเห็นได้ตลอดไม่ต้องเลื่อนหา */
   foot?: React.ReactNode;
   /** ลอยทับมุมกรอบ ไม่เลื่อนตามเนื้อหา — ปุ่ม/หน้าต่างแชทใบงาน (พ.ย. 69) */
@@ -274,7 +280,7 @@ export default function PopupScreen({
                 under && { transform: [{ translateX: under.interpolate({ inputRange: [0, 1], outputRange: [0, -0.3 * cardW] }) }] },
               ]}
             >
-              <View style={[styles.head, head ? styles.headTall : null]}>
+              <View style={[styles.head, head ? styles.headTall : null, headLine ? null : styles.headNoLine]}>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   {head ?? (
                     <>
@@ -448,6 +454,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   headTall: { alignItems: "flex-start", paddingVertical: spacing.lg },
+  headNoLine: { borderBottomWidth: 0, paddingBottom: spacing.sm },
   foot: {
     flexDirection: "row",
     alignItems: "center",
