@@ -27,8 +27,11 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where \"employeeCode\"
 TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'")
 PNG=$(mktemp --suffix=.png); printf '\x89PNG\r\n\x1a\n' > "$PNG"
 IDS=""
+# ข้อดูในฐานะช่างเขียนบันทึกดูในฐานะ — ลบตอนจบ ไม่ให้ค้างทุกรอบ
+VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 cleanup() {
   purge_orders "$A" $IDS
+  DB "delete from \"ViewAsLog\" where id > $VSTART" >/dev/null
   DB "update \"User\" set team=nullif('$OLD_TEAM','') where \"employeeCode\"='T001'" >/dev/null
   DB "update \"User\" set region=nullif('$OLD_REGION','') where \"employeeCode\"='S001'" >/dev/null
   rm -f "$PNG"
