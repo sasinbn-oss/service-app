@@ -163,7 +163,8 @@ const { setup } = require("./fixture");
       const sname = fx.sql(`select name from "User" where "employeeCode"='S001'`);
       fx.sql(`update "WorkOrderLog" set "userId"=(select id from "User" where "employeeCode"='S001') where "workOrderId"=${b.id} and action='CONFIRMED'`);
       // ปุ่มรีเฟรชของแอป — โหลดหน้าเว็บใหม่จะกลับไปหน้าแรก
-      await vis("รีเฟรช").first().click();
+      // แถบหัวแบบใหม่ (พ.ย. 69) ปุ่มรีเฟรชเป็นไอคอน — หาด้วยป้ายของปุ่ม
+      await page.getByLabel("รีเฟรชข้อมูล", { exact: true }).locator("visible=true").first().click();
       await page.waitForTimeout(3000);
       await page.locator(`[aria-label="ผู้คอนเฟิร์ม ${aname}"]`).locator("visible=true").first().click();
       await page.waitForTimeout(800);

@@ -49,12 +49,17 @@ const path = require("path");
     await page.waitForTimeout(3000);
     const onList = () => page.getByPlaceholder(/ค้นรหัสใบงาน/).locator("visible=true").count();
     const light = await bg(page);
+    // จอคอม: สวิตช์อยู่ในเมนูใต้ชื่อผู้ใช้ของแถบหัวแบบใหม่ (พ.ย. 69) — กางเมนูก่อน
+    const profile = () => page.getByLabel(/^เมนูผู้ใช้ /).locator("visible=true").first().click();
+    await profile();
     await page.getByLabel("เปิดโหมดมืด").click();
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(4000);
     (await onList()) > 0 ? pass("สลับโหมดแล้วยังอยู่หน้ารายการใบงาน (ไม่เด้งกลับหน้าแรก)") : fail("สลับโหมดแล้วเด้งออกจากหน้าเดิม");
     const dark = await bg(page);
     dark === "rgb(11, 21, 32)" && light !== dark ? pass(`เปิดโหมดมืด: พื้น ${light} → ${dark}`) : fail(`พื้นไม่เปลี่ยน ${light} → ${dark}`);
+    // สลับโหมดแล้วหน้าโหลดใหม่ เมนูใต้ชื่อปิดไปด้วย — กางอีกครั้งเพื่ออ่านสถานะสวิตช์
+    if (!(await page.getByLabel("ปิดโหมดมืด").count())) await profile();
     (await page.getByLabel("ปิดโหมดมืด").count()) ? pass("สวิตช์เป็นสถานะมืด") : fail("สวิตช์ไม่เปลี่ยนสถานะ");
     await shot(page, "dark-2-list.png");
 

@@ -137,7 +137,7 @@ export function howtoLayout(width = Dimensions.get("window").width): "narrow" | 
 export function whereIsHelp(user: User | null | undefined, width = Dimensions.get("window").width): string {
   const wide = howtoLayout(width) === "wide";
   if (user?.role === "ADMIN" && !wide) return 'ปุ่ม "วิธีใช้หน้านี้" ในเมนู ข้างออกจากระบบ';
-  if (wide && width >= 1200) return 'ปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช';
+  // แถบหัวแบบใหม่ (พ.ย. 69) ปุ่มเป็นไอคอน ? ทุกขนาดจอ — เดิมจอ 1,200 ขึ้นไปมีชื่อ "วิธีใช้หน้านี้"
   return "ปุ่ม ? ข้างปุ่มรีเฟรช";
 }
 

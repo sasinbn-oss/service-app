@@ -142,6 +142,8 @@ const PARTS_ADMIN_WRITES = [
   /^\w+ \/api\/spare-parts(\/|$)/,
   // howto = จดว่าตัวเองดูวิธีใช้แล้ว (สอนการใช้งาน) — งานส่วนตัวที่ทุกตำแหน่งทำได้ ไม่แตะข้อมูลงาน
   /^POST \/api\/auth\/(change-password|view-as\/stop|howto)$/,
+  // กระดิ่ง "อ่านแล้วทั้งหมด" ของตัวเอง (พ.ย. 69) — จดว่าเปิดดูแล้ว ไม่แตะข้อมูลงาน
+  /^POST \/api\/work-orders\/bell\/seen-all$/,
   // POST ที่ไม่ได้แก้ข้อมูล
   /^POST \/api\/machines\/export$/,
   /^POST \/api\/documents\/transfer-request$/,
