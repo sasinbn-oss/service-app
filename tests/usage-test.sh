@@ -13,7 +13,12 @@ ENC() { node -pe "encodeURIComponent(process.argv[1])" "$1"; }
 CODE() { curl -s -o /dev/null -w "%{http_code}" "localhost:4000/api/$2" -H "$(H $1)"; }
 
 U=zz.usage
-cleanup() { DB "delete from \"User\" where \"employeeCode\"='$U'" >/dev/null; }
+# บันทึกดูในฐานะของแอดมินที่เทสต์นี้สร้าง (ข้อดูในฐานะช่าง) ลบตอนจบ — ไม่งั้นค้างในหน้าประวัติดูในฐานะทุกรอบ
+VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
+cleanup() {
+  DB "delete from \"User\" where \"employeeCode\"='$U'" >/dev/null
+  DB "delete from \"ViewAsLog\" where id > $VSTART" >/dev/null
+}
 cleanup; trap cleanup EXIT
 DB "insert into \"User\"(\"employeeCode\",name,role,team,\"passwordHash\") select '$U','ช่างทดสอบการใช้งาน','EMPLOYEE','ทีมทดสอบใช้งาน',\"passwordHash\" from \"User\" where \"employeeCode\"='A001'" >/dev/null
 UID_=$(DB "select id from \"User\" where \"employeeCode\"='$U'")

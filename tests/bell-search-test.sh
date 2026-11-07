@@ -25,8 +25,11 @@ AID=$(DB "select id from \"User\" where \"employeeCode\"='A001'")
 TID=$(DB "select id from \"User\" where \"employeeCode\"='T001'")
 OLD_BELL=$(DB "select \"bellSince\" from \"User\" where id=$AID")
 IDS=""
+# ข้อดูในฐานะช่างเขียนบันทึกดูในฐานะ — ลบตอนจบ ไม่ให้ค้างทุกรอบ
+VSTART=$(DB "select coalesce(max(id),0) from \"ViewAsLog\"")
 cleanup() {
   purge_orders "$A" $IDS
+  DB "delete from \"ViewAsLog\" where id > $VSTART" >/dev/null
   DB "update \"User\" set \"bellSince\"='$OLD_BELL' where id=$AID" >/dev/null
 }
 trap cleanup EXIT

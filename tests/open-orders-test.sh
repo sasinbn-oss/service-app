@@ -18,7 +18,12 @@ BR=$(DB "select b.code from \"Branch\" b where not exists (select 1 from \"WorkO
 [ -n "$BR" ] || { echo "FAIL ไม่มีสาขาว่างให้ทดสอบ"; exit 1; }
 OTHER=$(DB "select code from \"Branch\" where code<>'$BR' order by code limit 1")
 IDS=""
-cleanup() { purge_orders "$A" $IDS; }
+# เปิดใบด้วยรหัสเครื่องที่สาขานั้นยังไม่มี = ระบบสร้างเครื่องให้ — ลบใบแล้วเครื่องยังค้าง ลบเครื่องที่เกิดระหว่างเทสต์ (ไม่มีใบผูก) ด้วย
+MSTART=$(DB "select coalesce(max(id),0) from \"Machine\"")
+cleanup() {
+  purge_orders "$A" $IDS
+  DB "delete from \"Machine\" m where m.id > $MSTART and not exists (select 1 from \"WorkOrder\" w where w.\"machineId\"=m.id)" >/dev/null
+}
 trap cleanup EXIT
 newwo() { POST $A work-orders "{\"branchCode\":\"$1\",\"jobType\":\"CM\",\"priority\":\"NORMAL\",\"machines\":[{\"code\":\"$2\",\"symptom\":\"$3\"}]}" | J 'd.orders?d.orders[0].id:d.id'; }
 
