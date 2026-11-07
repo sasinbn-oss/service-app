@@ -270,6 +270,8 @@ const BASE = "http://localhost:8081";
     // 8. ออกจากระบบที่หน้าใบงาน แล้วเข้าระบบใหม่ → หน้าแรก ไม่ใช่ใบงานที่เปิดค้าง
     await page.goto(`${BASE}/?t=${Date.now()}#/wo/${CODE}`, { waitUntil: "networkidle" });
     await t.until(async () => onOrder(t));
+    // จอคอม: ออกจากระบบอยู่ในเมนูใต้ชื่อผู้ใช้ของแถบหัวแบบใหม่ (พ.ย. 69)
+    await page.getByLabel(/^เมนูผู้ใช้ /).locator("visible=true").first().click();
     await page.locator('[aria-label="ออกจากระบบ"]').locator("visible=true").first().click();
     await t.vis("ตกลง").last().click();
     await t.until(async () => t.hash() === "#/login");
