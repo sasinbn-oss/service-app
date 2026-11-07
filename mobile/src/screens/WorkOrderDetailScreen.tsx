@@ -1299,14 +1299,6 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
   // การ์ดสาขา/การมอบหมายวางคู่กันเมื่อหน้าต่างกว้างพอ
   const [bodyWidth, setBodyWidth] = useState(0);
   const twoCol = bodyWidth >= 720;
-  /**
-   * หัวใบย่อตอนเลื่อน (มือถือ · เจ้าของงานเลือกจากตัวอย่าง 7 พ.ย. 69) — จอแคบกว่า 640 (หน้าต่างเป็นแผ่นเต็มจอ)
-   * หัวหน้าต่างที่อยู่กับที่เหลือเลขใบ + สรุปบรรทัดเดียว · ป้าย อาการเต็ม สาขา เครื่อง ย้ายไปต้นเนื้อหาที่เลื่อนได้
-   * เดิมทั้งหมดค้างในหัวข้างปุ่ม ? ขยาย ปิด — เหลือกว้างราว 200 px ป้ายเรียงลงทีละบรรทัด อาการถูกตัด กินที่ครึ่งจอ
-   */
-  const narrowSheet = useWindowDimensions().width < 640;
-  const pageY = useRef(new Animated.Value(0)).current;
-  const [headDetailH, setHeadDetailH] = useState(0);
 
   const optionsLoaded = useRef(false);
   /**
@@ -2029,13 +2021,12 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
    *   แถวบน = เลขใบงาน + ป้าย (สถานะ · ด่วน · ย้อนขั้น · หัวหน้าภาค) · ตัวใหญ่ = อาการ (ไม่มีอาการใช้ชื่อเรื่อง) · บรรทัดสาขา
    * ป้ายชุดเดิมจากหัวเรื่องในหน้า ย้ายขึ้นมาอยู่กับที่ — เลื่อนอ่านเนื้อหาแล้วยังรู้ว่าดูใบไหน รอใคร
    */
-  const codeChip = (
-    <View style={styles.codeChip}>
-      <Text style={styles.codeChipText}>{order.code}</Text>
-    </View>
-  );
-  const popBadges = (
-    <>
+  const popHead = (
+    <View style={styles.popHead}>
+      <View style={styles.popRow}>
+        <View style={styles.codeChip}>
+          <Text style={styles.codeChipText}>{order.code}</Text>
+        </View>
       {/* ระงับชั่วคราว (พ.ย. 69) — ป้ายแรกหลังเลขใบ: คนเปิดใบต้องรู้ก่อนว่าใบนี้พักอยู่ */}
       {order.hold ? (
         <View style={[styles.badge, styles.badgeHold]} accessibilityLabel="ป้ายระงับชั่วคราว">
@@ -2082,12 +2073,10 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           </Text>
         </View>
       ) : null}
-    </>
-  );
-  const popRest = (
-    <>
-      {/* อาการเต็มทุกบรรทัด (เจ้าของงานเลือก 7 พ.ย. 69) — เดิมตัดเหลือ 2 บรรทัด อาการคือข้อมูลสำคัญที่สุดของใบ */}
-      <Text style={[styles.popTitle, headingFont]}>{order.symptom?.trim() || order.title}</Text>
+      </View>
+      <Text style={[styles.popTitle, headingFont]} numberOfLines={2}>
+        {order.symptom?.trim() || order.title}
+      </Text>
       {/*
         บรรทัดสาขา + ป้ายประเภทงาน/เครื่องแบบกรอบเดิม (เจ้าของงานขอให้เด่นเหมือนแบบเก่า 6 พ.ย. 69)
         รหัส+ชื่อสาขาตัวหนาสีเข้ม (เจ้าของงานขอให้เน้น) — คนเปิดใบมาถามก่อนเลยว่าสาขาไหน · ภาคเป็นข้อมูลรองสีจาง
@@ -2107,44 +2096,8 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
           </View>
         ) : null}
       </View>
-    </>
-  );
-  const popHead = narrowSheet ? (
-    // มือถือ: หัวที่อยู่กับที่ = เลขใบ + สรุปบรรทัดเดียวที่ค่อย ๆ โผล่ตามระยะที่เลื่อน (รายละเอียดเต็มอยู่ต้นเนื้อหา — popDetail)
-    <View style={styles.popHead}>
-      <View style={styles.popRow}>{codeChip}</View>
-      <Animated.View
-        aria-hidden
-        style={{
-          overflow: "hidden",
-          height: pageY.interpolate({ inputRange: [0, Math.max(1, headDetailH)], outputRange: [0, 20], extrapolate: "clamp" }),
-          opacity: pageY.interpolate({ inputRange: [headDetailH * 0.35, Math.max(1, headDetailH)], outputRange: [0, 1], extrapolate: "clamp" }),
-        }}
-      >
-        {/* ป้ายที่ต้องรู้ทันที (ระงับ · ด่วน · อะไหล่หมด) แล้วตามด้วยอาการ — สถานะขั้นดูที่การ์ดขั้นตอนอยู่แล้ว ไม่กินที่บรรทัดนี้ */}
-        <Text style={styles.popMini} numberOfLines={1}>
-          {order.hold ? <Text style={{ color: colors.text }}>⏸ ระงับ · </Text> : null}
-          {urgent ? <Text style={{ color: colors.dangerInk }}>● ด่วน · </Text> : null}
-          {partsOut.length ? <Text style={{ color: colors.dangerInk }}>● อะไหล่หมด · </Text> : null}
-          {(order.symptom?.trim() || order.title).split("\n")[0]}
-        </Text>
-      </Animated.View>
-    </View>
-  ) : (
-    <View style={styles.popHead}>
-      <View style={styles.popRow}>
-        {codeChip}
-        {popBadges}
-      </View>
-      {popRest}
     </View>
   );
-  const popDetail = narrowSheet ? (
-    <View style={[styles.popHead, styles.popDetail]} onLayout={(e) => setHeadDetailH(e.nativeEvent.layout.height)}>
-      <View style={styles.popRow}>{popBadges}</View>
-      {popRest}
-    </View>
-  ) : null;
   // ขั้นปัจจุบันบนแถบ — แถบย้อนขั้นบอกว่าย้อนมาที่ขั้นที่เท่าไร (ไม่มีแถบท้ายหน้าต่างแล้ว ปุ่มของขั้นอยู่ในการ์ดขั้นที่เดียว)
   const nowAt = path.rows.findIndex((r) => r.state === "now" || r.state === "loop");
   /**
@@ -2172,7 +2125,6 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       title={order.code}
       subtitle="ใบงานซ่อม"
       head={popHead}
-      headLine={!narrowSheet}
       backLabel={`ใบงาน ${order.code}`}
       startMaximized
       instant={instant}
@@ -2192,7 +2144,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       right={
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           {user?.superAdmin ? (
-            <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} compact={narrowSheet} />
+            <TimelineButton label={`ไทม์ไลน์ ${order.code}`} onPress={() => setTimelineOpen(true)} />
           ) : null}
           {/*
             ปุ่ม ? ของหน้าต่างใบงาน — ทุกคน (หน้าต่างนี้คือหน้าหนึ่ง): ช่างเล่นวิธีใช้ "ใบงาน" · คนอื่นเปิดหน้าสอนการใช้งาน
@@ -2294,10 +2246,7 @@ function WorkOrderDetailScreen({ route, navigation, instant }: Props & { instant
       style={styles.container}
       contentContainerStyle={styles.content}
       onLayout={(e) => setBodyWidth(e.nativeEvent.layout.width)}
-      onScroll={narrowSheet ? (e) => pageY.setValue(e.nativeEvent.contentOffset.y) : undefined}
-      scrollEventThrottle={16}
     >
-      {popDetail}
       {/* ผลการตรวจที่เพิ่งส่ง — ขึ้นบนสุดจนกว่าจะออกจากใบ (ใบกลับมารอตรวจอีกครั้งก็หายเอง) */}
       {reviewOutcome && !reviewMode ? (
         <ReviewDone
@@ -12224,17 +12173,6 @@ const styles = StyleSheet.create({
   codeChip: { borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.tile, paddingHorizontal: 10, paddingVertical: 1 },
   codeChipText: { fontSize: 16, lineHeight: 24, fontWeight: "800", color: colors.text, fontVariant: ["tabular-nums"] },
   popTitle: { fontSize: 20, lineHeight: 30, fontWeight: "700", color: colors.text },
-  popMini: { fontSize: 13, lineHeight: 20, fontWeight: "600", color: colors.body },
-  // รายละเอียดหัวใบบนมือถือ — ต้นเนื้อหา เต็มความกว้าง พื้นขาวต่อจากหัวหน้าต่าง (ชดเชยระยะขอบของ content)
-  popDetail: {
-    marginTop: -spacing.lg,
-    marginHorizontal: -spacing.lg,
-    paddingHorizontal: spacing.xl,
-    paddingBottom: spacing.md,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
   popLine: { fontSize: 13, lineHeight: 20, color: colors.textMuted },
   popBranch: { fontSize: 16, lineHeight: 24, fontWeight: "700", color: colors.text },
   popLineFlex: { flexShrink: 1, minWidth: 0 },
@@ -12262,8 +12200,6 @@ const styles = StyleSheet.create({
   stepsCard: { paddingTop: spacing.md },
   stepsHead: {
     flexDirection: "row",
-    // ปุ่มประวัติ/ย้อนขั้นลงบรรทัดใหม่เมื่อไม่พอ (เจ้าของงานเลือก 7 พ.ย. 69) — เดิมล้นออกขวาจอมือถือ อ่านไม่ครบ
-    flexWrap: "wrap",
     alignItems: "center",
     gap: spacing.sm,
     paddingBottom: spacing.md,

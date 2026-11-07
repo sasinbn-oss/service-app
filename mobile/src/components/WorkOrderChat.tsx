@@ -99,7 +99,6 @@ function Bubble({ orderId, code, branch, startOpen }: { orderId: number; code: s
   const [open, setOpen] = useState(!!startOpen);
   const [threads, reload] = useThreads(!open);
   const unread = threads?.find((t) => t.id === orderId)?.unread ?? 0;
-  const round = useWindowDimensions().width < 640;
   return (
     <>
       {open ? (
@@ -113,10 +112,9 @@ function Bubble({ orderId, code, branch, startOpen }: { orderId: number; code: s
           }}
         />
       ) : (
-        // มือถือ: วงกลมเล็ก ไอคอน + ตัวเลข (เจ้าของงานเลือก 7 พ.ย. 69) — ปุ่มยาว "แชทใบงาน" บังการ์ดขั้นปัจจุบันบนจอแคบ
-        <TouchableOpacity style={[styles.fab, round && styles.fabRound]} onPress={() => setOpen(true)} activeOpacity={0.85} accessibilityLabel={`แชทใบงาน ${code}${unread ? ` · ยังไม่อ่าน ${unread}` : ""}`}>
-          <Ionicons name="chatbubble-ellipses" size={round ? 24 : 26} color="#fff" />
-          {round ? null : <Text style={styles.fabText}>แชทใบงาน</Text>}
+        <TouchableOpacity style={styles.fab} onPress={() => setOpen(true)} activeOpacity={0.85} accessibilityLabel={`แชทใบงาน ${code}${unread ? ` · ยังไม่อ่าน ${unread}` : ""}`}>
+          <Ionicons name="chatbubble-ellipses" size={26} color="#fff" />
+          <Text style={styles.fabText}>แชทใบงาน</Text>
           {unread ? (
             <View style={styles.fabBadge}>
               <Text style={styles.fabBadgeText}>{unread}</Text>
@@ -474,7 +472,6 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   fabText: { color: "#fff", fontSize: 15, fontWeight: "800" },
-  fabRound: { width: 52, height: 52, borderRadius: 26, paddingHorizontal: 0, paddingVertical: 0, justifyContent: "center", gap: 0, right: 16, bottom: 16 },
   fabBadge: { position: "absolute", top: -6, right: -4, minWidth: 22, height: 22, borderRadius: 11, paddingHorizontal: 6, backgroundColor: colors.danger, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "#fff" },
   fabBadgeText: { color: "#fff", fontSize: 12, fontWeight: "800" },
 
