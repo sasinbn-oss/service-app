@@ -80,6 +80,7 @@ export default function PopupScreen({
   instant = false,
   head,
   foot,
+  overlay,
   children,
 }: {
   title: React.ReactNode;
@@ -91,6 +92,8 @@ export default function PopupScreen({
   head?: React.ReactNode;
   /** แถบท้ายหน้าต่างที่อยู่กับที่ ไม่เลื่อนตามเนื้อหา — ปุ่มของขั้นปัจจุบันเห็นได้ตลอดไม่ต้องเลื่อนหา */
   foot?: React.ReactNode;
+  /** ลอยทับมุมกรอบ ไม่เลื่อนตามเนื้อหา — ปุ่ม/หน้าต่างแชทใบงาน (พ.ย. 69) */
+  overlay?: React.ReactNode;
   right?: React.ReactNode;
   backLabel?: string;
   width?: number;
@@ -297,6 +300,15 @@ export default function PopupScreen({
                 />
               ) : null}
             </Animated.View>
+            {/*
+              ปุ่ม/หน้าต่างแชทใบงานลอยมุมขวาล่าง — ซ่อนตอนมีฟอร์มเลื่อนเข้ามา (ปิดงาน · นัดวัน · ฯลฯ) ไม่งั้นบังปุ่มท้ายฟอร์ม
+              ("ยืนยันปิดงาน" · "ถัดไป" อยู่มุมขวาล่างพอดี — กดไม่ได้ทั้งบนมือถือและจอคอม) · ซ่อนเฉย ๆ ไม่ถอด ข้อความที่พิมพ์ค้างไว้ไม่หาย
+            */}
+            {overlay ? (
+              <View pointerEvents="box-none" style={[StyleSheet.absoluteFill, panes.length ? { display: "none" } : null]}>
+                {overlay}
+              </View>
+            ) : null}
             {panes.map((p) => (
               <PaneView key={p.key} pane={p} width={cardW} onGone={remove} onSwiped={markGone} />
             ))}

@@ -57,7 +57,7 @@ export type HomeStackParamList = {
    * code = รหัสใบงาน มากับลิงก์บนเว็บ (/#/wo/WO-00045) — ตอนนั้นยังไม่มี id (ถามเซิร์ฟเวอร์ก่อน — WorkOrderDetailScreen)
    * ในแอปส่งแค่ id ได้ตามเดิม ที่อยู่คิดรหัสจาก id เอง (linking.ts)
    */
-  WorkOrderDetail: { id: number; code?: string; open?: "close" | "stage" | "problem" | "reschedule" };
+  WorkOrderDetail: { id: number; code?: string; open?: "close" | "stage" | "problem" | "reschedule" | "chat" };
   TransferDocument: undefined;
   FlowList: undefined;
   /** title = ชื่อผังจากรายการ · เปิดจากลิงก์ไม่มี หน้าวินิจฉัยใช้ชื่อจากผังที่โหลดมา */

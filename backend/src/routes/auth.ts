@@ -972,6 +972,8 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req: AuthRequest, 
           partsPicksReviewed: true,
           // แอดมินที่เคยย้ายใบงานไปถังขยะ — ลบจริงแล้วหน้าถังขยะ "ลบโดย" ว่าง ไม่รู้ว่าใครลบ
           trashedWorkOrders: true,
+          // คนที่เคยคุยในแชทใบงาน — ลบจริงแล้วข้อความในห้องไม่มีชื่อคนส่ง อ่านย้อนหลังไม่รู้ว่าใครพูด
+          workOrderMessages: true,
         },
       },
     },
