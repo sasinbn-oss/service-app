@@ -29,8 +29,11 @@ OLD_REGION=$(DB "select coalesce(region,'') from \"User\" where id=$SID")
 OLD_LEADS=$(DB "select coalesce(string_agg(id::text, ','),'') from \"User\" where \"itLead\"")
 SUF=$RANDOM
 IDS=""
+# เปิดใบ W81 ที่สาขาภาคอื่นซึ่งยังไม่มีเครื่องนี้ = ระบบสร้างเครื่องให้ — ลบใบแล้วเครื่องยังค้าง ลบเครื่องที่เกิดระหว่างเทสต์ (ไม่มีใบผูก) ด้วย
+MSTART=$(DB "select coalesce(max(id),0) from \"Machine\"")
 cleanup() {
   purge_orders "$A" $IDS
+  DB "delete from \"Machine\" m where m.id > $MSTART and not exists (select 1 from \"WorkOrder\" w where w.\"machineId\"=m.id)" >/dev/null
   DB "update \"User\" set \"itLead\"=false where \"itLead\";
       delete from \"User\" where \"employeeCode\"='ZIDL$SUF';
       update \"User\" set region=nullif('$OLD_REGION','') where id=$SID" >/dev/null
