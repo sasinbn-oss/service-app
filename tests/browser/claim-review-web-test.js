@@ -277,7 +277,8 @@ const login = async (code) =>
     await head.waitFor({ timeout: 15000 }).catch(() => {});
     const headBox = await head.boundingBox();
     const d1 = waitDays();
-    headBox && headBox.y < 200 && (await vis(page, `รอบ 2 · รอ ${d1} วัน`).count()) > 0 && (await vis(page, "ดูรายละเอียดใบงาน ▸").count()) > 0
+    // หัวกรอบใบงานแบบใหม่ (รหัส · ขั้น · ชื่อเรื่อง · สาขา — พ.ย. 69) สูงราว 200 px — หน้าตรวจต้องอยู่ถัดจากหัวกรอบทันที ไม่ใช่ต่ำลงไปใต้ขั้นตอน
+    headBox && headBox.y < 260 && (await vis(page, `รอบ 2 · รอ ${d1} วัน`).count()) > 0 && (await vis(page, "ดูรายละเอียดใบงาน ▸").count()) > 0
       ? pass(`หน้าตรวจเคลมขึ้นบนสุดของใบงาน (หัวอยู่ที่ y=${Math.round(headBox.y)}) · "รอบ 2 · รอ ${d1} วัน" (ตรงฐานข้อมูล) · รายละเอียดใบงานพับไว้`)
       : fail(`หัวหน้าตรวจเคลม: ${JSON.stringify(headBox)} · "รอบ 2 · รอ ${d1} วัน"=${await vis(page, `รอบ 2 · รอ ${d1} วัน`).count()}`);
     // เนื้อใบงานที่เหลือพับอยู่ — การ์ดขั้นตอน/ประวัติไม่อยู่บนจอ

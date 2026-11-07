@@ -347,7 +347,7 @@ const login = async (code) =>
     await page.waitForTimeout(800);
     const expanded = (await label(page, "ขั้นตอนงาน").count()) > 0;
     const gone = [];
-    for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ย้ายไปถังขยะ…", "แก้ไขอาการ/สถานะ", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
+    for (const t of ["ปิดงานย้อนหลัง (กรอกทุกขั้น)", "ย้ายไปถังขยะ…", "แก้ไขรายละเอียด", "ระงับการปฏิบัติงานชั่วคราว", "เพิ่มใบงาน"]) if ((await vis(page, t).count()) > 0) gone.push(t);
     expanded && gone.length === 0
       ? pass("Admin Spare Part: กางรายละเอียดใบงานแล้วก็ไม่มีปุ่มแก้ใบงาน/เปิดใบงาน")
       : fail(expanded ? `Admin Spare Part ยังเห็นปุ่ม ${gone.join(", ")}` : "กางรายละเอียดใบงานไม่ได้ — นับปุ่มแก้ใบงานไม่ได้");

@@ -723,6 +723,13 @@ model WorkOrder {
   // แถวในไฟล์ฟอร์มแจ้งซ่อมที่เป็นต้นเรื่อง (ลายนิ้วมือของแถว) — นำเข้าไฟล์เดิมซ้ำแล้วไม่เกิดใบซ้ำ · เปิดเอง = ว่าง
   importKey String? @unique
 
+  // ระงับชั่วคราว (เจ้าของงานเลือก พ.ย. 69) — ใบออกจากกล่องงานและหยุดนับวันค้างจนถึง holdUntil (เที่ยงคืนเวลาไทยของวันที่กลับมาทำ)
+  // ไม่มีงานประจำมาปลด: ระงับอยู่ = holdUntil > ตอนนี้ · กดกลับมาทำต่อก่อนกำหนด = holdUntil ย้ายมาเป็นตอนที่กด
+  // เก็บเฉพาะรอบล่าสุด — ประวัติทุกรอบอยู่ใน WorkOrderLog (HOLD / RESUMED)
+  holdUntil  DateTime?
+  holdReason String?
+  heldAt     DateTime?
+
   // เคสที่เป็นต้นเรื่อง ว่างได้เพราะใบงานที่เปิดเองไม่ได้มาจากเคสไหน
   outageId  Int?
   outage    Outage?  @relation(fields: [outageId], references: [id], onDelete: SetNull)
