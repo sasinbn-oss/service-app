@@ -9,6 +9,7 @@
  * - **ถามเป็นรอบ** (แอปถามเองโดยไม่มีคนกดรอ — ตัวเลขกระดิ่ง แชท กล่องงาน ลายนิ้วมือ) วิ่งพร้อมกัน 2 · คิวยาว/รอเกิน 5 วิ = 503 ทันทีไม่แตะฐานข้อมูล
  *   แอปจับ error ของการถามเป็นรอบเงียบอยู่แล้ว รอบหน้าค่อยถามใหม่ — ตัวเลขช้าไปหนึ่งรอบดีกว่าทั้งบริษัทล็อกอินไม่ได้
  * - **ดูข้อมูล** (GET อื่น ๆ — รายการ หน้าใบงาน รายงาน) วิ่งพร้อมกัน 4 ที่เหลือรอคิว (ได้คำตอบเสมอ แค่ช้าลงตอนคนเยอะ)
+ * - **รูปอะไหล่** วิ่งพร้อมกัน 2 ช่องของตัวเอง (ไบต์ของรูปอยู่ในฐานข้อมูล — หน้ารายการหนึ่งหน้าขอเป็นร้อยรูป)
  * - **ไม่เข้าคิว**: ล็อกอิน · บันทึกทุกอย่าง (POST/PUT/PATCH/DELETE) · ดาวน์โหลดไฟล์ (ส่งไฟล์บน 4G นาน แต่ไม่ถือสายฐานข้อมูล)
  * คิวนับ "คำขอ" ไม่ใช่ "สาย" (คำขอหนึ่งยิงหลายคำสั่งพร้อมกันได้) แต่พอให้คิวรอสายของ Prisma สั้นจนคำขอที่ไม่เข้าคิวแทรกได้ภายในไม่กี่รอบ
  */
@@ -36,6 +37,12 @@ const lane = (name: string, max: number, maxWaitMs: number, maxQueue: number): L
 
 const polls = lane("polls", Number(process.env.POLL_MAX_RUNNING) || 2, 5_000, 30);
 const reads = lane("reads", Number(process.env.READ_MAX_RUNNING) || 4, 45_000, 400);
+/**
+ * รูปอะไหล่ (ไบต์อยู่ในฐานข้อมูล — utils/imageCache.ts) แยกช่องของตัวเอง: หน้ารายการหนึ่งหน้าขอเป็นร้อยรูปพร้อมกัน
+ * ถ้าอยู่ช่องดูข้อมูล รายการใบงานของทุกคนจะรอหลังรูป (7 พ.ย. 69: 627 รูปใน 4 นาที เฉลี่ยรอ 16 วิ) · ไม่ทิ้ง รอได้นาน — รูปขึ้นช้าดีกว่ารูปแตก
+ */
+const images = lane("images", 2, 120_000, 2000);
+const IMAGE = /^\/api\/spare-parts\/\d+\/image$/;
 
 /** GET ที่แอปถามเองเป็นรอบหรือตอนเปลี่ยนหน้า (ไม่มีคนกดรอ) */
 const POLL = [
@@ -106,6 +113,7 @@ function enter(l: Lane, req: Request, res: Response, next: NextFunction) {
 export function pollGate(req: Request, res: Response, next: NextFunction) {
   if (req.method !== "GET" || !req.path.startsWith("/api/")) return next();
   if (POLL.some((re) => re.test(req.path))) return enter(polls, req, res, next);
+  if (IMAGE.test(req.path)) return enter(images, req, res, next);
   if (STREAM.test(req.path)) return next();
   return enter(reads, req, res, next);
 }
@@ -129,5 +137,5 @@ export function pollSlot(): Promise<() => void> {
 
 const stat = (l: Lane) => ({ running: l.running, queued: l.queue.length, maxRunning: l.max, shedSinceStart: l.shed });
 export function pollGateStats() {
-  return { polls: stat(polls), reads: stat(reads) };
+  return { polls: stat(polls), reads: stat(reads), images: stat(images) };
 }

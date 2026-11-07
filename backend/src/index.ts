@@ -44,6 +44,7 @@ import { startTrashPurge } from "./utils/trash";
 import { trackRequests, statusSnapshot } from "./utils/reqStats";
 import { dbErrorOf } from "./utils/dbError";
 import { pollGate, pollGateStats } from "./utils/pollGate";
+import { imageCacheStats } from "./utils/imageCache";
 
 const app = express();
 
@@ -84,7 +85,7 @@ app.get("/health/status", async (_req, res) => {
   } catch (e) {
     db = { ok: false, sec: Math.round((Date.now() - started) / 100) / 10, code: dbErrorOf(e)?.code ?? (e as { code?: string }).code ?? "อื่น ๆ" };
   }
-  res.set("Cache-Control", "no-store").json({ db, lanes: pollGateStats(), ...statusSnapshot() });
+  res.set("Cache-Control", "no-store").json({ db, lanes: pollGateStats(), partImages: imageCacheStats(), ...statusSnapshot() });
 });
 
 /**
