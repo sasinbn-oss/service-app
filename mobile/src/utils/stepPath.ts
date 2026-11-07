@@ -32,6 +32,7 @@ export type StepKey =
   | "ISSUE"
   | "AWAITING_CONFIRM"
   | "ASSIGNED"
+  | "ARRIVE"
   | "IN_PROGRESS"
   | "CLAIM_REVIEW";
 /** loop = ขั้น 1 ระหว่างตรวจหน้างาน — ยังไม่ได้ทำ แต่ใบอยู่ในรอบที่จะวนกลับมาที่นี่ */
@@ -89,6 +90,11 @@ export interface PathOrder {
    * สถานะของใบไม่ได้เพิ่ม (ข้อ 2: ใช้ขั้นระบุอะไหล่/ตรวจหน้างานเดิม) แถบจึงต้องอ่านจากตรงนี้ว่าขั้นนั้นกำลังรออะไรจริง
    */
   partsPick?: { status: string } | null;
+  /**
+   * ช่างถึงหน้างานในรอบนี้แล้ว (เซิร์ฟเวอร์คิดจากประวัติ "ช่างถึงหน้างาน" หลังปล่อยงานล่าสุด — onSiteOf)
+   * ขั้นช่างแยกเป็น "เข้างาน" กับ "ปิดงาน" ตามค่านี้ ทั้งที่ในฐานข้อมูลยังเป็น IN_PROGRESS ตัวเดียว (พ.ย. 69)
+   */
+  onSite?: boolean | null;
 }
 export interface PathStage {
   value: string;
@@ -148,6 +154,7 @@ const KEYS: StepKey[] = [
   "ISSUE",
   "AWAITING_CONFIRM",
   "ASSIGNED",
+  "ARRIVE",
   "IN_PROGRESS",
   "CLAIM_REVIEW",
 ];
@@ -176,6 +183,9 @@ const SHORT: Partial<Record<StepKey, [string, string]>> = {
   PARTS_SOURCING: ["เช็คอะไหล่", "เช็คอะไหล่แล้ว"],
   ISSUE: ["เบิกอะไหล่", "เบิกอะไหล่แล้ว"],
   ASSIGNED: ["ปล่อยงาน", "ปล่อยงานแล้ว"],
+  // ขั้นช่างแยกเป็นสอง (พ.ย. 69) — เซิร์ฟเวอร์ยังมีขั้นเดียว "เข้างาน/ปิดงาน" จึงตั้งชื่อเองทั้งคู่
+  ARRIVE: ["เข้างาน", "เข้างานแล้ว"],
+  IN_PROGRESS: ["ปิดงาน", "ปิดงานแล้ว"],
 };
 /** สถานะของขั้นเป็นคำ — วงสี/ติ๊กบนแถบอ่านด้วยโปรแกรมอ่านจอไม่ได้ */
 const STATE_WORD: Record<StepState, string> = {
@@ -198,7 +208,8 @@ const FALLBACK: Record<StepKey, [string, string]> = {
   ISSUE: ["เบิกอะไหล่", "เบิกอะไหล่แล้ว"],
   AWAITING_CONFIRM: ["คอนเฟิร์มลูกค้า", "ลูกค้าคอนเฟิร์มแล้ว"],
   ASSIGNED: ["ปล่อยงาน", "ปล่อยงานแล้ว"],
-  IN_PROGRESS: ["เข้างาน/ปิดงาน", "ปิดงานแล้ว"],
+  ARRIVE: ["เข้างาน", "เข้างานแล้ว"],
+  IN_PROGRESS: ["ปิดงาน", "ปิดงานแล้ว"],
   CLAIM_REVIEW: ["ตรวจเคลม", "ตรวจเคลมแล้ว"],
 };
 
@@ -333,8 +344,9 @@ function fullOrder(variant: FlowVariant): StepKey[] {
       : variant === "issueFirst"
         ? ["ISSUE", "PARTS_CHECKED", "AWAITING_CONFIRM"]
         : ["PARTS_CHECKED", "ISSUE", "AWAITING_CONFIRM"];
-  return ["NEW", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", ...mid, "ASSIGNED", "IN_PROGRESS", "CLAIM_REVIEW"];
+  return ["NEW", "PARTS_SOURCING", "AWAITING_QUOTE", "AWAITING_PAYMENT", "WAITING_PARTS", ...mid, "ASSIGNED", "ARRIVE", "IN_PROGRESS", "CLAIM_REVIEW"];
 }
+
 
 export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
   const flow = flowOf(o);
@@ -354,7 +366,8 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     inSpec(...SOURCING_LOGS, ...ISSUE_LOGS);
   const waiting = o.status === "WAITING_PARTS" || inSpec("PARTS_ARRIVED");
   const claim = o.status === "CLAIM_REVIEW" || o.claims.length > 0;
-  const cur = stepKeyOf(o.status);
+  // ช่างยังไม่ถึงหน้างาน = อยู่ขั้น "เข้างาน" · ถึงแล้ว = "ปิดงาน" (สถานะในฐานข้อมูลเดียวกัน — ดู onSite)
+  const cur = o.status === "IN_PROGRESS" && !o.onSite ? "ARRIVE" : stepKeyOf(o.status);
   const keys = full.filter((k) => {
     // ขั้นที่ใบอยู่ตอนนี้ต้องอยู่บนแถบเสมอ แม้ธงจากเซิร์ฟเวอร์จะบอกว่าไม่ผ่าน
     if (k === cur) return true;
@@ -375,7 +388,8 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
   // ใบแยก (ใบรออะไหล่) เริ่มกลางทาง — ขั้นก่อนจุดเริ่มทำในใบเดิม ไม่ใช่ทำในใบนี้ (WO-00528)
   // ขั้นที่ใบนี้เข้าไปจริงภายหลัง (เช่นย้อนกลับไปเช็คอะไหล่) ไม่นับ
   const splitStart = o.parent ? stepKeyOf(o.logs.find((l) => l.action === "SPLIT_FROM")?.status) : null;
-  const stagesOf = (k: StepKey) => (k === "ISSUE" ? ISSUE_STAGES : [k]);
+  // "เข้างาน" ไม่มีขั้นของเซิร์ฟเวอร์เป็นของตัวเอง — ไม่ครอบ IN_PROGRESS ไม่งั้นป้าย "ย้อนจากตรงนี้" กับ "ใครทำ" ขึ้นซ้ำสองขั้น
+  const stagesOf = (k: StepKey) => (k === "ISSUE" ? ISSUE_STAGES : k === "ARRIVE" ? [] : [k]);
   const inParent = (k: StepKey) =>
     !!splitStart &&
     k !== cur &&
@@ -440,7 +454,7 @@ export function buildStepPath(o: PathOrder, stages: PathStage[]): StepPath {
     if (k === "NEW" && state === "done" && lastSpec(o.logs)?.action === "PARTS_PICK_CONFIRMED") {
       label = "คอนเฟิร์มอะไหล่แล้ว";
     }
-    let actorLabel = server?.actorLabel ?? null;
+    let actorLabel = server?.actorLabel ?? (k === "ARRIVE" ? st("IN_PROGRESS")?.actorLabel ?? "ช่าง" : null);
     const sub = k === "ISSUE" && flow.transfer ? transferSubs(o, state, st) : undefined;
     if (k === "ISSUE") {
       // คนเบิกเปลี่ยนตามขั้นย่อย — คลัง 94 แอดมิน · คลังอื่นหัวหน้าภาค

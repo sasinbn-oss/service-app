@@ -123,6 +123,12 @@ export default function BranchCheckInScreen() {
               <Text style={styles.resultLine}>สาขา: {result.branch.name}</Text>
               <Text style={styles.resultLine}>ระยะห่าง: {Math.round(result.distanceMeters)} เมตร</Text>
               <Text style={styles.resultLine}>เวลา: {new Date(result.checkedInAt).toLocaleString("th-TH")}</Text>
+              {/* รายงานตัวแล้วใบในมือที่สาขานี้เปลี่ยนเป็นถึงหน้างานด้วย — บอกว่าใบไหน จะได้ไม่กด "ถึงหน้างาน" ซ้ำ */}
+              {result.arrived?.length ? (
+                <Text style={[styles.resultLine, { fontWeight: "700" }]}>
+                  บันทึกถึงหน้างานแล้ว: {result.arrived.join(", ")} — สถานะเปลี่ยนเป็น “ช่าง · ปิดงาน”
+                </Text>
+              ) : null}
             </View>
           )}
         </>

@@ -80,7 +80,8 @@ const PDF = Buffer.from(`%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2
       ? pass("ไม่มีคำว่า \"แนบบิลรับเงิน\" บนหน้าใบงาน (เหลือแค่หัวฟอร์มแนบบิล)") : fail("ยังเห็น \"แนบบิลรับเงิน\" บนหน้าใบงาน");
     const bar = page.locator('[aria-label="ขั้นตอนงาน"]');
     (await bar.locator('[aria-label="ขั้น 3 รอลูกค้าจ่ายเงิน · ทำอยู่"]').count()) > 0 &&
-    (await bar.getByText("ลูกค้า · แอดมินแนบบิล", { exact: true }).locator("visible=true").count()) > 0 &&
+    // การ์ดขั้นตอนแบบใหม่ (พ.ย. 69): ขั้นที่ทำอยู่มีป้าย "<ใคร> (ปัจจุบัน)"
+    (await bar.getByText(/^ลูกค้า · แอดมินแนบบิล( \(ปัจจุบัน\))?$/).locator("visible=true").count()) > 0 &&
     (await bar.getByText("ส่งใบเสนอราคาแล้ว", { exact: true }).locator("visible=true").count()) > 0
       ? pass("แถบขั้นตอน: ขั้น 3 \"รอลูกค้าจ่ายเงิน\" ทำอยู่ · ใต้ชื่อ \"ลูกค้า · แอดมินแนบบิล\" · ขั้นก่อนหน้า \"ส่งใบเสนอราคาแล้ว\"")
       : fail(`แถบขั้นตอน: ${await bar.innerText()}`);
