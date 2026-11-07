@@ -27,12 +27,26 @@ node "$ROOT/tests/lib/push-mock.js" serve $PORT $TMP $LOG $TMP/cert.pem $TMP/key
 MOCK=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q ready $TMP/mock.out && break; sleep 0.3; done
 KEYS() { node "$ROOT/tests/lib/push-mock.js" keys $TMP/$1.json; }
+# backend ที่รันอยู่ก็มีรอบงานเข้ากล่องของตัวเองทุก 2 นาที (startInboxPush) — ส่งไปที่ผู้ให้บริการจำลองไม่ผ่าน (ใบรับรองทำเอง)
+# แต่เลื่อน pushSince ไปแล้ว ถ้ามันวิ่งตรงระหว่างข้อ รอบของเทสต์จะไม่เหลืออะไรให้ส่ง (ตกเป็นบางรอบ — เจอตอนรันซ้ำ)
+# จดจุดเริ่มนับของคนที่สมัครเครื่องทดสอบไว้หลังรอบ/การสมัครของเทสต์ แล้วคืนค่าก่อนรอบถัดไป = มีแต่รอบของเทสต์ที่นับ
+SNAP() { DB "select coalesce(string_agg(u.id||'='||coalesce(replace(u.\"pushSince\"::text,' ','T'),''), ' '),'') from \"User\" u
+  where exists (select 1 from \"PushSubscription\" p where p.\"userId\"=u.id and p.endpoint like 'https://localhost:$PORT/%')" > $TMP/ps; }
+RESTORE() { for kv in $(cat $TMP/ps 2>/dev/null); do DB "update \"User\" set \"pushSince\"=nullif('${kv#*=}','')::timestamp where id=${kv%%=*}" >/dev/null; done; }
 SUB() { # $1 token · $2 kind (sub/gone) · $3 ชื่อเครื่อง
   local k; k=$(KEYS $3)
+  RESTORE
   POST $1 push/subscribe "{\"endpoint\":\"https://localhost:$PORT/$2/$3\",\"keys\":$k}"
+  SNAP
 }
-ROUND() { (cd "$ROOT/backend" && set -a && . ./.env && set +a && NODE_TLS_REJECT_UNAUTHORIZED=0 node_modules/.bin/ts-node --transpile-only -e \
-  'require("./src/push/inboxPush").inboxPushRound().then((r) => { console.log(JSON.stringify(r)); process.exit(0); }, (e) => { console.error(e); process.exit(1); })' 2>/dev/null | tail -1); }
+# คืนค่าในโปรเซสเดียวกับรอบ ทันทีก่อนเรียก — คืนด้วย psql ก่อนเปิด ts-node (หลายวินาที) ยังมีช่องให้รอบของ backend แทรกได้
+ROUND() { ROUND1; SNAP; }
+ROUND1() { (cd "$ROOT/backend" && set -a && . ./.env && set +a && PS_FILE=$TMP/ps NODE_TLS_REJECT_UNAUTHORIZED=0 node_modules/.bin/ts-node --transpile-only -e \
+  'const kv = (require("fs").existsSync(process.env.PS_FILE) ? require("fs").readFileSync(process.env.PS_FILE, "utf8") : "").split(/\s+/).filter(Boolean);
+   const { prisma } = require("./src/prisma");
+   Promise.all(kv.map((x) => { const [id, t] = x.split("="); return prisma.user.update({ where: { id: +id }, data: { pushSince: t ? new Date(t + "Z") : null } }); }))
+     .then(() => require("./src/push/inboxPush").inboxPushRound())
+     .then((r) => { console.log(JSON.stringify(r)); process.exit(0); }, (e) => { console.error(e); process.exit(1); })' 2>/dev/null | tail -1); }
 RECIP() { (cd "$ROOT/backend" && set -a && . ./.env && set +a && node_modules/.bin/ts-node --transpile-only -e \
   "require('./src/routes/workOrders').chatRecipients($1, $2, '$3', { assignedTeam: '$TEAM', assignedToId: null }).then((r) => { console.log(r.sort((a,b)=>a-b).join(',')); process.exit(0); })" 2>/dev/null | tail -1); }
 GOT() { grep -c "\"name\":\"$1\"" $LOG; }
