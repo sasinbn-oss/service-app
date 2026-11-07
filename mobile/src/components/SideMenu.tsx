@@ -210,7 +210,6 @@ type InboxCount = { inbox: number; trash?: number };
 interface Item {
   key: string;
   label: string;
-  labelEn: string;
   icon: keyof typeof Ionicons.glyphMap;
   tab: Tab;
   screen: string;
@@ -247,7 +246,6 @@ const GROUPS: Group[] = [
       {
         key: "myjobs",
         label: "งานของฉันวันนี้",
-        labelEn: "My Jobs Today",
         icon: "today-outline",
         tab: "HomeTab",
         screen: "MyJobs",
@@ -256,17 +254,15 @@ const GROUPS: Group[] = [
       {
         key: "plan",
         label: "แผนงาน",
-        labelEn: "Plan Board",
         icon: "calendar-outline",
         tab: "HomeTab",
         screen: "PlanBoard",
         roles: ["ADMIN", "SUPERVISOR", "AREA", "COCO_SUPERVISOR", "COCO_MAID"],
       },
-      { key: "home", label: "หน้าหลัก", labelEn: "Home", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
+      { key: "home", label: "หน้าหลัก", icon: "home-outline", tab: "HomeTab", screen: "HomeMenu" },
       {
         key: "inbox",
         label: "กล่องงานของฉัน",
-        labelEn: "My Inbox",
         icon: "briefcase-outline",
         tab: "WorkOrdersTab",
         screen: "WorkOrderList",
@@ -278,16 +274,15 @@ const GROUPS: Group[] = [
       {
         key: "wo",
         label: "ใบงานซ่อม",
-        labelEn: "Work Orders",
         icon: "clipboard-outline",
         tab: "WorkOrdersTab",
         screen: "WorkOrderList",
         params: { inbox: false },
       },
-      { key: "dash", label: "ติดตามเครื่องเสีย", labelEn: "Machine Monitor", icon: "pulse-outline", tab: "HomeTab", screen: "MachineDashboard" },
-      { key: "reports", label: "รายงาน", labelEn: "Reports", icon: "document-text-outline", tab: "HomeTab", screen: "ReportsMenu" },
+      { key: "dash", label: "ติดตามเครื่องเสีย", icon: "pulse-outline", tab: "HomeTab", screen: "MachineDashboard" },
+      { key: "reports", label: "รายงาน", icon: "document-text-outline", tab: "HomeTab", screen: "ReportsMenu" },
       // ทุกคนดูได้ (ยกเว้น Supervisor (COCO) / Maid (COCO) — ดู AREA_ONLY_SCREENS) — ช่างรู้ว่าทีมไหนมีใคร · แอดมินลากแก้ได้ในหน้าเดียวกัน
-      { key: "coverage", label: "ผังผู้รับผิดชอบ", labelEn: "Coverage Map", icon: "git-network-outline", tab: "HomeTab", screen: "CoverageMap" },
+      { key: "coverage", label: "ผังผู้รับผิดชอบ", icon: "git-network-outline", tab: "HomeTab", screen: "CoverageMap" },
     ],
   },
   /**
@@ -298,7 +293,7 @@ const GROUPS: Group[] = [
     title: "อะไหล่",
     slug: "parts",
     items: [
-      { key: "parts", label: "รายการอะไหล่", labelEn: "Spare Parts", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
+      { key: "parts", label: "รายการอะไหล่", icon: "cube-outline", tab: "HomeTab", screen: "SparePartList" },
       /**
        * กล่องงานตรวจเคลม (เคลมก้อน 6) — เดิม Admin Spare Part ต้องหาใบรอตรวจเองจากรายการใบงานทั้งหมด ไม่รู้ว่าใบไหนรอนานสุด
        * เห็นเฉพาะคนที่ตัดสินเคลมได้ (กติกาเดียวกับ GET /part-claims/queue) · ป้าย "{x} ใบ" นับชุดเดียวกับหัวกล่องงาน
@@ -306,7 +301,6 @@ const GROUPS: Group[] = [
       {
         key: "claimReview",
         label: "ตรวจเคลม",
-        labelEn: "Claim Review",
         icon: "shield-half-outline",
         tab: "HomeTab",
         screen: "ClaimReview",
@@ -316,7 +310,6 @@ const GROUPS: Group[] = [
       {
         key: "claims",
         label: "ประวัติเคลม",
-        labelEn: "Claim History",
         icon: "shield-checkmark-outline",
         tab: "HomeTab",
         screen: "ClaimHistory",
@@ -331,10 +324,10 @@ const GROUPS: Group[] = [
     title: "หน้างาน",
     slug: "site",
     items: [
-      { key: "flow", label: "วินิจฉัยอาการเสีย", labelEn: "Diagnose", icon: "git-branch-outline", tab: "HomeTab", screen: "FlowList" },
-      { key: "checkin", label: "รายงานตัวเข้าสาขา", labelEn: "Branch Check-in", icon: "location-outline", tab: "HomeTab", screen: "BranchCheckIn" },
-      { key: "worklog", label: "บันทึกการทำงาน", labelEn: "Work Log", icon: "create-outline", tab: "HomeTab", screen: "WorkLogForm" },
-      { key: "guides", label: "คู่มือแก้ปัญหา", labelEn: "Guides", icon: "book-outline", tab: "HistoryTab", screen: "GuideList" },
+      { key: "flow", label: "วินิจฉัยอาการเสีย", icon: "git-branch-outline", tab: "HomeTab", screen: "FlowList" },
+      { key: "checkin", label: "รายงานตัวเข้าสาขา", icon: "location-outline", tab: "HomeTab", screen: "BranchCheckIn" },
+      { key: "worklog", label: "บันทึกการทำงาน", icon: "create-outline", tab: "HomeTab", screen: "WorkLogForm" },
+      { key: "guides", label: "คู่มือแก้ปัญหา", icon: "book-outline", tab: "HistoryTab", screen: "GuideList" },
     ],
   },
   {
@@ -342,26 +335,26 @@ const GROUPS: Group[] = [
     title: "รถ",
     slug: "vehicle",
     items: [
-      { key: "vehicle", label: "ลงทะเบียนใช้รถ", labelEn: "Vehicle Use", icon: "car-outline", tab: "HomeTab", screen: "VehicleCheckIn" },
-      { key: "vehicleMine", label: "ประวัติการใช้รถของฉัน", labelEn: "My Trips", icon: "time-outline", tab: "HistoryTab", screen: "VehicleHistory" },
-      { key: "fleetDash", label: "ภาพรวมรถ", labelEn: "Fleet Overview", icon: "speedometer-outline", tab: "AdminTab", screen: "FleetDashboard", roles: ["ADMIN"] },
-      { key: "vehicleLogs", label: "ประวัติการใช้รถ", labelEn: "Trip Log", icon: "list-outline", tab: "AdminTab", screen: "VehicleLogAdmin", roles: ["ADMIN"] },
-      { key: "vehicles", label: "ทะเบียน & ซ่อมบำรุง", labelEn: "Registry & Service", icon: "construct-outline", tab: "AdminTab", screen: "ManageVehicles", roles: ["ADMIN"] },
+      { key: "vehicle", label: "ลงทะเบียนใช้รถ", icon: "car-outline", tab: "HomeTab", screen: "VehicleCheckIn" },
+      { key: "vehicleMine", label: "ประวัติการใช้รถของฉัน", icon: "time-outline", tab: "HistoryTab", screen: "VehicleHistory" },
+      { key: "fleetDash", label: "ภาพรวมรถ", icon: "speedometer-outline", tab: "AdminTab", screen: "FleetDashboard", roles: ["ADMIN"] },
+      { key: "vehicleLogs", label: "ประวัติการใช้รถ", icon: "list-outline", tab: "AdminTab", screen: "VehicleLogAdmin", roles: ["ADMIN"] },
+      { key: "vehicles", label: "ทะเบียน & ซ่อมบำรุง", icon: "construct-outline", tab: "AdminTab", screen: "ManageVehicles", roles: ["ADMIN"] },
     ],
   },
   {
     title: "เอกสารและบัญชี",
     slug: "account",
     items: [
-      { key: "transfer", label: "เอกสารขอโอนสินค้า", labelEn: "Transfer Request", icon: "swap-horizontal-outline", tab: "HomeTab", screen: "TransferDocument" },
-      { key: "consumable", label: "เบิกของใช้สิ้นเปลือง", labelEn: "Consumables", icon: "file-tray-full-outline", tab: "HomeTab", screen: "ConsumableRequest" },
-      { key: "history", label: "ประวัติ", labelEn: "History", icon: "time-outline", tab: "HistoryTab", screen: "HistoryMenu" },
-      { key: "password", label: "เปลี่ยนรหัสผ่าน", labelEn: "Change Password", icon: "key-outline", tab: "HomeTab", screen: "ChangePassword" },
+      { key: "transfer", label: "เอกสารขอโอนสินค้า", icon: "swap-horizontal-outline", tab: "HomeTab", screen: "TransferDocument" },
+      { key: "consumable", label: "เบิกของใช้สิ้นเปลือง", icon: "file-tray-full-outline", tab: "HomeTab", screen: "ConsumableRequest" },
+      { key: "history", label: "ประวัติ", icon: "time-outline", tab: "HistoryTab", screen: "HistoryMenu" },
+      { key: "password", label: "เปลี่ยนรหัสผ่าน", icon: "key-outline", tab: "HomeTab", screen: "ChangePassword" },
       /**
        * สอนการใช้งาน (เจ้าของงานเลือก ต.ค. 69) — ทุกตำแหน่งเห็น ไม่กรองว่ามีวิธีใช้ไหม
        * ตำแหน่งที่ยังไม่มี (ทีม Area · Admin Spare Part รอบนี้) เปิดแล้วเจอหน้าที่บอกว่ากำลังทำ ดีกว่าเมนูโผล่ ๆ หาย ๆ
        */
-      { key: "howto", label: "สอนการใช้งาน", labelEn: "How to Use", icon: "help-circle-outline", tab: "HomeTab", screen: "HowTo" },
+      { key: "howto", label: "สอนการใช้งาน", icon: "help-circle-outline", tab: "HomeTab", screen: "HowTo" },
     ],
   },
   {
@@ -369,18 +362,18 @@ const GROUPS: Group[] = [
     slug: "admin",
     admin: true,
     items: [
-      { key: "admin", label: "ระบบหลังบ้าน", labelEn: "Admin", icon: "settings-outline", tab: "AdminTab", screen: "AdminMenu" },
-      { key: "review", label: "อนุมัติคำขอเบิก", labelEn: "Approvals", icon: "checkmark-circle-outline", tab: "AdminTab", screen: "ReviewRequests" },
-      { key: "users", label: "สิทธิ์ผู้ใช้", labelEn: "Users & Access", icon: "people-outline", tab: "AdminTab", screen: "ManageUsers" },
-      { key: "teams", label: "ทีมช่าง", labelEn: "Teams", icon: "people-circle-outline", tab: "AdminTab", screen: "ManageTeams" },
-      { key: "branches", label: "จัดการข้อมูลสาขา", labelEn: "Branches", icon: "business-outline", tab: "AdminTab", screen: "ManageBranches" },
+      { key: "admin", label: "ระบบหลังบ้าน", icon: "settings-outline", tab: "AdminTab", screen: "AdminMenu" },
+      { key: "review", label: "อนุมัติคำขอเบิก", icon: "checkmark-circle-outline", tab: "AdminTab", screen: "ReviewRequests" },
+      { key: "users", label: "สิทธิ์ผู้ใช้", icon: "people-outline", tab: "AdminTab", screen: "ManageUsers" },
+      { key: "teams", label: "ทีมช่าง", icon: "people-circle-outline", tab: "AdminTab", screen: "ManageTeams" },
+      { key: "branches", label: "จัดการข้อมูลสาขา", icon: "business-outline", tab: "AdminTab", screen: "ManageBranches" },
       // ถังขยะใบงาน (เจ้าของงานตัดสิน 4 พ.ย. 69) — แอดมินที่ลบใบงานได้ทุกคน · Admin Spare Part ไม่เห็น (PARTS_ADMIN_HIDDEN)
-      { key: "trash", label: "ถังขยะใบงาน", labelEn: "Work Order Trash", icon: "trash-outline", tab: "AdminTab", screen: "WorkOrderTrash", trash: true },
+      { key: "trash", label: "ถังขยะใบงาน", icon: "trash-outline", tab: "AdminTab", screen: "WorkOrderTrash", trash: true },
       // ประวัติการนำเข้า (เจ้าของงานอนุมัติ 5 พ.ย. 69) — ทุกไฟล์ที่นำเข้าระบบ · แอดมินทุกคนเห็นทุกรอบ
       // Admin Spare Part เห็นด้วย (นำเข้าไฟล์อะไหล่ได้ = ดูประวัติได้ — กติกาเดียวกับเซิร์ฟเวอร์)
       // params {} ล้างชนิด/รอบที่ค้างจากปุ่มข้างหน้านำเข้า (แบบประวัติเคลม) — เปิดจากเมนู = ทุกชนิด
-      { key: "imports", label: "ประวัติการนำเข้า", labelEn: "Import History", icon: "time-outline", tab: "AdminTab", screen: "ImportHistory", params: {} },
-      { key: "backup", label: "สำรองข้อมูล", labelEn: "Backup", icon: "cloud-download-outline", tab: "AdminTab", screen: "Backup", superAdmin: true },
+      { key: "imports", label: "ประวัติการนำเข้า", icon: "time-outline", tab: "AdminTab", screen: "ImportHistory", params: {} },
+      { key: "backup", label: "สำรองข้อมูล", icon: "cloud-download-outline", tab: "AdminTab", screen: "Backup", superAdmin: true },
     ],
   },
 ];
@@ -564,10 +557,8 @@ function MenuGroup({
                 ) : null
               ) : (
                 <>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.label, on && styles.labelOn]}>{it.label}</Text>
-                    <Text style={[styles.labelEn, on && styles.labelEnOn]}>{it.labelEn}</Text>
-                  </View>
+                  {/* ชื่อไทยบรรทัดเดียว (หน้าตาใหม่ พ.ย. 69 ตามแบบที่เจ้าของงานเลือก) — ชื่ออังกฤษใต้เมนูเอาออก เมนูเตี้ยลง เห็นได้มากขึ้นโดยไม่ต้องเลื่อน */}
+                  <Text style={[styles.label, { flex: 1 }, on && styles.labelOn]}>{it.label}</Text>
                   {n ? (
                     <View style={[styles.badge, on && styles.badgeOn]}>
                       <Text style={[styles.badgeText, on && styles.badgeTextOn]}>{n}</Text>
@@ -612,16 +603,31 @@ function MenuContent({
   return (
     // nativeID = id บนเว็บ — ลากรีเฟรช (PullToRefresh) ไม่จับนิ้วที่อยู่ในเมนู ไม่งั้นเมนูเลื่อนลงตามนิ้ว
     <ScrollView nativeID="side-menu" style={{ flex: 1 }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").map((g) => {
-            const items = g.items
-              .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
-              .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
-              .filter((it) => !isAreaTeam(user) || AREA_TEAM_MENU.has(it.key))
-              .filter((it) => canOpenScreen(user, it.screen))
-              .filter((it) => !it.superAdmin || user?.superAdmin)
-              .filter((it) => !it.reviewer || canReviewClaims(user));
-            if (!items.length) return null;
+          {GROUPS.filter((g) => !g.admin || user?.role === "ADMIN")
+            .map((g) => ({
+              g,
+              items: g.items
+                .filter((it) => !it.roles || (user && it.roles.includes(user.role)))
+                .filter((it) => !(user?.partsAdmin && PARTS_ADMIN_HIDDEN.has(it.key)))
+                .filter((it) => !isAreaTeam(user) || AREA_TEAM_MENU.has(it.key))
+                .filter((it) => canOpenScreen(user, it.screen))
+                .filter((it) => !it.superAdmin || user?.superAdmin)
+                .filter((it) => !it.reviewer || canReviewClaims(user)),
+            }))
+            .filter(({ items }) => items.length > 0)
+            .map(({ g, items }, i, shown) => {
+            /**
+             * หัวข้อ "การจัดการ" คั่นก่อนกลุ่มรอง (อะไหล่ · หน้างาน · รถ · เอกสาร · ผู้ดูแลระบบ) — หน้าตาใหม่ พ.ย. 69
+             * งานซ่อมคืองานประจำวัน กลุ่มอื่นเปิดเป็นครั้งคราว · แถบไอคอน (เมนูหด) ไม่มีหัวข้อ
+             */
+            const manageHead = !rail && i > 0 && shown[i - 1].g.slug === "work" && g.slug !== "work";
             return (
+              <React.Fragment key={g.title}>
+              {manageHead ? (
+                <View style={styles.section}>
+                  <Text style={styles.sectionText}>การจัดการ</Text>
+                </View>
+              ) : null}
               <MenuGroup
                 key={g.title}
                 title={g.title}
@@ -636,6 +642,7 @@ function MenuContent({
                 onPick={onPick}
                 rail={rail}
               />
+              </React.Fragment>
             );
           })}
           {BUILD_AT && !rail ? (
@@ -1023,8 +1030,9 @@ const styles = StyleSheet.create({
   itemOn: { backgroundColor: colors.primary, ...shadow.raised },
   label: { fontSize: 15, lineHeight: 22, fontWeight: "600", color: colors.sideInk },
   labelOn: { color: "#fff" },
-  labelEn: { fontSize: 11, lineHeight: 16, color: colors.sideDim },
-  labelEnOn: { color: "rgba(255,255,255,0.88)" },
+  // หัวข้อคั่นกลุ่มงานซ่อมกับกลุ่มรอง — เส้นบางด้านบน ตัวเล็กสีจางกว่าหัวกลุ่ม
+  section: { marginTop: spacing.md, paddingTop: spacing.md, paddingHorizontal: spacing.md, paddingBottom: 2, borderTopWidth: 1, borderTopColor: colors.sideLine },
+  sectionText: { fontSize: 11, lineHeight: 16, fontWeight: "800", color: colors.sideDim, letterSpacing: 1 },
   badge: {
     minWidth: 22,
     height: 22,

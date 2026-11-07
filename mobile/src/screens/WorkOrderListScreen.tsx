@@ -188,7 +188,14 @@ type Role = "ADMIN" | "SUPERVISOR" | "EMPLOYEE";
 
 /** ใบด่วนที่ยังค้าง — ดึงขึ้นบนสุดและมีออร่า (ใบที่ปิดแล้วไม่มี stageActor) */
 const isHot = (r: WorkOrderRow) => r.priority === "URGENT" && r.stageActor !== null;
-type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL"; label: string };
+/**
+ * แถวที่ไม่ใช่ใบงานในรายการ — หัวกลุ่ม (ด่วน/ทั่วไป) กับแถบเลขหน้าท้ายตาราง
+ * แถบเลขหน้าใช้รูปเดียวกับหัวกลุ่ม ("sep" in it) ทุกที่ที่หา "แถวใบงาน" ในรายการจึงข้ามมันให้เอง
+ */
+type ListItem = WorkOrderRow | { sep: "URGENT" | "NORMAL" | "PAGER"; label: string };
+/** หน้าตาใหม่ พ.ย. 69 (จอคอม): กลุ่มด่วนขึ้น 3 ใบแรก + "ดูทั้งหมด" · งานทั่วไปแบ่งหน้าละ 25 ใบ */
+const HOT_PEEK = 3;
+const PAGE_SIZE = 25;
 /**
  * serverNow + cutoff = นาฬิกาเซิร์ฟเวอร์และเวลาปิดนัดงานพรุ่งนี้ตอนตอบ — ป้าย "วันนี้/พรุ่งนี้" และนับถอยหลังของใบรอนัดวันเดินจากค่านี้
  * ไม่ใช่นาฬิกามือถือ (มือถือตั้งเวลาผิดเป็นเรื่องปกติ) · เซิร์ฟเวอร์รุ่นเก่าไม่ส่ง = ว่าง
@@ -297,11 +304,11 @@ function apptBucket(r: WorkOrderRow) {
  */
 type QuickKey = "urgent" | "partsOut" | "rolledBack" | "apptLate" | "stale" | "unassigned" | "payLate";
 const STALE_DAYS = 3;
-const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow) => boolean }[] = [
-  { key: "urgent", label: "ด่วน", dot: colors.danger, test: isHot },
-  { key: "partsOut", label: "อะไหล่หมด", dot: colors.dangerInk, test: (r) => r.stageActor !== null && !!r.partsOut },
+const QUICK: { key: QuickKey; label: string; dot: string; tone?: "bad" | "warn"; test: (r: WorkOrderRow) => boolean }[] = [
+  { key: "urgent", label: "ด่วน", dot: colors.danger, tone: "bad", test: isHot },
+  { key: "partsOut", label: "อะไหล่หมด", dot: colors.warning, tone: "warn", test: (r) => r.stageActor !== null && !!r.partsOut },
   { key: "rolledBack", label: "ย้อนขั้น", dot: colors.rollback, test: (r) => r.stageActor !== null && !!r.rolledBackFrom },
-  { key: "apptLate", label: "เลยวันนัด", dot: colors.warningInk, test: (r) => apptOf(r)?.rel?.tone === "late" },
+  { key: "apptLate", label: "เลยวันนัด", dot: colors.danger, tone: "bad", test: (r) => apptOf(r)?.rel?.tone === "late" },
   // นับจากวันที่เข้าขั้นปัจจุบัน แบบเดียวกับ "ค้าง n วัน" ในรายการ — ใบเก่าที่เพิ่งขยับไม่ได้ถูกลืม
   { key: "stale", label: `ค้างขั้นเดิมเกิน ${STALE_DAYS} วัน`, dot: colors.textMuted, test: (r) => r.stageActor !== null && stuckDays(r.stageSince) > STALE_DAYS },
   { key: "unassigned", label: "ยังไม่มอบหมายช่าง", dot: colors.textFaint, test: (r) => r.stageActor !== null && !r.assignedTeam && !r.assignedToName },
@@ -309,7 +316,7 @@ const QUICK: { key: QuickKey; label: string; dot: string; test: (r: WorkOrderRow
    * รอลูกค้าจ่ายเงินเกินเส้น (เจ้าของงานเลือก 5 พ.ย. 69 — "ดูเฉพาะใบที่ควรตามลูกค้า") · เส้นมาจากเซิร์ฟเวอร์ (label ตั้งใน quickItems)
    * ขึ้นเฉพาะรายการที่มีใบรอลูกค้าจ่ายเงิน — ช่าง/หัวหน้าภาคที่ไม่เคยมีใบขั้นนี้ไม่ต้องเห็นชิป 0 เพิ่มอีกอัน
    */
-  { key: "payLate", label: "รอจ่ายเกินกำหนด", dot: colors.dangerInk, test: (r) => !!r.payWait?.over },
+  { key: "payLate", label: "รอจ่ายเกินกำหนด", dot: colors.danger, tone: "bad", test: (r) => !!r.payWait?.over },
 ];
 
 /**
@@ -418,7 +425,10 @@ function InboxSegments({
   regions,
   region,
   onRegion,
+  fit,
 }: {
+  /** จอคอม: กว้างพอดีสองปุ่ม ชิดซ้าย ไม่เต็มแถว */
+  fit?: boolean;
   seg: "cm" | "it";
   onSeg: (s: "cm" | "it") => void;
   cmLabel: string;
@@ -468,7 +478,7 @@ function InboxSegments({
   };
   return (
     <View style={styles.segWrap}>
-      <View style={styles.segRow}>
+      <View style={[styles.segRow, fit && styles.segRowFit]}>
         {segBtn("cm", cmLabel, cm)}
         {segBtn("it", itLabel, it)}
       </View>
@@ -952,6 +962,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       key: q.key,
       label: q.key === "payLate" && pay ? `รอจ่ายเกิน ${pay.alertDays} วัน` : q.label,
       dot: q.dot,
+      tone: q.tone,
       n: base.filter(q.test).length,
     }));
   }, [rows, tabRows, byOwner, byType, byCols, quick]);
@@ -1008,21 +1019,47 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
   const visible: WorkOrderRow[] = payMode ? payRows : shown;
 
   /**
-   * แถวคั่น "ด่วน (n)" / "ปกติ (n)" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน
-   * ไม่มีใบด่วนก็ไม่มีแถวคั่นเลย รายการหน้าตาเหมือนเดิม
+   * หัวกลุ่ม "กลุ่มงานด่วนพิเศษ" / "งานทั่วไป" — ให้เห็นว่ากลุ่มด่วนจบตรงไหน (จอคอมวาดเป็นการ์ดแยกกลุ่มละใบ)
+   * ไม่มีใบด่วนก็ไม่มีหัวกลุ่มเลย รายการหน้าตาเหมือนเดิม
+   *
+   * จอคอม (หน้าตาใหม่ พ.ย. 69): กลุ่มด่วนขึ้น 3 ใบแรก กด "ดูทั้งหมด" ค่อยกาง — วันที่ด่วนเยอะงานทั่วไปไม่ถูกดันจนมองไม่เห็น
+   * งานทั่วไปแบ่งหน้าละ 25 ใบ มีแถบเลขหน้าท้ายตาราง · มือถือ (การ์ด) เลื่อนยาวต่อกันเหมือนเดิม
+   * nums = เลขลำดับในกลุ่ม (กล่องเลขหน้าแถว) — ต่อเนื่องข้ามหน้า (หน้า 2 เริ่ม 26)
    */
-  const items = useMemo<ListItem[]>(() => {
+  const [hotAll, setHotAll] = useState(false);
+  const [page, setPage] = useState(1);
+  const paged = table && !payMode;
+  const hot = useMemo(() => shown.filter(isHot).length, [shown]);
+  const pages = paged ? Math.max(1, Math.ceil((shown.length - hot) / PAGE_SIZE)) : 1;
+  const pageNow = Math.min(page, pages);
+  const { items, nums } = useMemo(() => {
+    const nums = new Map<number, number>();
     // แท็บรอเงินไม่แบ่งด่วน/ปกติ — เรียงรอนานสุดอย่างเดียว (ดู payMode)
-    if (payMode) return payRows;
-    const hot = shown.filter(isHot).length;
-    if (!hot) return shown;
-    return [
-      { sep: "URGENT", label: `ด่วน (${hot})` },
-      ...shown.slice(0, hot),
-      ...(shown.length > hot ? [{ sep: "NORMAL" as const, label: `ปกติ (${shown.length - hot})` }] : []),
-      ...shown.slice(hot),
-    ];
-  }, [shown, payMode, payRows]);
+    if (payMode) return { items: payRows as ListItem[], nums };
+    const hotRows = shown.slice(0, hot);
+    const peek = paged && !hotAll ? hotRows.slice(0, HOT_PEEK) : hotRows;
+    const rest = shown.slice(hot);
+    const from = paged ? (pageNow - 1) * PAGE_SIZE : 0;
+    const pageRows = paged ? rest.slice(from, from + PAGE_SIZE) : rest;
+    peek.forEach((r, i) => nums.set(r.id, i + 1));
+    pageRows.forEach((r, i) => nums.set(r.id, from + i + 1));
+    const pager: ListItem[] = paged && rest.length > PAGE_SIZE ? [{ sep: "PAGER", label: "" }] : [];
+    if (!hot) return { items: [...pageRows, ...pager], nums };
+    return {
+      items: [
+        { sep: "URGENT", label: `กลุ่มงานด่วนพิเศษ (${hot} ใบ)` },
+        ...peek,
+        ...(rest.length ? [{ sep: "NORMAL" as const, label: `งานทั่วไป (${rest.length} ใบ)` }] : []),
+        ...pageRows,
+        ...pager,
+      ] as ListItem[],
+      nums,
+    };
+  }, [shown, hot, payMode, payRows, paged, hotAll, pageNow]);
+  /** เปลี่ยนแท็บ/ตัวกรอง/คำค้น = เริ่มหน้า 1 — ไม่ผูกกับ rows ตรง ๆ เพราะรายการรีเฟรชเองเป็นระยะ ไม่ควรเด้งกลับหน้าแรก */
+  useEffect(() => {
+    setPage(1);
+  }, [filter, seg, settledSearch, quick, colFilters, colSort, mineOnly, prefs]);
 
   /**
    * สอนการใช้งาน (หัวหน้าภาค/แอดมิน "ใบงานซ่อม"): เปิดใบงานให้ดูหนึ่งใบ — แค่เปิดดู ไม่บันทึกอะไร
@@ -1359,6 +1396,24 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
       feedback.toast("info", "ล้างตัวกรองให้แล้ว — ใบที่อัปเดตถูกตัวกรองซ่อนอยู่");
       return;
     }
+    /**
+     * ใบที่ต้องพาไปดูถูกพับอยู่ (เกิน 3 ใบแรกของกลุ่มด่วน) หรืออยู่หน้าอื่น — กาง/พลิกหน้าให้ก่อน
+     * แล้วรอบถัดไปของ effect นี้ (items เปลี่ยน) ค่อยติดป้าย เลื่อน และกระพริบ
+     */
+    if (paged && present.length) {
+      const at = Math.min(...present.map((id) => shown.findIndex((r) => r.id === id)).filter((i) => i >= 0));
+      if (Number.isFinite(at)) {
+        if (at < hot && !hotAll && at >= HOT_PEEK) {
+          setHotAll(true);
+          return;
+        }
+        const want = at >= hot ? Math.floor((at - hot) / PAGE_SIZE) + 1 : pageNow;
+        if (want !== pageNow) {
+          setPage(want);
+          return;
+        }
+      }
+    }
     jumpTarget.current = null;
     if (!present.length) return;
     setMarked((m) => {
@@ -1374,7 +1429,22 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
     setTimeout(() => aim(true), 80);
     // เล็งซ้ำหลังการ์ดที่เพิ่งวาดวัดความสูงจริงเสร็จ — ระหว่างทางใช้ความสูงเฉลี่ย ใบท้ายรายการยาวจึงคลาดไปได้หลายใบ
     setTimeout(() => aim(false), 1200);
-  }, [rows, loading, filter, prefs.supTab, supTabs, visible, items, jumpTick, blink]);
+  }, [rows, loading, filter, prefs.supTab, supTabs, visible, items, jumpTick, blink, paged, shown, hot, hotAll, pageNow]);
+  /** กดเลขหน้า — เลื่อนขึ้นไปหัวกลุ่มงานทั่วไป (ไม่มีกลุ่มด่วน = บนสุดของรายการ) ไม่ทิ้งคนไว้ท้ายตาราง */
+  const pageJump = useRef(false);
+  useEffect(() => {
+    if (!pageJump.current) return;
+    pageJump.current = false;
+    const index = items.findIndex((it) => "sep" in it && it.sep === "NORMAL");
+    setTimeout(() => {
+      if (index > 0) listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: true });
+      else listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }, 60);
+  }, [pageNow, items]);
+  const goPage = (p: number) => {
+    pageJump.current = true;
+    setPage(Math.max(1, Math.min(pages, p)));
+  };
   /** การ์ดยังไม่ถูกวาด (FlatList วาดเฉพาะแถวใกล้จอ) — กระโดดไปตำแหน่งประมาณก่อน แล้วค่อยเล็งใหม่ */
   const scrollTries = useRef(0);
   const onScrollToIndexFailed = (info: { index: number; averageItemLength: number }) => {
@@ -1598,6 +1668,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
             </View>
           ) : null}
           <View style={{ flex: 1 }} />
+          {/* "เฉพาะที่มอบหมายให้ฉัน" ย้ายมาอยู่แถวเดียวกับปุ่มของหน้า (หน้าตาใหม่ พ.ย. 69) — แถวแท็บเหลือแต่แท็บ · จอแคบอยู่ในหน้าต่างตัวกรองเหมือนเดิม */}
+          {compact || isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
           {/* นำเข้าใบแจ้งซ่อมจากไฟล์ฟอร์ม COCO — แอดมินเท่านั้น (เจ้าของงานขอ ต.ค. 69) · บนเว็บ เลือกไฟล์จากคอมพิวเตอร์ */}
           {user?.role === "ADMIN" && !user.partsAdmin && Platform.OS === "web" ? (
             <TouchableOpacity
@@ -1627,20 +1699,7 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
         </View>
         {docked ? <Text style={styles.pageSub}>ป้ายสถานะบอกว่าใบงานกำลังรอใคร — ใบที่ถึงคิวคุณอยู่ในกล่องงาน</Text> : null}
       </View>
-      <ViewTabs
-        tabs={FILTERS.filter((f) => f.value !== "AWAITING_PAYMENT" || payTabOn).map((f) => ({
-          value: f.value,
-          label: f.label,
-          // แท็บรอเงิน: ตัวเลขของเซิร์ฟเวอร์ทั้งขอบเขต + ป้ายแดง "เกิน 3 วัน n" (ตัวอย่าง) — ขึ้นตั้งแต่ยังเปิดแท็บอื่นอยู่
-          n: f.value === "AWAITING_PAYMENT" ? payTab?.total ?? counts[f.value] : counts[f.value],
-          alert: f.value === "AWAITING_PAYMENT" && payTab?.over ? `เกิน ${payTab.alertDays} วัน ${payTab.over}` : undefined,
-          dot: jumpQueue.some((g) => g.filter === f.value),
-        }))}
-        value={filter}
-        onPick={(v) => chooseFilter(v as Filter)}
-        right={compact || isAreaTeam(user) ? null : <Toggle on={mineOnly} label={MINE_LABEL} onPress={toggleMine} />}
-        testID={howtoTarget("orders.tabs").testID}
-      />
+      {/* งาน CM | งาน IT อยู่เหนือแท็บ กว้างพอดีปุ่ม (หน้าตาใหม่ พ.ย. 69) — จอแคบยังเต็มแถว */}
       {segOn && !loading && !error ? (
         <InboxSegments
           seg={seg}
@@ -1652,8 +1711,22 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           regions={seg === "it" ? itRegions : []}
           region={region}
           onRegion={setItRegion}
+          fit={!compact}
         />
       ) : null}
+      <ViewTabs
+        tabs={FILTERS.filter((f) => f.value !== "AWAITING_PAYMENT" || payTabOn).map((f) => ({
+          value: f.value,
+          label: f.label,
+          // แท็บรอเงิน: ตัวเลขของเซิร์ฟเวอร์ทั้งขอบเขต + ป้ายแดง "เกิน 3 วัน n" (ตัวอย่าง) — ขึ้นตั้งแต่ยังเปิดแท็บอื่นอยู่
+          n: f.value === "AWAITING_PAYMENT" ? payTab?.total ?? counts[f.value] : counts[f.value],
+          alert: f.value === "AWAITING_PAYMENT" && payTab?.over ? `เกิน ${payTab.alertDays} วัน ${payTab.over}` : undefined,
+          dot: jumpQueue.some((g) => g.filter === f.value),
+        }))}
+        value={filter}
+        onPick={(v) => chooseFilter(v as Filter)}
+        testID={howtoTarget("orders.tabs").testID}
+      />
       {supTabs && !loading && !error ? (
         <View style={styles.supTabs} {...howtoTarget("orders.supTabs")}>
           {SUP_TABS.map((t) => {
@@ -1683,8 +1756,18 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           })}
         </View>
       ) : null}
-      <View style={styles.toolbar}>
-        <View style={styles.searchBox} {...howtoTarget("orders.search")}>
+      {payMode && !loading && !error ? (
+        <PayChips items={payChipItems} on={payChip} onPick={setPayChip} alertDays={payAlert} />
+      ) : !loading && !error && rows.length > 0 ? (
+        // ชิปต้องรีบดูขึ้นก่อนช่องค้นหา มีเส้นคั่นจากแท็บ (หน้าตาใหม่ พ.ย. 69) — เรื่องที่ต้องรีบเห็นก่อนเครื่องมือค้น
+        <View style={styles.quickWrap} {...howtoTarget("orders.quick")}>
+          <View style={styles.quickLine} />
+          <QuickChips items={quickItems} on={quick} toggle={toggleQuick} wrap={!compact} />
+        </View>
+      ) : null}
+      {/* ค้นหา + ตัวกรอง อยู่ในกรอบการ์ดเดียวกันบนจอคอม (หน้าตาใหม่ พ.ย. 69) */}
+      <View style={[styles.toolbar, !compact && styles.toolbarCard]}>
+        <View style={[styles.searchBox, !compact && styles.searchBoxIn]} {...howtoTarget("orders.search")}>
           <Ionicons name="search" size={16} color={colors.textFaint} />
           <TextInput
             style={styles.searchInput}
@@ -1714,13 +1797,6 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           </>
         )}
       </View>
-      {payMode && !loading && !error ? (
-        <PayChips items={payChipItems} on={payChip} onPick={setPayChip} alertDays={payAlert} />
-      ) : !loading && !error && rows.length > 0 ? (
-        <View style={styles.quickWrap} {...howtoTarget("orders.quick")}>
-          <QuickChips items={quickItems} on={quick} toggle={toggleQuick} wrap={!compact} />
-        </View>
-      ) : null}
       {!loading && !error ? (
         <View style={styles.activeWrap}>
           <ActiveBar shown={visible.length} total={tabRows.length} tags={activeTags} onClearAll={clearAll} />
@@ -1829,7 +1905,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
                   <PayTableHead />
                 </View>
-              ) : table && !status ? (
+              ) : table && !status && !hot ? (
+                // มีกลุ่มด่วน = ตารางแยกการ์ดตามกลุ่ม หัวคอลัมน์อยู่ในหัวกลุ่มแต่ละใบแทน (ดู groupCard)
                 <View style={styles.tableTop} onLayout={(e) => setTableW(Math.round(e.nativeEvent.layout.width))}>
                   <TableHead
                     values={colValues}
@@ -1877,20 +1954,63 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
                 ) : null}
                 {flash.has(item.id) ? <Blink radius={table ? 0 : radius.lg} /> : null}
               </View>
+            ) : table && "sep" in item && item.sep !== "PAGER" ? (
+              /*
+                หัวกลุ่ม = หัวการ์ดของกลุ่ม (หน้าตาใหม่ พ.ย. 69): ชื่อกลุ่ม · แสดงกี่ใบ · ดูทั้งหมด แล้วตามด้วยหัวคอลัมน์ของกลุ่มนั้น
+                หัวคอลัมน์ทุกใบคุมตัวกรองชุดเดียวกัน — กรองจากการ์ดไหนก็กรองทั้งตาราง
+              */
+              <View
+                style={[styles.tableTop, item.sep === "NORMAL" && styles.groupGap]}
+                onLayout={item.sep === "URGENT" ? (e) => setTableW(Math.round(e.nativeEvent.layout.width)) : undefined}
+              >
+                <View style={styles.groupHead} accessibilityLabel={`กลุ่ม ${item.label}`}>
+                  <View style={[styles.groupDot, item.sep === "URGENT" && styles.groupDotHot]} />
+                  <Text style={styles.groupTitle}>{item.label}</Text>
+                  <Text style={styles.groupSub}>
+                    |{" "}
+                    {item.sep === "URGENT"
+                      ? hot > HOT_PEEK && !hotAll
+                        ? `แสดง ${HOT_PEEK} จากทั้งหมด ${hot} รายการ`
+                        : `ทั้งหมด ${hot} รายการ`
+                      : `เรียง: ${pickedLabel(sortGroup)}`}
+                  </Text>
+                  <View style={{ flex: 1 }} />
+                  {item.sep === "URGENT" && hot > HOT_PEEK ? (
+                    <TouchableOpacity
+                      style={styles.groupMore}
+                      onPress={() => setHotAll((v) => !v)}
+                      accessibilityLabel={hotAll ? "ย่อกลุ่มด่วนเหลือ 3 ใบ" : `ดูใบด่วนทั้งหมด ${hot} ใบ`}
+                    >
+                      <Text style={styles.groupMoreText}>{hotAll ? "ย่อกลับ" : `ดูทั้งหมด ${hot}`}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <Text style={styles.groupSort}>
+                    {item.sep === "URGENT" ? "จัดเรียงตามความเร่งด่วน" : pages > 1 ? `หน้า ${pageNow} จาก ${pages}` : ""}
+                  </Text>
+                </View>
+                <TableHead
+                  values={colValues}
+                  filters={colFilters}
+                  sort={colSort}
+                  onFilter={(key, next) => setColFilters((f) => ({ ...f, [key]: next ?? undefined }))}
+                  onSort={(key, dir) => setColSort(dir ? { key, dir } : null)}
+                />
+              </View>
             ) : table ? (
-              // ตารางเป็นกรอบเดียวที่ต่อกันจากหัวคอลัมน์ลงมาทีละแถว — หัวหน้าอยู่ในรายการเดียวกันแล้ว
-              // จะใช้ทั้งรายการเป็นกรอบเหมือนเดิมไม่ได้ ไม่งั้นช่องค้นหาและตัวกรองไปอยู่ในกรอบตารางด้วย
-              <View style={[styles.tableMid, index === items.length - 1 && styles.tableBottom]}>
+              // แถวของการ์ดกลุ่ม — แถวสุดท้ายก่อนหัวกลุ่มถัดไป (หรือท้ายรายการ) ปิดมุมล่างของการ์ด
+              <View
+                style={[
+                  styles.tableMid,
+                  (index === items.length - 1 || ("sep" in (items[index + 1] ?? {}) && (items[index + 1] as { sep: string }).sep !== "PAGER")) &&
+                    styles.tableBottom,
+                ]}
+              >
                 {"sep" in item ? (
-                  <View style={[styles.sepRow, item.sep === "URGENT" && styles.sepUrgent]}>
-                    <Text style={[styles.sepText, item.sep === "URGENT" && styles.sepTextUrgent]}>
-                      {item.sep === "URGENT" ? "● " : ""}
-                      {item.label}
-                    </Text>
-                  </View>
+                  <Pager page={pageNow} pages={pages} total={shown.length - hot} size={PAGE_SIZE} onPick={goPage} />
                 ) : (
                   <WorkOrderTableRow
                     row={item}
+                    num={nums.get(item.id)}
                     stripe={index % 2 === 1}
                     flash={flash.has(item.id)}
                     mark={marked.get(item.id)}
@@ -2387,6 +2507,7 @@ function Blink({ radius: r = 0 }: { radius?: number }) {
 
 const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   row,
+  num,
   last,
   stripe,
   flash,
@@ -2396,6 +2517,8 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
   onPress,
 }: {
   row: WorkOrderRow;
+  /** ลำดับในกลุ่ม (หน้าตาใหม่ พ.ย. 69) — กล่องเลขแทนไอคอนใบงาน บอกว่าไล่ถึงใบที่เท่าไรแล้ว */
+  num?: number;
   /** นาฬิกาเซิร์ฟเวอร์ + เวลาปิดนัด — ส่งมาเฉพาะใบรอนัดวัน (แถวอื่นไม่วาดใหม่ทุกครั้งที่รายการโหลด) */
   serverNow?: string;
   cutoff?: Cutoff;
@@ -2434,8 +2557,12 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
       {/* แถบสีซ้ายแถว — กวาดตาลงทั้งตารางแล้วเห็นว่าค้างที่ใครโดยไม่ต้องอ่านป้าย · รอลูกค้าจ่ายเกินเส้นเป็นแดง */}
       <View style={[styles.rowBar, hover && styles.rowBarHover, { backgroundColor: row.payWait?.over ? colors.danger : tone.fg }]} />
       <View style={[styles.colWo, styles.cellWo]}>
-        <View style={styles.rowIcon}>
-          <Ionicons name="clipboard-outline" size={18} color={colors.primaryInk} />
+        <View style={[styles.rowIcon, num !== undefined && styles.rowNumBox]}>
+          {num !== undefined ? (
+            <Text style={styles.rowNum}>{String(num).padStart(2, "0")}</Text>
+          ) : (
+            <Ionicons name="clipboard-outline" size={18} color={colors.primaryInk} />
+          )}
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={styles.codeRow}>
@@ -2494,6 +2621,7 @@ const WorkOrderTableRow = React.memo(function WorkOrderTableRow({
         </View>
       </View>
       <View style={styles.colAction}>
+        {/* ปุ่มดูแบบเดิม (พื้นฟ้าอ่อน) — ลองทำเป็นปุ่มทึบกรมท่าตามแบบใหม่แล้ว เจ้าของงานให้คงแบบเดิม (6 พ.ย. 69) */}
         <View style={styles.viewBtn}>
           <Ionicons name="document-text-outline" size={16} color={colors.primaryInk} />
           <Text style={styles.viewBtnText}>ดู</Text>
@@ -2637,6 +2765,53 @@ const WorkOrderCard = React.memo(function WorkOrderCard({
 });
 
 /**
+ * แถบเลขหน้าท้ายตาราง (หน้าตาใหม่ พ.ย. 69) — "กำลังแสดงแถวที่ 1 ถึง 25 จาก 505 รายการ" · ก่อนหน้า 1 2 3 … 21 ถัดไป
+ * นับเฉพาะงานทั่วไป — กลุ่มด่วนอยู่บนสุดทุกหน้า
+ */
+function Pager({ page, pages, total, size, onPick }: { page: number; pages: number; total: number; size: number; onPick: (p: number) => void }) {
+  const from = (page - 1) * size + 1;
+  const to = Math.min(page * size, total);
+  const nums = [...new Set([1, page - 1, page, page + 1, pages])].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const cells: (number | "gap")[] = [];
+  nums.forEach((n, i) => {
+    if (i && n - nums[i - 1] > 1) cells.push("gap");
+    cells.push(n);
+  });
+  const btn = (label: string, target: number, opts: { on?: boolean; off?: boolean; a11y?: string } = {}) => (
+    <TouchableOpacity
+      key={`${label}-${target}`}
+      style={[styles.pgBtn, opts.on && styles.pgBtnOn, opts.off && styles.pgBtnOff]}
+      onPress={() => onPick(target)}
+      disabled={opts.off || opts.on}
+      accessibilityLabel={opts.a11y ?? `หน้า ${target}`}
+      aria-current={opts.on ? "page" : undefined}
+    >
+      <Text style={[styles.pgText, opts.on && styles.pgTextOn, opts.off && styles.pgTextOff]}>{label}</Text>
+    </TouchableOpacity>
+  );
+  return (
+    <View style={styles.pager}>
+      <Text style={styles.pagerText}>
+        กำลังแสดงแถวที่ <Text style={styles.pagerB}>{from.toLocaleString("th-TH")}</Text> ถึง{" "}
+        <Text style={styles.pagerB}>{to.toLocaleString("th-TH")}</Text> จาก <Text style={styles.pagerB}>{total.toLocaleString("th-TH")}</Text> รายการ
+      </Text>
+      <View style={{ flex: 1 }} />
+      {btn("ก่อนหน้า", page - 1, { off: page <= 1, a11y: "หน้าก่อนหน้า" })}
+      {cells.map((c, i) =>
+        c === "gap" ? (
+          <Text key={`gap-${i}`} style={styles.pgGap}>
+            …
+          </Text>
+        ) : (
+          btn(String(c), c, { on: c === page })
+        )
+      )}
+      {btn("ถัดไป", page + 1, { off: page >= pages, a11y: "หน้าถัดไป" })}
+    </View>
+  );
+}
+
+/**
  * หัวข้อบนสุดของกล่องงาน (เจ้าของงานเลือก ต.ค. 69)
  *
  * หัวหน้าภาค: "รอนัดวัน" (3 ชม. ก่อนปิดนัดพรุ่งนี้) · "ออกงานวันนี้" — ลูกค้าคอนเฟิร์มแล้ว รอรับทราบปล่อยงาน ไม่ให้ปนกับใบอื่น
@@ -2679,7 +2854,8 @@ function InboxAttention({
    * "เลยนัด" ของแอดมินอยู่ในหัวข้อเดิมข้างล่าง (overdue ของแถวที่เห็น) ไม่ซ้ำสองที่
    */
   const asks = adminCut && allRows ? adminGroups(allRows, now, cutoff).asks : null;
-  const groups: { key: string; title: string; hint: string; tone: "sup" | "bad"; items: WorkOrderRow[] }[] = [];
+  /** name + n วาดแยกชิ้นบนแถบ (หน้าตาใหม่ พ.ย. 69) · title คือชื่อเต็มที่โปรแกรมอ่านจอ/เทสต์ใช้ — ข้อความเดิม */
+  const groups: { key: string; title: string; name: string; n: number; hint: string; tone: "sup" | "bad" | "warn"; items: WorkOrderRow[] }[] = [];
   /**
    * หัวหน้าภาค: "รอนัดวัน" (3 ชม. ก่อนปิดนัดพรุ่งนี้) · "ออกงานวันนี้" — ตัวสร้างเดียวกับงานของฉันวันนี้ นับตรงกันทุกตัวอักษร
    * "วันนี้" ตามนาฬิกาเซิร์ฟเวอร์ (มือถือตั้งวันผิดต้องไม่บอกว่าออกงานวันนี้)
@@ -2692,8 +2868,11 @@ function InboxAttention({
       groups.push({
         key: "orphan",
         title: `ไม่มีคนรับ ${orphan.length}`,
+        name: "ไม่มีคนรับ",
+        n: orphan.length,
         hint: "ไม่มีหัวหน้าภาคดูแลสาขาเหล่านี้ — แต่ละแถวบอกว่าต้องไปแก้ที่ไหน · แอดมินกดทำแทนได้",
-        tone: "bad",
+        // เหลือง ไม่ใช่แดง — ต้องแก้ที่ทะเบียนสาขา/ภาค ไม่ใช่ลูกค้ารออยู่ (แดงเก็บไว้ให้เลยนัด)
+        tone: "warn",
         // เรียงตามเหตุผล ให้ใบที่แก้ที่เดียวกันอยู่ติดกัน
         items: [...orphan].sort((a, b) => (a.orphanReason ?? "").localeCompare(b.orphanReason ?? "", "th")),
       });
@@ -2701,6 +2880,8 @@ function InboxAttention({
       groups.push({
         key: "overdue",
         title: `เลยนัด ${overdue.length}`,
+        name: "เลยกำหนดนัดหมาย",
+        n: overdue.length,
         // ใบที่ค้างขั้นโอน/เบิกคลังอื่นก็มาอยู่ที่นี่ (ขั้นของหัวหน้าภาค) — แอดมินเลื่อนวันได้ แต่ของต้องตามจากหัวหน้าภาค
         // รวมใบรอปล่อยงาน/ส่งช่างตรวจที่วันนัดผ่านแล้วด้วย (pastRelease ฝั่งเซิร์ฟเวอร์) — ประโยคเดียวกับงานของฉันวันนี้
         hint: PAST_GROUP_HINT,
@@ -2726,25 +2907,36 @@ function InboxAttention({
         return (
         <View
           key={g.key}
-          style={[styles.attn, g.tone === "bad" ? styles.attnBad : styles.attnSup]}
+          style={[styles.attn, g.tone === "bad" ? styles.attnBad : g.tone === "warn" ? styles.attnWarn : styles.attnSup]}
           accessibilityLabel={`หัวข้อ ${g.title}`}
         >
-          {/* ทั้งแถบหัวกดย่อ/ขยายได้ ไม่ใช่แค่ปุ่มเล็กมุมขวา — มือถือกดโดนง่าย */}
+          {/*
+            แถบเตี้ยบรรทัดเดียว (หน้าตาใหม่ พ.ย. 69): ไอคอน · ชื่อ · จำนวน · คำอธิบาย · ขยายดู
+            ทั้งแถบกดย่อ/ขยายได้ ไม่ใช่แค่ปุ่มเล็กมุมขวา — มือถือกดโดนง่าย
+          */}
           <TouchableOpacity
             style={styles.attnHead}
             onPress={() => onFold(g.key)}
             accessibilityLabel={`${shut ? "ขยาย" : "ย่อ"}หัวข้อ ${g.title}`}
             aria-expanded={!shut}
           >
-            <Text style={[styles.attnTitle, styles.attnTitleFlex, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleSup]}>
-              {g.title}
+            <View style={[styles.attnIcon, g.tone === "bad" ? styles.attnIconBad : styles.attnIconWarn]}>
+              <Ionicons name={g.tone === "bad" ? "close" : "alert"} size={14} color={g.tone === "bad" ? colors.dangerInk : colors.warningInk} />
+            </View>
+            <Text style={[styles.attnTitle, g.tone === "bad" ? styles.attnTitleBad : g.tone === "warn" ? styles.attnTitleWarn : styles.attnTitleSup]}>
+              {g.name}
+            </Text>
+            <View style={[styles.attnN, g.tone === "bad" ? styles.attnNBad : styles.attnNWarn]}>
+              <Text style={[styles.attnNText, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleWarn]}>{g.n} งาน</Text>
+            </View>
+            <Text style={styles.attnHint} numberOfLines={1}>
+              • {g.hint}
             </Text>
             <View style={styles.attnFold}>
-              <Text style={styles.attnFoldText}>{shut ? "ขยาย" : "ย่อ"}</Text>
-              <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={16} color={colors.textMuted} />
+              <Text style={[styles.attnFoldText, g.tone === "bad" ? styles.attnTitleBad : styles.attnTitleWarn]}>{shut ? "ขยายดู" : "ย่อ"}</Text>
+              <Ionicons name={shut ? "chevron-down" : "chevron-up"} size={15} color={g.tone === "bad" ? colors.dangerInk : colors.warningInk} />
             </View>
           </TouchableOpacity>
-          {shut ? null : <Text style={styles.attnHint}>{g.hint}</Text>}
           {shut
             ? null
             : g.items.map((r) => (
@@ -2835,11 +3027,13 @@ function PayChips({
 
 const styles = StyleSheet.create({
   tbSep: { width: 1, height: 26, backgroundColor: colors.border, marginHorizontal: 2 },
-  quickWrap: { paddingTop: spacing.md },
+  quickWrap: { paddingTop: spacing.md, gap: spacing.sm },
+  quickLine: { height: 1, backgroundColor: colors.border, marginHorizontal: spacing.lg },
   activeWrap: { paddingTop: spacing.sm },
   // สวิตช์ "งาน CM | งาน IT" — กล่องแบ่งสองช่องเต็มแถว อยู่เหนือแท็บย่อย (ชั้นบนสุดของกล่องงาน)
   segWrap: { marginTop: spacing.sm, marginHorizontal: spacing.lg, gap: spacing.sm },
   segRow: { flexDirection: "row", borderRadius: radius.md, backgroundColor: colors.tile, padding: 3, gap: 3 },
+  segRowFit: { alignSelf: "flex-start", width: 420, maxWidth: "100%" },
   segBtn: {
     flex: 1,
     minWidth: 0,
@@ -2898,9 +3092,18 @@ const styles = StyleSheet.create({
   supTabNOn: { backgroundColor: colors.primarySoft },
   supTabNText: { fontSize: 12, lineHeight: 18, fontWeight: "800", color: colors.textMuted },
   supTabNTextOn: { color: colors.primaryDark },
-  attn: { borderRadius: radius.md, borderWidth: 1, padding: spacing.md, gap: 4 },
+  attn: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 4, gap: 2 },
   attnSup: { backgroundColor: colors.primarySoft, borderColor: colors.primary },
-  attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+  attnBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
+  attnWarn: { backgroundColor: colors.warningSoft, borderColor: colors.warningBorder },
+  attnIcon: { width: 22, height: 22, borderRadius: 5, alignItems: "center", justifyContent: "center" },
+  attnIconBad: { backgroundColor: colors.dangerLine },
+  attnIconWarn: { backgroundColor: colors.warningTint },
+  attnN: { borderRadius: 5, paddingHorizontal: 7 },
+  attnNBad: { backgroundColor: colors.dangerLine },
+  attnNWarn: { backgroundColor: colors.warningBorder },
+  attnNText: { fontSize: 12, lineHeight: 19, fontWeight: "700" },
+  attnTitleWarn: { color: colors.warningInk },
   payHead: { paddingHorizontal: spacing.md },
   payMark: { paddingHorizontal: spacing.md, paddingBottom: 6 },
   payChips: { paddingTop: spacing.md, marginHorizontal: spacing.lg, gap: 4 },
@@ -2924,29 +3127,18 @@ const styles = StyleSheet.create({
   payChipOff: { opacity: 0.45 },
   payChipText: { fontSize: 13.5, lineHeight: 20, color: colors.body },
   payChipN: { fontWeight: "700", fontVariant: ["tabular-nums"] },
-  attnTitle: { fontSize: 17, lineHeight: 26, fontWeight: "800" },
-  attnTitleFlex: { flex: 1, minWidth: 0 },
-  attnHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 36 },
-  attnFold: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-  },
-  attnFoldText: { fontSize: 13, fontWeight: "700", color: colors.textMuted },
+  attnTitle: { fontSize: 14, lineHeight: 21, fontWeight: "800" },
+  attnHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 34 },
+  attnFold: { flexDirection: "row", alignItems: "center", gap: 3, paddingLeft: spacing.sm },
+  attnFoldText: { fontSize: 12.5, fontWeight: "600" },
   attnTitleSup: { color: colors.primaryDark },
-  attnTitleBad: { color: colors.danger },
+  attnTitleBad: { color: colors.dangerInk },
   claimBadge: { flexDirection: "row", alignItems: "center", gap: 3, borderRadius: 999, paddingHorizontal: 7, backgroundColor: colors.roleAdminSoft, borderWidth: 1, borderColor: colors.roleAdminLine },
   claimBadgeBad: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerLine },
   claimBadgeOk: { backgroundColor: colors.successSoft, borderColor: colors.successLine },
   claimBadgeDrop: { backgroundColor: colors.rowAlt, borderColor: colors.borderStrong },
   claimBadgeText: { fontSize: 11, lineHeight: 18, fontWeight: "700", color: colors.roleAdmin },
-  attnHint: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  attnHint: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 18, color: colors.textMuted },
   attnRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6, borderTopWidth: 1, borderTopColor: colors.border },
   attnCode: { fontSize: 13.5, fontWeight: "700", color: colors.text },
   attnText: { flex: 1, minWidth: 0, fontSize: 13, color: colors.textMuted },
@@ -3013,6 +3205,18 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     flexShrink: 0,
   },
+  toolbarCard: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: 10,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+  },
+  searchBoxIn: { backgroundColor: colors.background, minHeight: 42 },
   searchBox: {
     flex: 1,
     // จอคอม: ปุ่มตัวกรองเยอะจนแถวไม่พอ ช่องค้นหาตกไปบรรทัดใหม่แทนการหดจนพิมพ์ไม่เห็น
@@ -3173,6 +3377,28 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   viewBtnText: { fontSize: 13, lineHeight: 20, fontWeight: "700", color: colors.primaryInk },
+  rowNumBox: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, borderColor: colors.primaryLine },
+  rowNum: { fontSize: 12.5, lineHeight: 18, fontWeight: "800", color: colors.primaryInk, fontVariant: ["tabular-nums"] },
+  // หัวการ์ดของกลุ่ม (หน้าตาใหม่ พ.ย. 69)
+  groupGap: { marginTop: spacing.lg },
+  groupHead: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: spacing.lg, paddingVertical: 14 },
+  groupDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textFaint },
+  groupDotHot: { backgroundColor: colors.danger },
+  groupTitle: { fontSize: 15, lineHeight: 22, fontWeight: "800", color: colors.text },
+  groupSub: { fontSize: 12, lineHeight: 18, color: colors.textFaint },
+  groupMore: { borderRadius: 8, borderWidth: 1, borderColor: colors.primaryLine, backgroundColor: colors.primarySoft, paddingHorizontal: 12, paddingVertical: 4 },
+  groupMoreText: { fontSize: 12.5, lineHeight: 19, fontWeight: "700", color: colors.primaryInk },
+  groupSort: { fontSize: 12.5, lineHeight: 19, fontWeight: "500", color: colors.textMuted },
+  pager: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.lg, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.border },
+  pagerText: { fontSize: 12.5, lineHeight: 19, color: colors.textMuted },
+  pagerB: { fontWeight: "700", color: colors.text },
+  pgBtn: { minWidth: 34, height: 32, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, alignItems: "center", justifyContent: "center" },
+  pgBtnOn: { backgroundColor: colors.navyFill, borderColor: colors.navyFill },
+  pgBtnOff: { backgroundColor: colors.background },
+  pgText: { fontSize: 12.5, lineHeight: 19, fontWeight: "600", color: colors.body, fontVariant: ["tabular-nums"] },
+  pgTextOn: { color: "#fff" },
+  pgTextOff: { color: colors.textFaint },
+  pgGap: { fontSize: 13, color: colors.textFaint, paddingHorizontal: 2 },
   pageHead: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, flexShrink: 0 },
   pageTitleRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   pageTitle: { fontSize: 24, lineHeight: 34, fontWeight: "700", color: colors.text },

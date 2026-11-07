@@ -1,7 +1,8 @@
 // ทดสอบ: แถบขั้นตอนแบบใหม่ (เจ้าของงานเลือก ต.ค. 69 รอบสอง) — โชว์เฉพาะขั้นที่ใบนี้ต้องผ่าน ไม่ใช่ทุกขั้นแล้วติดป้าย "ข้าม"
 //   · ใบเสนอราคา (สาขา D หมดประกัน) 9 ขั้น: ระบุอะไหล่ → เช็คอะไหล่ → ส่งใบเสนอราคา → รอลูกค้าจ่ายเงิน → นัดวันเข้า
 //     → เบิกอะไหล่ → คอนเฟิร์มลูกค้า → ปล่อยงาน → เข้างาน/ปิดงาน (เบิกก่อนคอนเฟิร์มลูกค้า)
-//   · จอแคบ: แถบไม่ล้นจอ เห็นชื่อขั้นปัจจุบัน ("เช็คอะไหล่") ชื่อขั้นอื่นซ่อน
+//   · จอแคบ: หน้าไม่ล้น แถบปัดซ้ายขวาได้ เห็นชื่อทุกขั้น ขั้นปัจจุบัน ("เช็คอะไหล่") อยู่ในกรอบที่เห็นตอนเปิด
+//     (เจ้าของงานเปลี่ยนจากแบบย่อ 6 พ.ย. 69 — "ใช้นิ้วเลื่อนได้ ไม่ต้องย่อ")
 //   · ใบไม่เสนอราคา (C0006) ที่ขั้นเบิก: 7 ขั้น ไม่มีขั้นเสนอราคา ไม่มีปุ่ม "ข้าม" · นัดวันแล้ว ✓ → เบิกอะไหล่ (ขั้นปัจจุบัน)
 //     → คอนเฟิร์มลูกค้าอยู่หลังเบิก · คลัง 94 ไม่มีขั้นย่อยโอน
 //   · ใบที่ของอยู่คลังอื่น: ขั้นย่อย เบิก + สั่งโอน · รอของถึง · เบิกส่งมอบ อยู่ใต้แถบ ไม่ใช่ขั้นหลัก
@@ -186,12 +187,24 @@ const { setup, visitDay } = require("./fixture");
     await open(Q.code);
     const narrow = await readBar();
     await page.locator('[aria-label="ขั้นตอนงาน"]').screenshot({ path: path.join(DIR, "so-0-narrow.png") });
-    narrow && narrow.over <= 1 ? pass("จอแคบ แถบขั้นตอนพอดีจอ ไม่ต้องเลื่อนซ้ายขวา") : fail(`แถบล้น ${narrow && narrow.over}px`);
+    narrow && narrow.over <= 1 ? pass("จอแคบ ส่วนขั้นตอนไม่ล้นหน้า (ล้นเฉพาะในแถบที่ปัดได้)") : fail(`ส่วนขั้นตอนล้น ${narrow && narrow.over}px`);
+    // กล่องที่เลื่อนแนวนอนได้ในส่วนขั้นตอน + ขั้นปัจจุบัน (ชื่อ "… · ทำอยู่") ต้องอยู่ในกรอบที่เห็นตอนเปิด
+    const swipe = await page.evaluate(() => {
+      const root = document.querySelector('[aria-label="ขั้นตอนงาน"]');
+      const sc = root && [...root.querySelectorAll("div")].find((d) => d.scrollWidth > d.clientWidth + 4 && getComputedStyle(d).overflowX !== "visible");
+      if (!sc) return null;
+      const cur = [...sc.querySelectorAll("[aria-label]")].find((n) => / · ทำอยู่$/.test(n.getAttribute("aria-label")));
+      const a = sc.getBoundingClientRect();
+      const b = cur && cur.getBoundingClientRect();
+      return { room: sc.scrollWidth - sc.clientWidth, inView: !!b && b.left >= a.left - 1 && b.right <= a.right + 1 };
+    });
+    swipe && swipe.room > 0 && swipe.inView
+      ? pass("จอแคบ แถบขั้นตอนปัดซ้ายขวาได้ · ขั้นปัจจุบันอยู่ในกรอบที่เห็นตอนเปิด")
+      : fail(`จอแคบ แถบปัดไม่ได้หรือขั้นปัจจุบันอยู่นอกจอ ${JSON.stringify(swipe)}`);
     const bar0 = page.locator('[aria-label="ขั้นตอนงาน"]');
-    (await bar0.getByText("เช็คอะไหล่", { exact: true }).locator("visible=true").count()) > 0 &&
-    (await bar0.getByText("นัดวันเข้า", { exact: true }).count()) === 0
-      ? pass("จอแคบ เห็นชื่อขั้นปัจจุบัน (เช็คอะไหล่) ชื่อขั้นอื่นซ่อน")
-      : fail("จอแคบ ชื่อขั้นไม่ตรงที่ควร");
+    (await bar0.getByText("เช็คอะไหล่", { exact: true }).count()) > 0 && (await bar0.getByText("นัดวันเข้า", { exact: true }).count()) > 0
+      ? pass("จอแคบ เห็นชื่อทุกขั้น ไม่ซ่อน (เช็คอะไหล่ · นัดวันเข้า)")
+      : fail("จอแคบ ชื่อขั้นไม่ครบ");
 
     // ── จอคอม ──
     await page.setViewportSize({ width: 1400, height: 1100 });

@@ -78,10 +78,19 @@ export default function PopupScreen({
   width = 1040,
   startMaximized = false,
   instant = false,
+  head,
+  foot,
   children,
 }: {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
+  /**
+   * หัวหน้าต่างแบบเต็ม (หน้าตาใหม่ พ.ย. 69) — ใช้แทนชื่อ/คำอธิบายบรรทัดเดียว เช่นหน้าใบงาน: เลขใบ + ป้าย · อาการ · สาขา
+   * ปุ่มขวา (right · ขยาย · ปิด) ยังอยู่ที่เดิม
+   */
+  head?: React.ReactNode;
+  /** แถบท้ายหน้าต่างที่อยู่กับที่ ไม่เลื่อนตามเนื้อหา — ปุ่มของขั้นปัจจุบันเห็นได้ตลอดไม่ต้องเลื่อนหา */
+  foot?: React.ReactNode;
   right?: React.ReactNode;
   backLabel?: string;
   width?: number;
@@ -262,12 +271,16 @@ export default function PopupScreen({
                 under && { transform: [{ translateX: under.interpolate({ inputRange: [0, 1], outputRange: [0, -0.3 * cardW] }) }] },
               ]}
             >
-              <View style={styles.head}>
+              <View style={[styles.head, head ? styles.headTall : null]}>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[styles.title, headingFont]} numberOfLines={1}>
-                    {title}
-                  </Text>
-                  {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+                  {head ?? (
+                    <>
+                      <Text style={[styles.title, headingFont]} numberOfLines={1}>
+                        {title}
+                      </Text>
+                      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+                    </>
+                  )}
                 </View>
                 {right}
                 <MaximizeButton on={max} onPress={toggleMax} />
@@ -276,6 +289,7 @@ export default function PopupScreen({
                 </TouchableOpacity>
               </View>
               <View style={styles.body}>{children}</View>
+              {foot ? <View style={styles.foot}>{foot}</View> : null}
               {under ? (
                 <Animated.View
                   pointerEvents="none"
@@ -420,6 +434,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  headTall: { alignItems: "flex-start", paddingVertical: spacing.lg },
+  foot: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.card,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   title: { fontSize: 18, lineHeight: 26, fontWeight: "700", color: colors.text },
   subtitle: { fontSize: 13, lineHeight: 20, color: colors.textMuted },

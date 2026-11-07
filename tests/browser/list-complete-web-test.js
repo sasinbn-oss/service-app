@@ -30,8 +30,30 @@ const { chromium } = require("playwright");
     await page.waitForTimeout(2000);
 
     // ไล่เลื่อนจนสุด เก็บรหัสใบงานที่เคยโผล่ (รายการวาดเฉพาะช่วงที่ใกล้จอ จึงต้องสะสมระหว่างเลื่อน)
+    /**
+     * จอคอม (หน้าตาใหม่ พ.ย. 69): กลุ่มด่วนพับเหลือ 3 ใบ + งานทั่วไปแบ่งหน้าละ 25 — กางกลุ่มด่วนก่อน แล้วนับทุกหน้า
+     * ป้ายยังนับทั้งหมด ใบที่พับ/อยู่หน้าอื่นไม่ใช่ใบหาย
+     */
     const collect = async () => {
       const codes = new Set();
+      const more = page.locator('[aria-label^="ดูใบด่วนทั้งหมด"]').locator("visible=true");
+      if (await more.count()) {
+        await more.first().click();
+        await page.waitForTimeout(800);
+      }
+      for (let p = 0; p < 50; p++) {
+        await sweep(codes);
+        const next = page.locator('[aria-label="หน้าถัดไป"]').locator("visible=true");
+        if (!(await next.count()) || (await next.first().getAttribute("aria-disabled")) === "true") break;
+        await next.first().click();
+        await page.waitForTimeout(1200);
+      }
+      // กลับขึ้นบนสุดผ่านแถบสรุป — ตัวกรองอยู่ในหัวรายการ ต้องเห็นก่อนกด
+      await page.getByLabel("แสดงตัวกรองและช่องค้นหา").click().catch(() => {});
+      await page.waitForTimeout(800);
+      return codes.size;
+    };
+    const sweep = async (codes) => {
       await page.mouse.move(vp.width / 2 + 100, vp.height - 200);
       // เลื่อนจนไม่เจอใบใหม่ติดกันหลายรอบ ไม่ใช่จำนวนรอบตายตัว — การ์ดสูงขึ้นเมื่อไร (เช่นตอนเพิ่มบรรทัด
       // "เปิดโดย") ระยะเลื่อนแบบตายตัวไปไม่ถึงท้ายรายการ แล้วเทสต์รายงานว่าใบหายทั้งที่แอปวาดครบ
@@ -48,10 +70,6 @@ const { chromium } = require("playwright");
         await page.mouse.wheel(0, 400);
         await page.waitForTimeout(80);
       }
-      // กลับขึ้นบนสุดผ่านแถบสรุป — ตัวกรองอยู่ในหัวรายการ ต้องเห็นก่อนกด
-      await page.getByLabel("แสดงตัวกรองและช่องค้นหา").click().catch(() => {});
-      await page.waitForTimeout(800);
-      return codes.size;
     };
     const pill = async () =>
       Number((await page.getByText(/^\d[\d,]* ใบ$/).locator("visible=true").first().innerText()).replace(/\D/g, ""));

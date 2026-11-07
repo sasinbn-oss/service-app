@@ -87,7 +87,9 @@ const { chromium } = require("playwright");
     });
     const closeBtn = () => page.getByLabel("ปิด", { exact: true }).locator("visible=true").last().click();
     // มือถือเป็นแผ่นเลื่อนจากล่าง ไม่เปิดมาขยาย
-    await check("หน้าต่างใบงาน", "ใบงานซ่อม", () => vis(code).first().click(), closeBtn, name === "จอคอม");
+    // วัดกรอบจากชิปเลขใบงานบนหัวหน้าต่าง — หัวแบบใหม่ (พ.ย. 69) ไม่มีคำ "ใบงานซ่อม" แล้ว
+    // หน้าต่างวาดต่อท้ายหน้า ชิปเลขใบงานจึงเป็นตัวสุดท้ายที่ size() หยิบ ไม่ใช่เลขในแถวรายการข้างหลัง
+    await check("หน้าต่างใบงาน", code, () => vis(code).first().click(), closeBtn, name === "จอคอม");
 
     await (name === "มือถือ" ? vis("Admin").last() : vis("ระบบหลังบ้าน").first()).click();
     await page.waitForTimeout(2000);
