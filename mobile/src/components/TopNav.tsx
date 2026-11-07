@@ -3,7 +3,7 @@
  * ตัวแถบอยู่ใน AppTopBar (MainNavigator) — ช่องค้นหา · มุมมองผู้ใช้งาน · คนออนไลน์ · กระดิ่ง · ? · รีเฟรช
  *
  * แท็บลัดกับสลับ "งานของฉัน / ภาพรวม" ในแบบเอาออกแล้ว (เจ้าของงานสั่ง — มุมซ้ายบนเป็นช่องค้นหาแทน)
- * โหมดมืดกับออกจากระบบอยู่ในเมนูใต้ชื่อ ใช้ไม่บ่อย ไม่ควรกินที่บนแถบ
+ * โหมดมืด · แจ้งเตือนเข้ามือถือ · ออกจากระบบ อยู่ในเมนูใต้ชื่อ ใช้ไม่บ่อย ไม่ควรกินที่บนแถบ
  *
  * เมนูใต้ชื่อเป็นแผ่นที่กางในที่ ไม่ใช่ Modal — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (ดู CLAUDE.md)
  */
@@ -12,6 +12,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import ThemeToggle from "./ThemeToggle";
+import PushToggle from "./PushToggle";
 import { useAuth } from "../context/AuthContext";
 import { navigationRef } from "../navigation/navigationRef";
 import { colors, headingFont } from "../theme";
@@ -40,7 +41,7 @@ export function CreateOrderButton() {
   );
 }
 
-/** รูป (ตัวอักษรแรก) + ชื่อ + ตำแหน่ง — กดแล้วกางเมนู: โหมดมืด · ออกจากระบบ */
+/** รูป (ตัวอักษรแรก) + ชื่อ + ตำแหน่ง — กดแล้วกางเมนู: โหมดมืด · แจ้งเตือนเข้ามือถือ · ออกจากระบบ */
 export function ProfileMenu({ showName }: { showName: boolean }) {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
@@ -87,6 +88,8 @@ export function ProfileMenu({ showName }: { showName: boolean }) {
                 <ThemeToggle />
               </View>
             ) : null}
+            {/* แจ้งเตือนเข้ามือถือ (พ.ย. 69) — บนจอคอมก็เปิดได้ (เบราว์เซอร์คอมแจ้งเตือนได้เหมือนกัน) */}
+            <PushToggle />
             <View style={styles.sep} />
             <Row
               icon="log-out-outline"

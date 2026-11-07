@@ -29,6 +29,8 @@ import consumableRequestRoutes from "./routes/consumableRequests";
 import documentRoutes from "./routes/documents";
 import machineRoutes from "./routes/machines";
 import workOrderRoutes from "./routes/workOrders";
+import pushRoutes from "./routes/push";
+import { startInboxPush } from "./push/inboxPush";
 import planRoutes from "./routes/plans";
 import backupRoutes from "./routes/backups";
 import reportRoutes from "./routes/reports";
@@ -196,6 +198,7 @@ app.use("/api/consumable-requests", consumableRequestRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/machines", machineRoutes);
 app.use("/api/work-orders", workOrderRoutes);
+app.use("/api/push", pushRoutes);
 app.use("/api/plans", planRoutes);
 app.use("/api/backups", backupRoutes);
 app.use("/api/reports", reportRoutes);
@@ -227,3 +230,5 @@ app.listen(PORT, () => {
 });
 // ใบงานในถังขยะที่ครบ 30 วัน — รอบเบา ๆ ทุกชั่วโมง (เหตุผลที่ไม่ทำทันทีตอนตื่นอยู่ที่ utils/trash.ts)
 startTrashPurge();
+// แจ้งเตือนงานเข้ากล่องเข้ามือถือ — รอบทุก 2 นาที เฉพาะคนที่เปิดแจ้งเตือนไว้ (เหตุผลที่เป็นรอบอยู่ที่ push/inboxPush.ts)
+startInboxPush();

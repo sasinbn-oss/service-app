@@ -5,6 +5,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { showAlert } from "../utils/alert";
 import { api, apiErrorMessage, onAccountDeleted, onViewAsEnded, SELF_TOKEN_KEY, TOKEN_KEY } from "../api/client";
 import { User } from "../types";
+import { disablePush, syncPush } from "../utils/push";
 
 interface AuthContextValue {
   user: User | null;
@@ -57,6 +58,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       onViewAsEnded(null);
     };
   }, []);
+
+  // เครื่องที่เคยเปิดแจ้งเตือนไว้ — ผูกกับคนที่ล็อกอินอยู่ (ดูในฐานะคนอื่นไม่ผูก: โทเคนนั้นส่งการสมัครไม่ได้ และไม่ใช่เครื่องของเขา)
+  useEffect(() => {
+    if (user && !user.viewAs) void syncPush();
+  }, [user?.id, !!user?.viewAs]);
 
   async function restoreSession() {
     try {
@@ -152,6 +158,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function logout() {
+    // ก่อนลบโทเคน — ต้องใช้โทเคนบอกเซิร์ฟเวอร์ให้เลิกส่งแจ้งเตือนของคนนี้เข้าเครื่องนี้
+    await disablePush().catch(() => undefined);
     await AsyncStorage.removeItem(SELF_TOKEN_KEY);
     await AsyncStorage.removeItem(TOKEN_KEY);
     // ข้อมูลที่จำไว้ของคนนี้ต้องไม่ค้างให้คนถัดไปที่เข้าเครื่องเดียวกันเห็น
