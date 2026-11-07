@@ -13,6 +13,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { isAreaTeam } from "../utils/areaTeam";
 import { navigationRef } from "../navigation/navigationRef";
+import { usePoll } from "../utils/usePoll";
 import { colors, headingFont } from "../theme";
 
 interface BellItem {
@@ -52,15 +53,8 @@ function Bell() {
       .then((r) => setData(r.data))
       .catch(() => undefined);
   }, []);
-  useEffect(() => {
-    load();
-    const off = navigationRef.addListener("state", load);
-    const t = setInterval(load, 30_000);
-    return () => {
-      off();
-      clearInterval(t);
-    };
-  }, [load]);
+  // ทุก 2 นาที · หยุดตอนจอถูกซ่อน · เปลี่ยนหน้าถามได้ห่างกันอย่างน้อย 30 วิ (utils/usePoll.ts — ระบบล่ม 7 พ.ย. 69)
+  usePoll(load, 120_000, 30_000);
 
   const count = data?.count ?? 0;
   const go = (it: BellItem) => {

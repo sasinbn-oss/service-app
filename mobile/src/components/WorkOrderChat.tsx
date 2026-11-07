@@ -14,6 +14,7 @@ import TouchableOpacity from "./Tap";
 import { api, apiErrorMessage } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { navigationRef } from "../navigation/navigationRef";
+import { usePoll } from "../utils/usePoll";
 import { colors, headingFont } from "../theme";
 import { appendFile, pickImageAttachment, PickedAttachment } from "../utils/attachments";
 import { showAlert } from "../utils/alert";
@@ -78,16 +79,8 @@ function useThreads(poll: boolean) {
       .then((r) => setThreads(r.data.threads))
       .catch(() => undefined);
   }, []);
-  useEffect(() => {
-    load();
-    const off = navigationRef.addListener("state", load);
-    // 30 วิเท่ากระดิ่ง — ทุกหน้ามีแถบหัวถามอยู่ตลอด ถี่กว่านี้ = ทุกคนยิงเซิร์ฟเวอร์ข้าม region เพิ่มเท่าตัว
-    const t = poll ? setInterval(load, 30_000) : null;
-    return () => {
-      off();
-      if (t) clearInterval(t);
-    };
-  }, [load, poll]);
+  // ทุก 2 นาทีเท่ากระดิ่ง · หยุดตอนจอถูกซ่อน · เปลี่ยนหน้าถามได้ห่างกันอย่างน้อย 30 วิ (utils/usePoll.ts — ระบบล่ม 7 พ.ย. 69)
+  usePoll(load, poll ? 120_000 : 0, 30_000);
   return [threads, load] as const;
 }
 
@@ -157,7 +150,11 @@ function ChatWindow({ orderId, code, branch, onClose }: { orderId: number; code:
   }, [orderId]);
   useEffect(() => {
     load();
-    const t = setInterval(load, 8_000);
+    // หน้าต่างแชทที่เปิดอยู่เท่านั้น — แต่ไม่ถามตอนจอถูกซ่อน (เปิดแชทค้างแล้วสลับแอปทั้งวัน = ยิงทุก 8 วิไม่มีคนอ่าน)
+    const t = setInterval(() => {
+      if (Platform.OS === "web" && typeof document !== "undefined" && document.hidden) return;
+      load();
+    }, 8_000);
     return () => clearInterval(t);
   }, [load]);
 
