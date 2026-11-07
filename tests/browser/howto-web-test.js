@@ -420,8 +420,9 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
     {
       const { ctx: wc, page: wp } = await open(TECH, { width: 1366, height: 900 });
       const wv = (sel) => wp.locator(sel).locator("visible=true");
-      (await wp.getByText("วิธีใช้หน้านี้", { exact: true }).locator("visible=true").count()) === 1
-        ? pass('จอคอม: ปุ่ม "วิธีใช้หน้านี้" มีชื่อบนแถบบน') : fail("จอคอม: ไม่เห็นชื่อปุ่ม วิธีใช้หน้านี้");
+      // แถบหัวแบบใหม่ (พ.ย. 69): ปุ่ม ? เป็นไอคอนกลมข้างปุ่มรีเฟรชทุกขนาดจอ — ป้ายของปุ่มยังเป็น "วิธีใช้หน้านี้"
+      (await wp.getByLabel("วิธีใช้หน้านี้", { exact: true }).locator("visible=true").count()) === 1
+        ? pass('จอคอม: ปุ่ม ? "วิธีใช้หน้านี้" บนแถบบน') : fail("จอคอม: ไม่เห็นปุ่ม วิธีใช้หน้านี้");
       await wv('[aria-label="กางกลุ่ม เอกสารและบัญชี"]').first().click();
       await wp.waitForTimeout(900);
       await wv('[aria-label="สอนการใช้งาน"]').first().click();
@@ -630,15 +631,15 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       await oc.close();
     }
 
-    // ── พนักงานเดิม จอคอม 1366: คำบอกที่อยู่ปุ่มเป็น "วิธีใช้หน้านี้" · Esc = เข้าใจแล้ว ──
+    // ── พนักงานเดิม จอคอม 1366: คำบอกที่อยู่ปุ่มเป็น "ปุ่ม ?" (แถบหัวแบบใหม่ พ.ย. 69 — ไอคอนทุกขนาดจอ) · Esc = เข้าใจแล้ว ──
     sql(`update "User" set "howtoSeen"=null where "employeeCode"='zzht.old'`);
     {
       const { ctx: wc2, page: wp2 } = await open("zzht.old", { width: 1366, height: 900, auto: true });
       const notice = wp2.locator('[data-otteri-howto] [role="dialog"][aria-label="ใหม่: วิธีใช้หน้านี้"]');
       const nt = await waitPrompt(wp2, "notice");
-      const wideText = 'กดปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช เมื่อไม่แน่ใจว่าหน้านี้ใช้ยังไง — แอปจะชี้ทีละปุ่มให้ดู · ดูทั้งหมดได้ที่เมนู › เอกสารและบัญชี › สอนการใช้งาน';
+      const wideText = 'กดปุ่ม ? ข้างปุ่มรีเฟรช เมื่อไม่แน่ใจว่าหน้านี้ใช้ยังไง — แอปจะชี้ทีละปุ่มให้ดู · ดูทั้งหมดได้ที่เมนู › เอกสารและบัญชี › สอนการใช้งาน';
       nt === "found" && (await ringAround(wp2, "app.help")) && (await notice.getByText(wideText, { exact: true }).count()) === 1
-        ? pass('จอคอม: ข้อความแนะนำบอก "ปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช" กรอบล้อมปุ่มที่มีชื่อ') : fail(`จอคอม ข้อความแนะนำ: ${nt} · ${(await layerText(wp2)).replace(/\s+/g, " ").slice(0, 200)}`);
+        ? pass('จอคอม: ข้อความแนะนำบอก "ปุ่ม ? ข้างปุ่มรีเฟรช" กรอบล้อมปุ่ม') : fail(`จอคอม ข้อความแนะนำ: ${nt} · ${(await layerText(wp2)).replace(/\s+/g, " ").slice(0, 200)}`);
       await wp2.keyboard.press("Escape");
       const wAfter = await flagsBecome(wp2, "zzht.old", "false|false|true|0");
       await wp2.waitForTimeout(500);
@@ -690,7 +691,7 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
           finished = true;
         } else await vp.locator('[data-otteri-howto] [aria-label="ถัดไป"]').click();
       }
-      const doneToast = vp.getByText('ดูวิธีใช้อีกครั้ง กดปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช', { exact: true }).locator("visible=true");
+      const doneToast = vp.getByText("ดูวิธีใช้อีกครั้ง กดปุ่ม ? ข้างปุ่มรีเฟรช", { exact: true }).locator("visible=true");
       await doneToast.waitFor({ timeout: 4000 }).catch(() => {});
       finished && (await doneToast.count()) === 1
         ? pass(`ดูในฐานะ: ปุ่ม ? เล่นงานของฉันวันนี้ได้จนจบ (${steps} ขั้น) · แถบข้อความหลังจบ`) : fail(`ดูในฐานะ: เล่นไม่จบ (${steps} ขั้น)`);
@@ -775,8 +776,8 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
 
       await av('[data-testid="howto-menu.wo"]').first().click();
       await ap.waitForTimeout(2500);
-      (await ap.getByText("วิธีใช้หน้านี้", { exact: true }).locator("visible=true").count()) === 1
-        ? pass('ใบงานซ่อม จอคอม: ปุ่ม "วิธีใช้หน้านี้" มีชื่อ') : fail("ใบงานซ่อม: ไม่เห็นปุ่ม วิธีใช้หน้านี้");
+      (await ap.getByLabel("วิธีใช้หน้านี้", { exact: true }).locator("visible=true").count()) === 1
+        ? pass('ใบงานซ่อม จอคอม: ปุ่ม ? "วิธีใช้หน้านี้" บนแถบบน') : fail("ใบงานซ่อม: ไม่เห็นปุ่ม วิธีใช้หน้านี้");
       await av('[aria-label="วิธีใช้หน้านี้"]').first().click();
       const o1 = await stepOn(ap, 1);
       // เมนูค้างสูงเต็มจอ — กรอบถูกตัดที่ขอบจอ เทียบทั้งตัวแบบปุ่มอื่นไม่ได้ ดูแค่ว่ากรอบชิดซ้าย
@@ -839,7 +840,7 @@ const GROUPS_SEED = JSON.stringify(["หน้างาน", "รถ", "เอ�
       // Esc = ข้าม: กล่องหาย แต่หน้าต่างใบงานต้องไม่ปิด และแถบข้อความรอจนปิดหน้าต่าง (ไม่บังปุ่มที่เพิ่งชี้)
       await ap.keyboard.press("Escape");
       await ap.waitForTimeout(1500);
-      const skipText = 'ข้ามแล้ว · ดูวิธีใช้อีกครั้ง กดปุ่ม "วิธีใช้หน้านี้" ข้างปุ่มรีเฟรช';
+      const skipText = "ข้ามแล้ว · ดูวิธีใช้อีกครั้ง กดปุ่ม ? ข้างปุ่มรีเฟรช";
       const skipToast = ap.getByText(skipText, { exact: true }).locator("visible=true");
       (await ap.locator("[data-otteri-howto]").count()) === 0 && (await orderWindows(ap)) >= 1 && (await inertOf(ap)) === 0
         ? pass("Esc → กล่องหาย ไม่เหลือ inert · หน้าต่างใบงานยังเปิดอยู่") : fail(`Esc: ชั้น ${await ap.locator("[data-otteri-howto]").count()} · หน้าต่าง ${await orderWindows(ap)} · inert ${await inertOf(ap)}`);
