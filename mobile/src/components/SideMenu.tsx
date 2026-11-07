@@ -412,23 +412,6 @@ function currentKey(): string | null {
   return null;
 }
 
-/**
- * แถบลัดบนหัว (ตัวอย่างหัวขวาบน พ.ย. 69) — หยิบจากรายการเดียวกับเมนูข้าง ชื่อ ไอคอน และสิทธิ์จึงตรงกันเสมอ
- * คนที่ไม่เห็นเมนูไหนในเมนูข้าง ก็ไม่เห็นแท็บนั้นบนหัว
- */
-export function menuItemsFor(user: ReturnType<typeof useAuth>["user"], keys: string[]) {
-  const all = GROUPS.filter((g) => !g.admin || user?.role === "ADMIN").flatMap((g) => g.items);
-  return keys
-    .map((k) => all.find((it) => it.key === k))
-    .filter((it): it is Item => !!it && canSeeItem(user, it))
-    .map((it) => ({ key: it.key, label: it.label, icon: it.icon }));
-}
-export function openMenuKey(key: string) {
-  const it = GROUPS.flatMap((g) => g.items).find((x) => x.key === key);
-  if (it) navigateTo(it);
-}
-export { currentKey as activeMenuKey };
-
 function canSeeItem(user: ReturnType<typeof useAuth>["user"], it: Item) {
   return (
     (!it.roles || (!!user && it.roles.includes(user.role))) &&
