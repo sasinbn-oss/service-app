@@ -216,6 +216,19 @@ export function coversWorkOrder(s: SupervisorScope, wo: ScopedOrder) {
   return coversArea(s, wo);
 }
 
+/**
+ * ขั้นจ่ายงานของใบ IT ที่หัวหน้าภาคตามพื้นที่ทำได้ด้วย (เจ้าของงานตัดสิน 6 พ.ย. 69 — "หัวหน้าภาคก็จ่ายงานไอทีได้เหมือนกัน")
+ * นัดวันเข้า (PARTS_CHECKED) · ปล่อยงาน (ASSIGNED) · ส่งช่างตรวจ (INSPECT_DISPATCH) — คนที่รู้ว่าทีมไหนว่างวันไหนคือหัวหน้าภาคของพื้นที่
+ * ขั้นอื่นของใบ IT ยังเป็นของหัวหน้าภาคที่ดูแลงาน IT (เลื่อนวันนัดเป็นของแอดมิน/คนดูแลงาน IT ตามเดิม — คนคุยกับร้าน)
+ * ไม่เข้ากล่องงานของหัวหน้าภาคพื้นที่ — ใบยังรอคนดูแลงาน IT ทำได้จากหน้าใบงานและบอร์ดแผนงาน
+ */
+export const IT_AREA_DISPATCH_STAGES: readonly string[] = ["PARTS_CHECKED", "ASSIGNED", "INSPECT_DISPATCH"];
+
+/** หัวหน้าภาคคนนี้ (ไม่ใช่คนดูแลงาน IT) นัดวัน/ปล่อยงานใบ IT นี้ได้ไหม — ใบในพื้นที่ตัวเองและอยู่ขั้นจ่ายงาน */
+export function itAreaDispatches(s: SupervisorScope, wo: ScopedOrder & { status: string }) {
+  return wo.jobType === IT_JOB && !s.itLead && IT_AREA_DISPATCH_STAGES.includes(wo.status) && coversArea(s, wo);
+}
+
 /** ใบอยู่ในพื้นที่ (ภาค/ทีม) ของหัวหน้าภาคคนนี้ไหม ไม่ดูประเภทงาน — กติกาเดียวกับ areaWhere */
 function coversArea(s: SupervisorScope, wo: ScopedOrder) {
   // เทียบหลังทำความสะอาดชื่อ — ข้อมูลที่ยังไม่ผ่าน migration ล้างชื่อ (หรือหลุดมาทางอื่น) ก็ยังจับคู่ได้ ดู utils/names.ts
@@ -296,7 +309,7 @@ export function itOutOfScope(s: SupervisorScope) {
  */
 export function itViewOnly(s: SupervisorScope) {
   const who = s.itLeadName ? `${s.itLeadName} (${IT_LEAD_TITLE})` : "แอดมิน (ยังไม่ได้เลือกหัวหน้าภาคที่ดูแลงาน IT)";
-  return `ใบงาน IT อยู่กับ ${who} — คุณเห็นและปิดใบงานได้ ขั้นอื่นเป็นของคนที่ดูแลงาน IT`;
+  return `ใบงาน IT อยู่กับ ${who} — คุณเห็น นัดวันเข้า/ปล่อยงาน และปิดใบงานได้ ขั้นอื่นเป็นของคนที่ดูแลงาน IT`;
 }
 /** ข้อความ 403 ของใบที่คนนี้ไม่เห็น — ใบ IT บอกว่าอยู่กับใคร ใบอื่นตามเดิม */
 export function outOfScopeText(s: SupervisorScope, wo: { jobType: string }) {
