@@ -12,15 +12,15 @@ import TouchableOpacity from "./Tap";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api/client";
 import { navigationRef } from "../navigation/navigationRef";
+import { sideMenu } from "./SideMenu";
 import { colors } from "../theme";
 
 export function canViewUsage(user: ReturnType<typeof useAuth>["user"]) {
   return !!user && user.role === "ADMIN" && !user.partsAdmin && !user.viewAs;
 }
 
-export default function UsageButton({ compact }: { compact?: boolean }) {
-  const { user } = useAuth();
-  const allowed = canViewUsage(user);
+/** จำนวนคนออนไลน์ — ปุ่มบนแถบบน และแถวในเมนูโปรไฟล์ของแถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69) ใช้ตัวเดียวกัน */
+export function useOnlineCount(allowed: boolean) {
   const [online, setOnline] = useState<number | null>(null);
 
   useEffect(() => {
@@ -40,12 +40,43 @@ export default function UsageButton({ compact }: { compact?: boolean }) {
       clearInterval(t);
     };
   }, [allowed]);
+  return online;
+}
 
+export function openUsage() {
+  if (!navigationRef.isReady()) return;
+  (navigationRef.navigate as (tab: string, p: object) => void)("AdminTab", { screen: "AppUsage", initial: false });
+}
+
+/**
+ * drawerRow = แถวเต็มความกว้างในเมนูข้าง — จอแคบกว่า 420 แถบหัวของแอดมินไม่มีที่ (ค้นหา · กระดิ่ง · ดูในฐานะ ฯลฯ)
+ * ต้องมีทางไปหน้านี้เสมอ: เมนูหลังบ้านไม่มีรายการ "การใช้งานแอป" ซ่อนปุ่มเฉย ๆ = แอดมินบนมือถือเล็กเข้าไม่ได้เลย
+ */
+export default function UsageButton({ compact, drawerRow }: { compact?: boolean; drawerRow?: boolean }) {
+  const { user } = useAuth();
+  const allowed = canViewUsage(user);
+  const online = useOnlineCount(allowed);
   if (!allowed) return null;
-  const open = () => {
-    if (!navigationRef.isReady()) return;
-    (navigationRef.navigate as (tab: string, p: object) => void)("AdminTab", { screen: "AppUsage", initial: false });
-  };
+  const open = openUsage;
+  if (drawerRow) {
+    return (
+      <TouchableOpacity
+        style={styles.row}
+        onPress={() => {
+          sideMenu.close();
+          open();
+        }}
+        activeOpacity={0.75}
+        accessibilityLabel={`การใช้งานแอป · ${online ?? 0} คนออนไลน์`}
+      >
+        <Ionicons name="pulse-outline" size={20} color="#fff" />
+        <Text style={styles.rowText}>การใช้งานแอป</Text>
+        <View style={{ flex: 1 }} />
+        <View style={styles.dot} />
+        <Text style={styles.rowText}>{online ?? "–"} คนออนไลน์</Text>
+      </TouchableOpacity>
+    );
+  }
   return (
     <TouchableOpacity
       style={[styles.btn, compact && styles.compact]}
@@ -78,4 +109,15 @@ const styles = StyleSheet.create({
   compact: { paddingHorizontal: 9, gap: 5, marginRight: 4 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
   text: { color: colors.primaryInk, fontWeight: "800", fontSize: 13 },
+  // หน้าตาเดียวกับแถว "วิธีใช้หน้านี้" ในเมนูข้าง (HowToButton drawerRow)
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: colors.sideLine,
+  },
+  rowText: { color: "#fff", fontSize: 14, lineHeight: 20, fontWeight: "700" },
 });

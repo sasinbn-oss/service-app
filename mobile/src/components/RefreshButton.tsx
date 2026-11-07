@@ -96,7 +96,8 @@ export async function runRefresh(): Promise<string | null> {
   return text;
 }
 
-export default function RefreshButton() {
+/** iconOnly = ไอคอนกลมแม้จอกว้าง — แถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69) วางคู่กับ ? ตามแบบที่มีแต่ไอคอน */
+export default function RefreshButton({ iconOnly }: { iconOnly?: boolean } = {}) {
   const { width } = useWindowDimensions();
   const [{ phase, text }, setLocal] = useState<RefreshState>(state);
   useEffect(() => subscribeRefresh(setLocal), []);
@@ -139,11 +140,11 @@ export default function RefreshButton() {
     }
     const result = await runRefresh();
     // จอแคบปุ่มเป็นไอคอนกลม ไม่มีที่ให้ข้อความผล — บอกผ่านแถบแจ้งแทน
-    if (result && width < 640) feedback.toast(result.startsWith("อัปเดตแล้ว · ใหม่") ? "info" : "success", result);
+    if (result && (width < 640 || iconOnly)) feedback.toast(result.startsWith("อัปเดตแล้ว · ใหม่") ? "info" : "success", result);
   }
 
   // จอแคบเหลือแค่ไอคอนกลม ตามต้นแบบ — ข้อความกินที่ของชื่อระบบบนแถบบน
-  const wide = width >= 640;
+  const wide = width >= 640 && !iconOnly;
   const tint = phase === "done" ? colors.successInk : colors.primaryInk;
   const label = phase === "idle" ? "รีเฟรช" : text;
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });

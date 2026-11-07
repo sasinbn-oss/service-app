@@ -1703,8 +1703,8 @@ export default function WorkOrderListScreen({ navigation, route }: Props) {
           ) : null}
           {/* ประวัติการนำเข้า (ตัวอย่างที่อนุมัติ 5 พ.ย. 69) — ข้างปุ่มนำเข้า เปิดหน้าประวัติที่กรอง "ใบแจ้งซ่อม" ไว้ให้ */}
           {user?.role === "ADMIN" && !user.partsAdmin && Platform.OS === "web" ? <ImportHistoryButton kind="repair" compact={compact} /> : null}
-          {/* Admin Spare Part ดูใบงานได้อย่างเดียว — เปิดใบงานไม่ได้ */}
-          {user?.partsAdmin ? null : (
+          {/* Admin Spare Part ดูใบงานได้อย่างเดียว — เปิดใบงานไม่ได้ · จอคอมปุ่มนี้อยู่บนแถบหัวแล้ว (ตัวอย่าง พ.ย. 69) ไม่ซ้ำสองที่ */}
+          {user?.partsAdmin || docked ? null : (
             <TouchableOpacity
               style={styles.addButton}
               onPress={() => navigation.navigate("WorkOrderForm")}

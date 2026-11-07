@@ -73,6 +73,9 @@ import SideMenu, { DockedSideMenu, MenuButton, useDocked } from "../components/S
 import { pageEnterLayout } from "../components/PageEnter";
 import AreaOnlyGate from "../components/AreaOnlyGate";
 import HowToButton from "../components/HowToButton";
+import { CreateOrderButton, ProfileMenu } from "../components/TopNav";
+import GlobalSearch from "../components/GlobalSearch";
+import NotificationBell from "../components/NotificationBell";
 import HowToHost from "../components/HowToHost";
 import HowToScreen from "../screens/HowToScreen";
 import { chromeHide, setChromeBarsHeight, TAB_BAR_STYLE, useChrome } from "../utils/chrome";
@@ -163,6 +166,7 @@ function PageHeader({ navigation, route, options, back }: NativeStackHeaderProps
 function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { width } = useWindowDimensions();
   return (
     <View style={[styles.pageHeadNarrow, { paddingTop: (user?.viewAs ? 0 : insets.top) + spacing.sm }]}>
       <MenuButton />
@@ -174,8 +178,12 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
       </View>
       {/* มีระบบรุ่นใหม่ — กดเองเมื่อสะดวก ไม่โหลดหน้าใหม่ให้เอง (เจ้าของงานขอ ต.ค. 69) */}
       <UpdateButton compact />
+      {/* ค้นหาทั้งระบบ + กระดิ่งงานเข้าใหม่บนมือถือด้วย (เจ้าของงานเลือก พ.ย. 69) — แว่นขยายเปิดหน้าค้นหาเต็มจอ */}
+      <GlobalSearch compact />
+      <NotificationBell />
       <ViewAsButton compact />
-      <UsageButton compact />
+      {/* คนออนไลน์: จอแคบกว่า 420 ไม่พอ (ชื่อหน้าหาย) — ย้ายเป็นแถวในเมนูข้าง (ดู MainNavigator ท้ายไฟล์) */}
+      {width >= 420 ? <UsageButton compact /> : null}
       {/* วิธีใช้หน้านี้ — ข้างปุ่มรีเฟรช (เจ้าของงานเลือก) · แถบของแอดมินเต็มแล้ว ปุ่มของแอดมินจอแคบไปอยู่ในเมนูข้าง */}
       {user?.role === "ADMIN" ? null : <HowToButton compact />}
       <RefreshButton />
@@ -290,7 +298,7 @@ function AppTopBar() {
     );
   }
   const bars = (
-    <View>
+    <View style={{ zIndex: 20 }}>
     {viewing ? (
       <View style={{ paddingTop: insets.top, backgroundColor: "#B45309" }}>
         <ViewAsBanner />
@@ -298,22 +306,25 @@ function AppTopBar() {
     ) : null}
     <View style={[styles.topBar, { paddingTop: (viewing ? 0 : insets.top) + 10 }]}>
       <Brand subtitle="ระบบงานช่างซ่อม" compact={width < 480} />
+      {/*
+        แถบหัวแบบใหม่ (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา — components/TopNav.tsx)
+        ซ้ายบนเป็นช่องค้นหาทั้งระบบแทนแท็บลัด (เจ้าของงานเลือก — แท็บลัดซ้ำกับเมนูข้าง)
+        ไม่มีสลับ "งานของฉัน / ภาพรวม" แล้ว (เจ้าของงานให้เอาออก — ซ้ำกับกล่องงานของฉัน/หน้าหลักในเมนูข้าง)
+      */}
+      <GlobalSearch />
       <View style={{ flex: 1 }} />
       <UpdateButton compact={!wide} />
-      <ViewAsButton compact={!wide} />
-      {/* ข้างชื่อ (เจ้าของงานขอ ต.ค. 69) — Super Admin/แอดมินเท่านั้น ซ่อนเองสำหรับคนอื่น */}
-      <UsageButton compact={!wide} />
-      {wide && user ? (
-        <View style={styles.who}>
-          <Text style={styles.whoName} numberOfLines={1}>
-            {user.name}
-          </Text>
-          <Text style={styles.whoRole}>
-            {sessionRoleLabel(user)}
-          </Text>
-        </View>
-      ) : null}
-      <LogoutButton />
+      {/* ดูในฐานะ · คนออนไลน์ กลับมาอยู่บนแถบ (เจ้าของงานขอ) — จอไม่ถึง 1700 เหลือไอคอน ให้ช่องค้นหาไม่ถูกบีบ */}
+      <ViewAsButton compact={width < 1700} />
+      <UsageButton compact={width < 1700} />
+      <CreateOrderButton />
+      <View style={styles.headerRight}>
+        {/* กระดิ่งงานเข้าใหม่ (พ.ย. 69) — ใบที่เพิ่งเข้ากล่องงานและยังไม่ได้เปิดดู */}
+        <NotificationBell />
+        <HowToButton compact />
+        <RefreshButton iconOnly />
+      </View>
+      <ProfileMenu showName={width >= 1000} />
     </View>
     {overlay ? (
       <View style={styles.pageHeadNarrow}>
@@ -695,6 +706,8 @@ function tabLabel(text: string) {
 export default function MainNavigator() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  // จอแคบกว่า 420 ปุ่มคนออนไลน์ไม่อยู่บนแถบหัว (NarrowBar) — มาเป็นแถวในเมนูข้างแทน
+  const narrowest = useWindowDimensions().width < 420;
   // จอคอม: เมนูค้างไว้ด้านซ้ายและซ่อนแถบล่าง ตามต้นแบบ — เมนูข้างพาไปได้ทุกแท็บอยู่แล้ว
   // แถบล่างบนจอกว้างทำให้ต้องเลื่อนสายตาไปล่างสุดของจอเพื่อเปลี่ยนหน้า
   const { docked } = useDocked();
@@ -777,7 +790,18 @@ export default function MainNavigator() {
         </Tab.Navigator>
       </View>
       {/* อยู่ในส่วนล่าง เมนูเลื่อนออกมาใต้แถบโลโก้ ไม่ทับโลโก้ ตามตัวอย่าง */}
-      {docked ? null : <SideMenu footer={isAdmin ? <HowToButton drawerRow /> : null} />}
+      {docked ? null : (
+        <SideMenu
+          footer={
+            isAdmin ? (
+              <>
+                {narrowest ? <UsageButton drawerRow /> : null}
+                <HowToButton drawerRow />
+              </>
+            ) : null
+          }
+        />
+      )}
       </View>
       {/* สอนการใช้งาน — วาดลงชั้นของตัวเองใน <body> (เว็บ) · ขึ้นใหม่พร้อม MainNavigator ตอนสลับคน ไม่มีอะไรค้าง */}
       <HowToHost />
@@ -795,6 +819,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    // เมนูใต้ชื่อผู้ใช้กางลงมาทับเนื้อหา — แถบต้องอยู่ชั้นบนกว่าหน้าที่วาดตามมา
+    zIndex: 20,
   },
   who: { alignItems: "flex-end", maxWidth: 200 },
   whoName: { fontSize: 15, lineHeight: 20, fontWeight: "700", color: colors.text },

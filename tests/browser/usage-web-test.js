@@ -109,8 +109,21 @@ function cleanup() {
     await page.screenshot({ path: path.join(DIR, "usage-3-person.png") });
     await page.close();
 
+    // จอ 420 ขึ้นไป: ปุ่มย่อบนแถบหัว · แคบกว่านั้นแถบหัวเต็ม (ค้นหา · กระดิ่ง · ดูในฐานะ) ปุ่มย้ายเป็นแถวในเมนูข้าง
+    {
+      const mid = await open("A001", 440);
+      (await btn(mid).count()) > 0 ? pass("จอ 440: มีปุ่มย่อบนแถบหัว") : fail("จอ 440 ไม่มีปุ่มบนแถบหัว");
+      await mid.close();
+    }
     const phone = await open("A001", 400);
-    (await btn(phone).count()) > 0 ? pass("จอมือถือ: มีปุ่มย่อบนแถบหัว") : fail("จอมือถือไม่มีปุ่ม");
+    (await btn(phone).count()) === 0 ? pass("จอ 400: ไม่มีปุ่มบนแถบหัว (ชื่อหน้าไม่หาย)") : fail("จอ 400 ยังมีปุ่มบนแถบหัว");
+    await phone.getByLabel("เปิดเมนู").locator("visible=true").first().click();
+    await phone.waitForTimeout(900);
+    const row = btn(phone);
+    const rb = await row.first().boundingBox();
+    rb && rb.x >= 0 && rb.x + rb.width <= 400 && rb.y + rb.height <= 1000
+      ? pass(`จอ 400: แถว "การใช้งานแอป" อยู่ในเมนูข้าง (${(await row.first().getAttribute("aria-label")) || ""})`)
+      : fail(`จอ 400: ไม่มีแถวการใช้งานในเมนูข้าง ${JSON.stringify(rb)}`);
     await btn(phone).first().click();
     await phone.waitForTimeout(3500);
     const sw = await phone.evaluate(() => document.documentElement.scrollWidth);

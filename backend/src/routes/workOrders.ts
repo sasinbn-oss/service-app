@@ -2442,6 +2442,96 @@ function payTabSummary(waits: { over: boolean; follows: number; alertDays: numbe
   };
 }
 
+/**
+ * ช่องค้นหาบนสุด — ค้นทั้งระบบในช่องเดียว (ตัวอย่าง พ.ย. 69 · เจ้าของงานขอ "ค้นหาอะไรก็ได้ทั้งระบบ")
+ *
+ * ใบงานใช้ขอบเขตเดียวกับรายการ (scopeFor) — ช่องค้นหาต้องไม่เปิดใบที่คนนั้นเปิดในรายการไม่ได้
+ * คนในระบบให้เฉพาะแอดมินกับหัวหน้าภาค (ช่างหาเบอร์เพื่อนในผังผู้รับผิดชอบได้อยู่แล้ว) · อย่างละไม่เกิน 5 รายการ
+ * ค้นเลขใบแบบตัวเลขล้วนด้วย ("4324" เจอ WO-04324) — คนจำแค่ตัวเลขท้าย
+ */
+router.get("/search-all", requireAuth, async (req: AuthRequest, res) => {
+  const q = String(req.query.q ?? "").trim().slice(0, 80);
+  if (q.length < 2) return res.json({ q, workOrders: [], branches: [], people: [], machines: [], parts: [] });
+  const like = { contains: q, mode: "insensitive" as const };
+  const scope = await scopeFor(req);
+  const role = req.auth!.role;
+  const seePeople = role === "ADMIN" || role === "SUPERVISOR";
+  const [orders, branches, people, machines, parts] = await Promise.all([
+    prisma.workOrder.findMany({
+      where: {
+        AND: [
+          scope,
+          {
+            OR: [
+              { code: like },
+              { title: like },
+              { symptom: like },
+              { branch: { code: like } },
+              { branch: { name: like } },
+              { machine: { code: like } },
+              { assignedTeam: like },
+              { assignedTo: { name: like } },
+              { createdBy: { name: like } },
+            ],
+          },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: {
+        id: true,
+        code: true,
+        title: true,
+        symptom: true,
+        status: true,
+        branch: { select: { code: true, name: true } },
+        machine: { select: { code: true } },
+      },
+    }),
+    prisma.branch.findMany({
+      where: { OR: [{ code: like }, { name: like }] },
+      orderBy: { code: "asc" },
+      take: 5,
+      select: { id: true, code: true, name: true, region: true },
+    }),
+    seePeople
+      ? prisma.user.findMany({
+          where: { deletedAt: null, OR: [{ name: like }, { employeeCode: like }, { team: like }] },
+          orderBy: { name: "asc" },
+          take: 5,
+          select: { id: true, name: true, employeeCode: true, role: true, team: true, region: true },
+        })
+      : Promise.resolve([]),
+    prisma.machine.findMany({
+      where: { code: like },
+      orderBy: { code: "asc" },
+      take: 5,
+      select: { id: true, code: true, brand: true, branch: { select: { code: true, name: true } } },
+    }),
+    prisma.sparePart.findMany({
+      where: { offCatalog: false, OR: [{ partCode: like }, { name: like }] },
+      orderBy: { partCode: "asc" },
+      take: 5,
+      select: { id: true, partCode: true, name: true, brand: true },
+    }),
+  ]);
+  res.json({
+    q,
+    workOrders: orders.map((o) => ({
+      id: o.id,
+      code: o.code,
+      title: (o.symptom ?? "").split("\n")[0].trim() || o.title,
+      branch: `${o.branch.code} ${o.branch.name}`,
+      machine: o.machine?.code ?? null,
+      statusLabel: statusLabelOf(o.status),
+    })),
+    branches,
+    people: people.map((p) => ({ ...p, roleLabel: ROLE_LABELS[p.role] ?? p.role })),
+    machines: machines.map((m) => ({ id: m.id, code: m.code, brand: m.brand, branch: `${m.branch.code} ${m.branch.name}` })),
+    parts,
+  });
+});
+
 router.get("/", requireAuth, async (req: AuthRequest, res) => {
   const parsed = listQuery.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -2988,6 +3078,83 @@ router.get("/my-day", requireAuth, async (req: AuthRequest, res) => {
  * แยกจาก /work-orders เพราะหน้าแรกอยากได้แค่ตัวเลข ไม่ได้อยากได้รายการ
  * ดึงทั้งรายการมาเพื่อนับคือการโหลดข้อมูลเป็นร้อยใบทิ้งทุกครั้งที่เปิดแอป
  */
+/**
+ * กระดิ่งงานเข้าใหม่ (ตัวอย่าง พ.ย. 69 · เจ้าของงานขอ "งานที่เพิ่งเด้งเข้ามาและยังไม่ได้เปิดดู ขึ้นตัวเลข")
+ *
+ * ใบในกล่องงาน (เงื่อนไขเดียวกับตัวเลขกล่องงาน — inboxFilter) ที่เข้าขั้นปัจจุบันหลังจากเปิดดูใบนั้นครั้งล่าสุด
+ * ใบที่เปิดดูแล้วกลับมาใหม่เมื่อเดินขั้นมาถึงคิวเราอีกรอบ · "อ่านแล้วทั้งหมด" = นับว่าเปิดดูทุกใบตอนนี้
+ * นับเฉพาะใบที่เข้าขั้นหลัง User.bellSince — วันที่ขึ้นระบบกระดิ่งเริ่มจากศูนย์ (เจ้าของงานเลือก) ไม่ใช่ทุกใบที่ค้างในกล่องอยู่แล้ว
+ */
+async function bellItems(req: AuthRequest) {
+  const me = req.auth!.userId;
+  const bellSince = (await prisma.user.findUnique({ where: { id: me }, select: { bellSince: true } }))?.bellSince ?? new Date(0);
+  const [scope, orphans, outsource, cutoffInbox, itLeadMe] = await Promise.all([
+    scopeFor(req, true),
+    inboxTakesOrphans(req.auth) ? orphanSupervisorIds() : Promise.resolve([] as number[]),
+    req.auth!.role === "SUPERVISOR" ? freshOutsource() : Promise.resolve(new Set<string>()),
+    inboxTakesOrphans(req.auth) ? cutoffInboxFor(req.auth, readCutoff(), new Date()) : Promise.resolve(null),
+    amItLead(req),
+  ]);
+  const rows = await prisma.workOrder.findMany({
+    where: { AND: [scope, inboxFilter(req.auth, stagesWaitingOn(req.auth), orphans, outsource, cutoffInbox, itLeadMe)] },
+    take: 300,
+    select: {
+      id: true,
+      code: true,
+      title: true,
+      symptom: true,
+      status: true,
+      priority: true,
+      createdAt: true,
+      holdUntil: true,
+      branch: { select: { code: true, name: true } },
+      seens: { where: { userId: me }, select: { seenAt: true } },
+    },
+  });
+  const moves = rows.length
+    ? await prisma.workOrderLog.groupBy({
+        by: ["workOrderId"],
+        where: { workOrderId: { in: rows.map((r) => r.id) }, action: { notIn: NON_STAGE_ACTIONS } },
+        _max: { createdAt: true },
+      })
+    : [];
+  const since = new Map(moves.map((m) => [m.workOrderId, m._max.createdAt]));
+  // ใบที่พ้นระงับชั่วคราวกลับเข้ากล่องงานโดยไม่มีการเดินขั้น — นับวันที่กลับมาเป็นวันที่เข้ากล่อง ไม่งั้นกระดิ่งไม่บอก
+  const cameBack = (r: (typeof rows)[number]) => (r.holdUntil && r.holdUntil <= new Date() ? r.holdUntil : null);
+  const latest = (a: Date, b: Date | null) => (b && b > a ? b : a);
+  return rows
+    .map((r) => ({ r, at: latest(since.get(r.id) ?? r.createdAt, cameBack(r)), seen: r.seens[0]?.seenAt ?? null }))
+    .filter((x) => x.at > bellSince && (!x.seen || x.seen < x.at))
+    .sort((a, b) => b.at.getTime() - a.at.getTime())
+    .map(({ r, at }) => ({
+      id: r.id,
+      code: r.code,
+      title: (r.symptom ?? "").split("\n")[0].trim() || r.title,
+      branch: `${r.branch.code} ${r.branch.name}`,
+      statusLabel: statusLabelOf(r.status),
+      urgent: r.priority === "URGENT",
+      at,
+    }));
+}
+
+router.get("/bell", requireAuth, async (req: AuthRequest, res) => {
+  const items = await bellItems(req);
+  res.json({ count: items.length, items: items.slice(0, 20) });
+});
+
+router.post("/bell/seen-all", requireAuth, async (req: AuthRequest, res) => {
+  if (req.auth!.viewAs) return res.status(403).json({ error: "กำลังดูในฐานะคนอื่น — ทำเครื่องหมายแทนไม่ได้" });
+  const items = await bellItems(req);
+  const me = req.auth!.userId;
+  const ids = items.map((it) => it.id);
+  // ลบแล้วสร้างใหม่สองคำสั่ง แทน upsert ทีละใบ — กล่องงานแอดมินมีได้เป็นร้อยใบ ทีละใบคือร้อยรอบไปกลับข้าม region
+  await prisma.$transaction([
+    prisma.workOrderSeen.deleteMany({ where: { userId: me, workOrderId: { in: ids } } }),
+    prisma.workOrderSeen.createMany({ data: ids.map((workOrderId) => ({ workOrderId, userId: me })) }),
+  ]);
+  res.json({ count: 0, items: [] });
+});
+
 router.get("/inbox-count", requireAuth, async (req: AuthRequest, res) => {
   // ขอบเขต · ใบไม่มีคนรับ · รายชื่อ outsource · คำขอนัดด่วน/เลยนัด (แอดมิน) ไม่ขึ้นต่อกัน — ถามพร้อมกัน แล้วนับทีเดียว
   // เงื่อนไขเดียวกับแท็บกล่องงาน (inboxFilter) ตัวเลขบนเมนูกับจำนวนแถวในกล่องจึงตรงกันเสมอ รวมคำขอที่หัวหน้าภาคเพิ่งส่ง
@@ -4207,6 +4374,18 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res) => {
   // อ่านจากแถวจริงอีกชั้น (ไม่เสียรอบเพิ่ม) — รายชื่อที่จำไว้ของ trashGuard ช้าได้ถึงนาทีเมื่อรันหลายเครื่องพร้อมกัน
   if (d.row.deletedAt) return res.status(404).json({ error: TRASHED_TEXT, trashed: true });
   if (await blockedForViewer(req, res, d.row, viewer)) return;
+  // เปิดดูแล้ว — กระดิ่งงานเข้าใหม่ไม่นับใบนี้จนกว่าจะเข้าขั้นถัดไป (ตัวอย่าง พ.ย. 69) · ดูในฐานะคนอื่นไม่นับว่าคนนั้นเปิดดู
+  // ไม่รอผล — ฐานข้อมูลอยู่คนละ region การเขียนนี้เพิ่มเวลาเปิดทุกใบอีกหนึ่งรอบ ทั้งที่หน้าใบงานไม่ได้ใช้ค่านี้
+  // พลาดก็แค่กระดิ่งยังนับใบนี้ (เปิดอีกครั้งก็หาย) ไม่ใช่เหตุให้เปิดใบงานไม่ได้
+  if (!req.auth!.viewAs) {
+    prisma.workOrderSeen
+      .upsert({
+        where: { workOrderId_userId: { workOrderId: id, userId: req.auth!.userId } },
+        create: { workOrderId: id, userId: req.auth!.userId },
+        update: { seenAt: new Date() },
+      })
+      .catch((e) => console.error("[bell] บันทึกการเปิดดูไม่ได้", id, e));
+  }
   // หัวหน้าภาคของทีมที่รับงานข้ามทีมมา — เปิดดูได้ แต่หน้าจอซ่อนปุ่มทั้งหมด (เซิร์ฟเวอร์กันอีกชั้นที่ทุกขั้น)
   const body = detailBody(d, { phones: req.auth!.role === "ADMIN" });
   res.json({
