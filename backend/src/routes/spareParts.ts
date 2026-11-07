@@ -1,3 +1,4 @@
+import { partImage, forgetPartImage } from "../utils/imageCache";
 import { NextFunction, Request, Response, Router } from "express";
 import ExcelJS from "exceljs";
 import multer from "multer";
@@ -395,14 +396,20 @@ router.get("/imports/batch/:batchId/excel", requireAuth, requireAdmin, async (re
 
 // Served without auth so React Native's <Image> can load it directly.
 // These are internal catalog photos, not user data.
+// รูปจำไว้ในหน่วยความจำ (utils/imageCache.ts) — เดิมดึงไบต์ของรูปจากฐานข้อมูลข้าม region ทุกครั้ง หน้ารายการหนึ่งหน้าขอเป็นร้อยรูป
 router.get("/:id/image", async (req, res) => {
   const id = Number(req.params.id);
-  const image = await prisma.sparePartImage.findUnique({ where: { sparePartId: id } });
+  if (!Number.isInteger(id)) return res.status(404).json({ error: "อะไหล่นี้ยังไม่มีรูป" });
+  const v = typeof req.query.v === "string" ? req.query.v : "";
+  const image = await partImage(id, v);
   if (!image) return res.status(404).json({ error: "อะไหล่นี้ยังไม่มีรูป" });
 
-  res.setHeader("Content-Type", image.mimeType);
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  res.send(Buffer.from(image.data));
+  // ลิงก์ที่มี ?v= (เวลาแก้ล่าสุด) ไม่มีวันเปลี่ยนเนื้อ — ให้เบราว์เซอร์เก็บยาวได้ · ลิงก์เปล่าเก็บ 1 วันแบบเดิม
+  res.setHeader("Cache-Control", v ? "public, max-age=2592000, immutable" : "public, max-age=86400");
+  res.setHeader("ETag", image.etag);
+  if (req.headers["if-none-match"] === image.etag) return res.status(304).end();
+  res.setHeader("Content-Type", image.mime);
+  res.send(image.data);
 });
 
 router.get("/:id", requireAuth, async (req, res) => {
@@ -560,6 +567,7 @@ router.post(
     if (!part) return res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });
 
     const imageUrl = `/api/spare-parts/${id}/image`;
+    forgetPartImage(id);
     const [, updated] = await prisma.$transaction([
       prisma.sparePartImage.upsert({
         where: { sparePartId: id },
@@ -570,6 +578,7 @@ router.post(
       prisma.sparePart.update({ where: { id }, data: { imageUrl } }),
     ]);
 
+    forgetPartImage(id); // อีกรอบหลังเขียน — คำขอที่อ่านรูปเก่าระหว่างเขียนอาจใส่กลับเข้ามา
     res.json(updated);
   }
 );
@@ -578,6 +587,7 @@ router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   try {
     await prisma.sparePart.delete({ where: { id } });
+    forgetPartImage(id);
     res.status(204).send();
   } catch {
     res.status(404).json({ error: "ไม่พบอะไหล่นี้ — อาจถูกลบไปแล้ว" });

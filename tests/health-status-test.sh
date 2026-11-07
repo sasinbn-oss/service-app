@@ -5,6 +5,7 @@
 # 2) รหัสข้อผิดพลาดของฐานข้อมูล: แบบไม่ว่าง/ต่อไม่ติด = 503 พร้อมรหัส · แบบอื่นของ Prisma = 500 พร้อมรหัส · error ทั่วไปไม่มีรหัส
 # 3) แบ่งคิว: ถามเป็นรอบ 2 (คิวเต็ม/รอนาน = 503 ไม่แตะฐานข้อมูล) · ดูข้อมูล 4 (รอ ไม่ทิ้ง) · ล็อกอิน/บันทึก/ดาวน์โหลดไฟล์ไม่เข้าคิว
 # 4) ตัวเลขกระดิ่ง/แชท/กล่องงานยังตอบปกติเมื่อไม่มีคิว (ไม่มีอะไรพังเพราะคิว)
+# 5) รูปอะไหล่จำไว้ในหน่วยความจำ (ไบต์อยู่ในฐานข้อมูล — 627 รูปใน 4 นาทีบนของจริง): ?v= ได้รูปจากที่จำ · 304 · อัปโหลดใหม่ได้รูปใหม่ทันที · ช่องคิวของรูปเอง
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 API=http://localhost:4000/api
 pass() { echo "PASS $1"; }
@@ -22,7 +23,8 @@ TOKEN=$(curl -s -X POST $API/auth/login -H 'Content-Type: application/json' -d '
 WO=$(curl -s "$API/work-orders?status=INBOX" -H "Authorization: Bearer $TOKEN" | J 'd.rows[0].id')
 curl -s -o /dev/null "$API/work-orders/$WO/version" -H "Authorization: Bearer $TOKEN"
 BODY=$(curl -s -m 20 localhost:4000/health/status)
-echo "$BODY" | J 'd.last15min.busiestRoutes.some(r=>r.route==="GET /api/work-orders/:id/version")?"ok":"bad"' | grep -q ok \
+# ทางที่ใช้เวลารวมมากสุด 10 อัน — หลังรันเทสต์ทั้งชุด ทางของข้อนี้อาจหลุดอันดับ จึงตรวจว่าไม่มีทางไหนมีเลขเหลือ และมีทางที่ถูกแทนเป็น :id
+echo "$BODY" | J 'const r=d.last15min.busiestRoutes;r.length>0&&r.every(x=>!/\/\d+(\/|$)/.test(x.route))&&r.some(x=>x.route.includes("/:id"))&&!/\/\d+(\/|$)/.test(d.oldestWaitingRoute||"")?"ok":"bad"' | grep -q ok \
   && ! echo "$BODY" | grep -qE "A001|T001|WO-[0-9]|/work-orders/$WO/" \
   && pass "/health/status: ทางที่มีเลขรวมกลุ่มเป็น :id · ไม่มีรหัสพนักงาน/รหัสใบงาน" || fail "/health/status รั่ว/ไม่รวมกลุ่ม: $(echo "$BODY" | head -c 400)"
 
@@ -89,3 +91,35 @@ for p in work-orders/bell work-orders/chats work-orders/inbox-count "work-orders
   [ "$C" = 200 ] && OK=$((OK + 1))
 done
 [ "$OK" = 5 ] && pass "กระดิ่ง · แชท · ตัวเลขกล่องงาน · ลายนิ้วมือรายการ/ใบงาน ตอบ 200 ตามปกติเมื่อไม่มีคิว" || fail "ทางที่ถามเป็นรอบตอบ 200 แค่ $OK/5"
+
+# ---------- 5) รูปอะไหล่จำไว้ในหน่วยความจำ ----------
+DB() { PGPASSWORD="${PGPASSWORD:-postgres}" psql -h localhost -U postgres serviceapp -Atc "$1"; }
+SUF=$RANDOM$RANDOM
+PID=$(DB "insert into \"SparePart\" (\"partCode\",name,\"updatedAt\") values ('HS-$SUF','ทดสอบรูป $SUF',now()) returning id" | head -1)
+DIR=$(mktemp -d)
+printf '\xff\xd8\xff\xe0first-%s\xff\xd9' "$SUF" > "$DIR/a.jpg"
+printf '\xff\xd8\xff\xe0second-%s\xff\xd9' "$SUF" > "$DIR/b.jpg"
+UP() { curl -s -o /dev/null -w '%{http_code}' -X POST "$API/spare-parts/$PID/image" -H "Authorization: Bearer $TOKEN" -F "image=@$1;type=image/jpeg"; }
+IMG=localhost:4000/api/spare-parts/$PID/image
+U1=$(UP "$DIR/a.jpg")
+H1=$(curl -s -D - -o "$DIR/g1" "$IMG?v=1")
+ETAG=$(echo "$H1" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')
+echo "$H1" | grep -qi "cache-control: public, max-age=2592000, immutable" && cmp -s "$DIR/a.jpg" "$DIR/g1" && [ "$U1" = 200 ] && [ -n "$ETAG" ] \
+  && pass "รูปอะไหล่ ?v=: ได้รูปถูกไบต์ · เก็บในเบราว์เซอร์ได้ยาว (immutable) · มี ETag" || fail "รูป ?v=: up=$U1 etag=$ETAG $(echo "$H1" | head -12 | tr '\r\n' '  ')"
+# ลบแถวรูปในฐานข้อมูลตรง ๆ — ลิงก์เดิมยังได้รูป (มาจากที่จำ ไม่ได้ถามฐานข้อมูล) · v ใหม่ถามฐานข้อมูลจริง = ไม่มีรูป
+DB "delete from \"SparePartImage\" where \"sparePartId\"=$PID" >/dev/null
+C2=$(curl -s -o "$DIR/g2" -w '%{http_code}' "$IMG?v=1")
+C3=$(curl -s -o /dev/null -w '%{http_code}' "$IMG?v=2")
+C4=$(curl -s -o /dev/null -w '%{http_code}' -H "If-None-Match: $ETAG" "$IMG?v=1")
+[ "$C2" = 200 ] && cmp -s "$DIR/a.jpg" "$DIR/g2" && [ "$C3" = 404 ] && [ "$C4" = 304 ] \
+  && pass "รูปที่เคยเสิร์ฟแล้วไม่ถามฐานข้อมูลซ้ำ (ลบแถวแล้วลิงก์เดิมยังได้รูป) · v ใหม่ถามฐานข้อมูลจริง · If-None-Match = 304" || fail "จำรูป: ซ้ำ=$C2 vใหม่=$C3 304=$C4"
+# อัปโหลดรูปใหม่ — ลิงก์ไม่มี v (จำไว้ 10 นาที) ต้องได้รูปใหม่ทันที ไม่ใช่รูปที่จำไว้
+U5=$(UP "$DIR/a.jpg"); curl -s -o /dev/null "$IMG"
+U6=$(UP "$DIR/b.jpg"); curl -s -o "$DIR/g3" "$IMG"
+[ "$U5" = 200 ] && [ "$U6" = 200 ] && cmp -s "$DIR/b.jpg" "$DIR/g3" \
+  && pass "อัปโหลดรูปใหม่แล้วลิงก์เดิม (ไม่มี v) ได้รูปใหม่ทันที — ล้างที่จำไว้" || fail "อัปโหลดใหม่: $U5 $U6 $(head -c 40 "$DIR/g3" | od -c | head -2)"
+ST=$(curl -s localhost:4000/health/status)
+echo "$ST" | J 'd.lanes.images.maxRunning===2&&d.partImages.images>=1&&typeof d.partImages.mb==="number"?"ok":"bad"' | grep -q ok \
+  && pass "รูปอะไหล่มีช่องคิวของตัวเอง (พร้อมกัน 2) · /health/status บอกจำนวนรูปที่จำไว้" || fail "ช่องรูป: $(echo "$ST" | head -c 300)"
+DB "delete from \"SparePartImage\" where \"sparePartId\"=$PID; delete from \"SparePart\" where id=$PID" >/dev/null
+rm -rf "$DIR"

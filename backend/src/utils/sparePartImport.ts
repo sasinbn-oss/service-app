@@ -14,6 +14,7 @@
  * - รูปเทียบกันด้วย sha256 ของรูปต้นฉบับ — เบราว์เซอร์ย่อรูปใหญ่ก่อนส่ง (ไฟล์เกิน 50 MB) แล้วส่งค่าของรูปก่อนย่อมาด้วย
  *   (mobile/src/utils/shrinkXlsx.ts) ย่อซ้ำได้ไบต์ไม่เหมือนเดิม ถ้าเทียบไบต์ที่เก็บ รูปจะ "เปลี่ยน" ทุกรอบ
  */
+import { forgetPartImage } from "./imageCache";
 import crypto from "crypto";
 import ExcelJS from "exceljs";
 import { prisma } from "../prisma";
@@ -480,6 +481,7 @@ export async function applyPartsImport(parsed: ParsedFile, plan: Plan, brandFile
         WHERE id = ANY(${ids}::int[])`,
     ]);
     imageIds.push(...ids);
+    for (const id of ids) forgetPartImage(id);
     progress.images += ids.length;
     for (const i of chunk) progress.codes.add(i.partCode);
   }
