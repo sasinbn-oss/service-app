@@ -182,7 +182,7 @@ function NarrowBar({ title, crumb }: { title: string; crumb?: React.ReactNode })
       <GlobalSearch compact />
       <NotificationBell />
       <ViewAsButton compact />
-      {/* คนออนไลน์: จอแคบกว่า 420 ไม่พอ (ชื่อหน้าหาย) — ดูได้ที่หน้าการใช้งานในเมนูหลังบ้าน */}
+      {/* คนออนไลน์: จอแคบกว่า 420 ไม่พอ (ชื่อหน้าหาย) — ย้ายเป็นแถวในเมนูข้าง (ดู MainNavigator ท้ายไฟล์) */}
       {width >= 420 ? <UsageButton compact /> : null}
       {/* วิธีใช้หน้านี้ — ข้างปุ่มรีเฟรช (เจ้าของงานเลือก) · แถบของแอดมินเต็มแล้ว ปุ่มของแอดมินจอแคบไปอยู่ในเมนูข้าง */}
       {user?.role === "ADMIN" ? null : <HowToButton compact />}
@@ -706,6 +706,8 @@ function tabLabel(text: string) {
 export default function MainNavigator() {
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  // จอแคบกว่า 420 ปุ่มคนออนไลน์ไม่อยู่บนแถบหัว (NarrowBar) — มาเป็นแถวในเมนูข้างแทน
+  const narrowest = useWindowDimensions().width < 420;
   // จอคอม: เมนูค้างไว้ด้านซ้ายและซ่อนแถบล่าง ตามต้นแบบ — เมนูข้างพาไปได้ทุกแท็บอยู่แล้ว
   // แถบล่างบนจอกว้างทำให้ต้องเลื่อนสายตาไปล่างสุดของจอเพื่อเปลี่ยนหน้า
   const { docked } = useDocked();
@@ -788,7 +790,18 @@ export default function MainNavigator() {
         </Tab.Navigator>
       </View>
       {/* อยู่ในส่วนล่าง เมนูเลื่อนออกมาใต้แถบโลโก้ ไม่ทับโลโก้ ตามตัวอย่าง */}
-      {docked ? null : <SideMenu footer={isAdmin ? <HowToButton drawerRow /> : null} />}
+      {docked ? null : (
+        <SideMenu
+          footer={
+            isAdmin ? (
+              <>
+                {narrowest ? <UsageButton drawerRow /> : null}
+                <HowToButton drawerRow />
+              </>
+            ) : null
+          }
+        />
+      )}
       </View>
       {/* สอนการใช้งาน — วาดลงชั้นของตัวเองใน <body> (เว็บ) · ขึ้นใหม่พร้อม MainNavigator ตอนสลับคน ไม่มีอะไรค้าง */}
       <HowToHost />

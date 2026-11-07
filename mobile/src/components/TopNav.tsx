@@ -1,101 +1,23 @@
 /**
- * แถบหัวแบบใหม่บนจอคอม (ตัวอย่าง พ.ย. 69 ตามแบบที่เจ้าของงานส่งมา)
+ * ของบนแถบหัวจอคอมที่เป็นของใหม่ (แบบที่เจ้าของงานส่งมา พ.ย. 69): ปุ่มเพิ่มใบงาน · เมนูใต้ชื่อผู้ใช้
+ * ตัวแถบอยู่ใน AppTopBar (MainNavigator) — ช่องค้นหา · มุมมองผู้ใช้งาน · คนออนไลน์ · กระดิ่ง · ? · รีเฟรช
  *
- * แบบมี: แท็บลัด · สลับ "งานของฉัน / ภาพรวม" · ปุ่มสร้างใบงาน · กระดิ่ง · ? · รูปกับชื่อผู้ใช้
- * ปรับให้เข้ากับระบบเรา:
- * - แท็บลัดหยิบจากเมนูข้าง (แผนงาน · ใบงานซ่อม · ติดตามเครื่องเสีย · รายงาน) — คนที่ไม่เห็นเมนูไหนก็ไม่เห็นแท็บนั้น
- * - "งานของฉัน" = กล่องงานของฉัน (ตัวเลขเดียวกับป้ายในเมนูข้าง) · "ภาพรวม" = หน้าหลัก
- * - โหมดมืดกับออกจากระบบย้ายเข้าเมนูใต้ชื่อผู้ใช้ · ดูในฐานะ/คนออนไลน์ยังอยู่บนแถบ (เจ้าของงานขอเอากลับ — ใช้บ่อย)
- * - รีเฟรชยังอยู่บนแถบเป็นไอคอนคู่กับ ? (ใช้บ่อย) · กระดิ่งยังไม่ใส่ เพราะระบบยังไม่มีการแจ้งเตือน (ถามเจ้าของงานแล้ว)
+ * แท็บลัดกับสลับ "งานของฉัน / ภาพรวม" ในแบบเอาออกแล้ว (เจ้าของงานสั่ง — มุมซ้ายบนเป็นช่องค้นหาแทน)
+ * โหมดมืดกับออกจากระบบอยู่ในเมนูใต้ชื่อ ใช้ไม่บ่อย ไม่ควรกินที่บนแถบ
  *
  * เมนูใต้ชื่อเป็นแผ่นที่กางในที่ ไม่ใช่ Modal — Modal ซ้อน Modal บนเว็บไม่น่าเชื่อถือ (ดู CLAUDE.md)
  */
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import TouchableOpacity from "./Tap";
 import ThemeToggle from "./ThemeToggle";
-import { activeMenuKey, menuItemsFor, openMenuKey } from "./SideMenu";
 import { useAuth } from "../context/AuthContext";
-import { api } from "../api/client";
 import { navigationRef } from "../navigation/navigationRef";
 import { colors, headingFont } from "../theme";
 import { showAlert } from "../utils/alert";
 import { sessionRoleLabel } from "../utils/roles";
 import { howtoTarget } from "../utils/howtoTarget";
-
-const TAB_KEYS = ["plan", "wo", "dash", "reports"];
-
-/** เมนูที่เปิดอยู่ + ตัวเลขกล่องงาน — อ่านใหม่ทุกครั้งที่เปลี่ยนหน้า แบบเดียวกับเมนูข้าง */
-function useNavState() {
-  const [active, setActive] = useState<string | null>(activeMenuKey());
-  const [inbox, setInbox] = useState<number | null>(null);
-  useEffect(() => {
-    const refresh = () => {
-      setActive(activeMenuKey());
-      api
-        .get<{ inbox: number }>("/work-orders/inbox-count", { loadingText: false })
-        .then((r) => setInbox(r.data.inbox))
-        .catch(() => undefined);
-    };
-    refresh();
-    return navigationRef.addListener("state", refresh);
-  }, []);
-  return { active, inbox };
-}
-
-export function TopTabs() {
-  const { user } = useAuth();
-  const { active } = useNavState();
-  const tabs = menuItemsFor(user, TAB_KEYS);
-  return (
-    <View style={styles.tabs} accessibilityRole="tablist">
-      {tabs.map((t) => {
-        const on = active === t.key;
-        return (
-          <TouchableOpacity
-            key={t.key}
-            style={[styles.tab, on && styles.tabOn]}
-            onPress={() => openMenuKey(t.key)}
-            accessibilityLabel={`ไปหน้า ${t.label}`}
-            // react-native-web ไม่แปลง accessibilityState เป็น aria-selected — ใส่เองให้เทสต์อ่านได้ (ดู FilterBar)
-            {...({ "aria-selected": on } as object)}
-          >
-            <Ionicons name={t.icon} size={18} color={on ? colors.primaryInk : colors.textMuted} />
-            <Text style={[styles.tabText, on && styles.tabTextOn]}>{t.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
-/** สลับ "งานของฉัน" (กล่องงาน) กับ "ภาพรวม" (หน้าหลัก) — ตามแบบ "งานของฉัน (My Queue) | ภาพรวมศูนย์ปฏิบัติการ" */
-export function QueueSwitch() {
-  const { user } = useAuth();
-  const { active, inbox } = useNavState();
-  const items = menuItemsFor(user, ["inbox", "home"]);
-  if (items.length < 2) return null;
-  return (
-    <View style={styles.seg}>
-      {items.map((it) => {
-        const on = active === it.key;
-        const label = it.key === "inbox" ? `งานของฉัน${inbox ? ` (${inbox})` : ""}` : "ภาพรวม";
-        return (
-          <TouchableOpacity
-            key={it.key}
-            style={[styles.segItem, on && styles.segOn]}
-            onPress={() => openMenuKey(it.key)}
-            accessibilityLabel={it.key === "inbox" ? `กล่องงานของฉัน ${inbox ?? 0} ใบ` : "ภาพรวม (หน้าหลัก)"}
-            {...({ "aria-selected": on } as object)}
-          >
-            <Text style={[styles.segText, on && styles.segTextOn]}>{label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
 
 /** ปุ่มเพิ่มใบงานย้ายจากหัวหน้ารายการขึ้นแถบหัว — กดได้จากทุกหน้า · Admin Spare Part เปิดใบงานไม่ได้ */
 export function CreateOrderButton() {
@@ -205,34 +127,6 @@ function Row({
 }
 
 const styles = StyleSheet.create({
-  // ขีดใต้แท็บชิดเส้นล่างของแถบหัว (แถบเว้นล่าง 10) ตามแบบ
-  tabs: { flexDirection: "row", alignItems: "stretch", alignSelf: "stretch", gap: 4, marginLeft: 28, marginBottom: -11 },
-  tab: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    paddingHorizontal: 12,
-    borderBottomWidth: 2.5,
-    borderBottomColor: "transparent",
-  },
-  tabOn: { borderBottomColor: colors.primary },
-  tabText: { fontSize: 14.5, lineHeight: 22, fontWeight: "600", color: colors.textMuted },
-  tabTextOn: { color: colors.primaryInk, fontWeight: "800" },
-
-  seg: {
-    flexDirection: "row",
-    padding: 3,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.background,
-    marginRight: 10,
-  },
-  segItem: { height: 32, paddingHorizontal: 14, borderRadius: 8, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent" },
-  segOn: { backgroundColor: colors.card, borderColor: colors.primaryLine },
-  segText: { fontSize: 13.5, lineHeight: 20, fontWeight: "600", color: colors.textMuted },
-  segTextOn: { color: colors.primaryInk, fontWeight: "800" },
-
   create: {
     flexDirection: "row",
     alignItems: "center",
